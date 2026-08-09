@@ -9,10 +9,10 @@ RUN npm run build
 
 FROM golang:1.22-alpine AS api-builder
 WORKDIR /app/backend
-COPY backend/go.mod ./
+COPY backend/go.mod backend/go.sum ./
 RUN go mod download
 COPY backend/ ./
-RUN CGO_ENABLED=0 GOOS=linux go build -o /lumic .
+RUN go env GOPROXY && go list -m all && CGO_ENABLED=0 GOOS=linux go build -mod=readonly -trimpath -ldflags="-s -w" -o /lumic .
 
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates tzdata

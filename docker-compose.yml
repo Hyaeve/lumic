@@ -8,4 +8,7 @@ services:
       - ./data:/data
     environment:
       TZ: Asia/Shanghai
+      LUMIC_USERNAME: ${LUMIC_USERNAME:-Lumic}
+      LUMIC_PASSWORD: ${LUMIC_PASSWORD:-Lumic}
+      LUMIC_COOKIE_SECURE: ${LUMIC_COOKIE_SECURE:-false}
     restart: unless-stopped

@@ -53,6 +53,20 @@ docker compose up -d
 
 生产环境建议将 `LUMIC_DATABASE_URL`、平台授权 Cookie / Token 和加密密钥通过 Docker secrets 或环境变量注入，不要写入镜像或提交到仓库。
 
+### 登录与安全
+
+应用启动后会先显示空白登录表单，页面不会自动填写、展示或提示账号密码。所有 `/api` 业务接口均要求通过服务端会话认证；会话 Cookie 使用 `HttpOnly` 和 `SameSite=Strict`，不会暴露给前端脚本。
+
+可以通过 `.env` 覆盖登录凭据：
+
+```dotenv
+LUMIC_USERNAME=your-user
+LUMIC_PASSWORD=use-a-long-random-password
+LUMIC_COOKIE_SECURE=true
+```
+
+反向代理启用 HTTPS 后应设置 `LUMIC_COOKIE_SECURE=true`。默认凭据仅适合首次本地启动，公网部署前必须通过环境变量修改。服务还发送 CSP、`X-Frame-Options: DENY`、`X-Content-Type-Options: nosniff` 和严格 Referrer Policy 等响应头。
+
 ### GitHub Actions
 
 工作流 [`docker-publish.yml`](.github/workflows/docker-publish.yml) 会在 `main` 分支推送、`v*` 标签和手动触发时构建并推送镜像；Pull Request 只执行构建校验，不推送镜像。默认构建 `linux/amd64` 与 `linux/arm64`，并使用 `GITHUB_TOKEN` 登录 GHCR。
