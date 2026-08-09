@@ -51,21 +51,15 @@ docker compose build
 docker compose up -d
 ```
 
-生产环境建议将 `LUMIC_DATABASE_URL`、平台授权 Cookie / Token 和加密密钥通过 Docker secrets 或环境变量注入，不要写入镜像或提交到仓库。
+生产环境建议将数据库、平台授权 Cookie / Token 和加密密钥通过 Docker secrets 或环境变量注入，不要写入镜像或提交到仓库。登录账号和密码不再由 Compose 环境变量配置，而是在登录后通过设置页面修改并保存到挂载的 `/data/auth.json`。
 
 ### 登录与安全
 
 应用启动后会先显示空白登录表单，页面不会自动填写、展示或提示账号密码。所有 `/api` 业务接口均要求通过服务端会话认证；会话 Cookie 使用 `HttpOnly` 和 `SameSite=Strict`，不会暴露给前端脚本。
 
-可以通过 `.env` 覆盖登录凭据：
+首次启动使用内置初始账号后，在左侧「设置」中输入当前密码并设置新账号和新密码。新密码至少 8 位；修改结果保存在 Compose 挂载的 `./data/auth.json` 中，重建或更新容器不会丢失。登录表单不会自动填写或提示初始账号密码。
 
-```dotenv
-LUMIC_USERNAME=your-user
-LUMIC_PASSWORD=use-a-long-random-password
-LUMIC_COOKIE_SECURE=true
-```
-
-反向代理启用 HTTPS 后应设置 `LUMIC_COOKIE_SECURE=true`。默认凭据仅适合首次本地启动，公网部署前必须通过环境变量修改。服务还发送 CSP、`X-Frame-Options: DENY`、`X-Content-Type-Options: nosniff` 和严格 Referrer Policy 等响应头。
+反向代理启用 HTTPS 后建议设置 `LUMIC_COOKIE_SECURE=true`；该变量不属于当前 Compose 默认配置，可按部署环境单独添加。服务还发送 CSP、`X-Frame-Options: DENY`、`X-Content-Type-Options: nosniff` 和严格 Referrer Policy 等响应头。
 
 ### GitHub Actions
 

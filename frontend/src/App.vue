@@ -3,6 +3,10 @@ import { computed, onMounted, ref } from 'vue'
 
 const authenticated = ref(false)
 const loginError = ref('')
+const showSettings = ref(false)
+const settingsError = ref('')
+const settingsBusy = ref(false)
+const settingsForm = ref({ username: '', currentPassword: '', newPassword: '' })
 const loginBusy = ref(false)
 const credentials = ref({ username: '', password: '' })
 const activeNav = ref('all')
@@ -59,6 +63,17 @@ async function syncNow() {
   try { await fetch('/api/sync', { method: 'POST' }) } catch {}
   setTimeout(() => { syncing.value = false }, 900)
 }
+async function saveSettings() {
+  settingsError.value = ''
+  settingsBusy.value = true
+  try {
+    const response = await fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(settingsForm.value) })
+    if (!response.ok) throw new Error(response.status === 401 ? '当前密码不正确' : '保存失败，请检查输入')
+    showSettings.value = false
+    settingsForm.value = { username: '', currentPassword: '', newPassword: '' }
+  } catch (error) { settingsError.value = error.message }
+  finally { settingsBusy.value = false }
+}
 async function checkSession() {
   try {
     const response = await fetch('/api/posts')
@@ -99,7 +114,7 @@ onMounted(checkSession)
         <button v-for="(meta, key) in sourceMeta" :key="key" :class="{ active: activeSource === key }" @click="activeNav = 'source'; activeSource = key"><i :class="['source-icon', meta.icon]">{{ meta.icon === 'wb' ? '微' : meta.icon === 'px' ? 'P' : '哔' }}</i>{{ meta.label }} <b>{{ posts.filter(p => p.source === key).length }}</b></button>
       </nav>
       <div class="sidebar-bottom">
-        <button><span>⚙</span> 设置</button>
+        <button @click="showSettings = true"><span>⚙</span> 设置</button>
         <div class="profile"><div class="profile-avatar">拾</div><div><strong>我的空间</strong><small>本地收藏</small></div><span>⋮</span></div>
       </div>
     </aside>
@@ -112,5 +127,6 @@ onMounted(checkSession)
     </main>
     <button class="add-fab" @click="showAdd = true">＋ <span>添加来源</span></button>
     <div v-if="showAdd" class="modal-backdrop" @click.self="showAdd = false"><div class="modal"><button class="modal-close" @click="showAdd = false">×</button><p class="eyebrow">NEW SOURCE</p><h2>添加一个新来源</h2><p>连接账号后，Lumic 会帮你把喜欢的内容收进同一条时间线。</p><div class="connect-options"><button @click="showAdd = false"><i class="source-icon wb">微</i>连接微博</button><button @click="showAdd = false"><i class="source-icon px">P</i>连接 pixiv</button><button @click="showAdd = false"><i class="source-icon bl">哔</i>连接哔哩哔哩</button></div></div></div>
+    <div v-if="showSettings" class="modal-backdrop" @click.self="showSettings = false"><div class="modal"><button class="modal-close" @click="showSettings = false">×</button><p class="eyebrow">ACCOUNT SECURITY</p><h2>账号设置</h2><p>修改后请使用新的账号和密码登录。密码至少 8 位。</p><form class="settings-form" @submit.prevent="saveSettings" autocomplete="off"><label>新账号</label><input v-model="settingsForm.username" required minlength="3" autocomplete="off"><label>当前密码</label><input v-model="settingsForm.currentPassword" type="password" required autocomplete="current-password"><label>新密码</label><input v-model="settingsForm.newPassword" type="password" required minlength="8" autocomplete="new-password"><p v-if="settingsError" class="login-error">{{ settingsError }}</p><button class="login-button" type="submit" :disabled="settingsBusy">{{ settingsBusy ? '保存中…' : '保存设置' }}</button></form></div></div>
   </div>
 </template>

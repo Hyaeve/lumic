@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -58,6 +59,44 @@ type SessionStore struct {
 	tokens map[string]time.Time
 }
 
+type AuthConfig struct {
+	sync.RWMutex
+	Username     string `json:"username"`
+	PasswordHash string `json:"passwordHash"`
+}
+
+var authFile = "/data/auth.json"
+
+func loadAuthConfig() *AuthConfig {
+	if value := os.Getenv("LUMIC_AUTH_FILE"); value != "" {
+		authFile = value
+	}
+	data, err := os.ReadFile(authFile)
+	if err == nil {
+		var config AuthConfig
+		if json.Unmarshal(data, &config) == nil && config.Username != "" && config.PasswordHash != "" {
+			return &config
+		}
+	}
+	return &AuthConfig{Username: "Lumic", PasswordHash: hashPassword("Lumic", []byte("lumic-default-salt-v1"))}
+}
+
+func (a *AuthConfig) save() error {
+	if err := os.MkdirAll(filepath.Dir(authFile), 0700); err != nil {
+		return err
+	}
+	a.RLock()
+	data, err := json.Marshal(struct {
+		Username     string `json:"username"`
+		PasswordHash string `json:"passwordHash"`
+	}{a.Username, a.PasswordHash})
+	a.RUnlock()
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(authFile, data, 0600)
+}
+
 func (s *SessionStore) create() (string, error) {
 	bytes := make([]byte, 32)
 	if _, err := rand.Read(bytes); err != nil {
@@ -99,7 +138,7 @@ func passwordMatches(password, encoded string) bool {
 	return subtle.ConstantTimeCompare([]byte(actual), []byte(encoded)) == 1
 }
 
-func loginHandler(sessions *SessionStore) http.HandlerFunc {
+func loginHandler(sessions *SessionStore, auth *AuthConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -109,11 +148,10 @@ func loginHandler(sessions *SessionStore) http.HandlerFunc {
 			Username string `json:"username"`
 			Password string `json:"password"`
 		}
-		username := os.Getenv("LUMIC_USERNAME")
-		if username == "" {
-			username = "Lumic"
-		}
-		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&input) != nil || subtle.ConstantTimeCompare([]byte(input.Username), []byte(username)) != 1 || !passwordMatches(input.Password, passwordHash()) {
+		auth.RLock()
+		username, storedHash := auth.Username, auth.PasswordHash
+		auth.RUnlock()
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&input) != nil || subtle.ConstantTimeCompare([]byte(input.Username), []byte(username)) != 1 || !passwordMatches(input.Password, storedHash) {
 			http.Error(w, "invalid credentials", http.StatusUnauthorized)
 			return
 		}
@@ -123,6 +161,46 @@ func loginHandler(sessions *SessionStore) http.HandlerFunc {
 			return
 		}
 		http.SetCookie(w, &http.Cookie{Name: "lumic_session", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: os.Getenv("LUMIC_COOKIE_SECURE") == "true", MaxAge: 43200})
+		writeJSON(w, map[string]string{"status": "ok"})
+	}
+}
+
+func settingsHandler(auth *AuthConfig) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			auth.RLock()
+			writeJSON(w, map[string]string{"username": auth.Username})
+			auth.RUnlock()
+			return
+		}
+		if r.Method != http.MethodPut {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var input struct {
+			Username        string `json:"username"`
+			CurrentPassword string `json:"currentPassword"`
+			NewPassword     string `json:"newPassword"`
+		}
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&input) != nil || len(input.Username) < 3 || len(input.NewPassword) < 8 {
+			http.Error(w, "invalid settings", http.StatusBadRequest)
+			return
+		}
+		auth.RLock()
+		matches := passwordMatches(input.CurrentPassword, auth.PasswordHash)
+		auth.RUnlock()
+		if !matches {
+			http.Error(w, "invalid current password", http.StatusUnauthorized)
+			return
+		}
+		auth.Lock()
+		auth.Username = input.Username
+		auth.PasswordHash = hashPassword(input.NewPassword, []byte("lumic-default-salt-v1"))
+		auth.Unlock()
+		if err := auth.save(); err != nil {
+			http.Error(w, "unable to save settings", http.StatusInternalServerError)
+			return
+		}
 		writeJSON(w, map[string]string{"status": "ok"})
 	}
 }
@@ -230,9 +308,11 @@ func writeJSON(w http.ResponseWriter, value any) {
 
 func main() {
 	store := demoStore()
+	auth := loadAuthConfig()
 	sessions := &SessionStore{tokens: make(map[string]time.Time)}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/login", loginHandler(sessions))
+	mux.HandleFunc("/api/login", loginHandler(sessions, auth))
+	mux.HandleFunc("/api/settings", settingsHandler(auth))
 	mux.HandleFunc("/api/posts", store.postsHandler)
 	mux.HandleFunc("/api/feeds", store.feedsHandler)
 	mux.HandleFunc("/api/sync", syncHandler)
