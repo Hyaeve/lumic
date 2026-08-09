@@ -1,0 +1,11 @@
+services:
+  lumic:
+    image: ghcr.io/hyaeve/lumic:latest
+    container_name: lumic
+    ports:
+      - "15500:5500"
+    volumes:
+      - ./data:/data
+    environment:
+      TZ: Asia/Shanghai
+    restart: unless-stopped

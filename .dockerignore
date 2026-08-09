@@ -1,0 +1,11 @@
+.git
+.github
+.vscode
+**/node_modules
+frontend/dist
+backend/*.exe
+backend/package-lock.json
+data
+*.log
+.env
+.env.*
