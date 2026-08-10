@@ -4,9 +4,15 @@ import { computed, onMounted, ref } from 'vue'
 const authenticated = ref(false)
 const loginError = ref('')
 const showSettings = ref(false)
+const settingsTab = ref('network')
 const settingsError = ref('')
 const settingsBusy = ref(false)
 const settingsForm = ref({ username: '', currentPassword: '', newPassword: '' })
+const proxyForm = ref({ proxyUrl: '' })
+const proxyStatus = ref({ proxyEnabled: false, proxyUrl: '' })
+const proxyMessage = ref('')
+const selectedFeed = ref(null)
+const showFeedSettings = ref(false)
 const loginBusy = ref(false)
 const credentials = ref({ username: '', password: '' })
 const activeNav = ref('all')
@@ -41,6 +47,9 @@ const sourceMeta = {
 const filteredPosts = computed(() => activeSource.value === 'all' ? posts.value : posts.value.filter(p => p.source === activeSource.value))
 const sourceCount = computed(() => new Set(posts.value.map(p => p.source)).size)
 
+async function responseError(response, fallback) {
+  try { return (await response.json()).error || fallback } catch { return fallback }
+}
 function relativeTime(date) {
   const minutes = Math.max(1, Math.floor((Date.now() - new Date(date)) / 60000))
   if (minutes < 60) return `${minutes} 分钟前`
@@ -71,6 +80,31 @@ async function syncNow() {
   try { await fetch('/api/sync', { method: 'POST' }) } catch {}
   setTimeout(() => { syncing.value = false }, 900)
 }
+async function openSettings(tab = 'network') {
+  settingsTab.value = tab; showSettings.value = true; settingsError.value = ''; proxyMessage.value = ''
+  try {
+    const [projectResponse, biliResponse] = await Promise.all([fetch('/api/project/settings'), fetch('/api/bilibili/account')])
+    if (projectResponse.ok) proxyStatus.value = await projectResponse.json()
+    if (biliResponse.ok) biliAccount.value = await biliResponse.json()
+  } catch { settingsError.value = '无法读取项目设置' }
+}
+async function saveProxy() {
+  settingsBusy.value = true; settingsError.value = ''; proxyMessage.value = ''
+  try {
+    const response = await fetch('/api/project/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(proxyForm.value) })
+    if (!response.ok) throw new Error(await responseError(response, '代理保存失败'))
+    proxyStatus.value = await response.json(); proxyForm.value.proxyUrl = ''; proxyMessage.value = proxyStatus.value.proxyEnabled ? '代理已保存' : '已关闭项目代理'
+  } catch (error) { settingsError.value = error.message } finally { settingsBusy.value = false }
+}
+async function testProxy() {
+  if (!proxyForm.value.proxyUrl) { settingsError.value = '请输入完整代理地址后再测试'; return }
+  settingsBusy.value = true; settingsError.value = ''; proxyMessage.value = ''
+  try {
+    const response = await fetch('/api/project/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(proxyForm.value) })
+    if (!response.ok) throw new Error(await responseError(response, '代理测试失败'))
+    proxyMessage.value = (await response.json()).message
+  } catch (error) { settingsError.value = error.message } finally { settingsBusy.value = false }
+}
 async function saveSettings() {
   settingsError.value = ''
   settingsBusy.value = true
@@ -83,19 +117,19 @@ async function saveSettings() {
   finally { settingsBusy.value = false }
 }
 async function openBilibili() {
-  showAdd.value = false
-  showBilibili.value = true
-  biliError.value = ''
+  showAdd.value = false; biliError.value = ''
   try {
     const response = await fetch('/api/bilibili/account')
     if (response.ok) biliAccount.value = await response.json()
+    if (!biliAccount.value.configured) { await openSettings('platforms'); return }
+    showBilibili.value = true
   } catch { biliError.value = '无法读取 B 站配置' }
 }
 async function saveBilibiliAccount() {
   biliBusy.value = true; biliError.value = ''
   try {
     const response = await fetch('/api/bilibili/account', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(biliCredentials.value) })
-    if (!response.ok) throw new Error('凭证验证失败，请检查 Cookie 和 DedeUserID')
+    if (!response.ok) throw new Error(await responseError(response, '凭证验证失败'))
     biliAccount.value = await response.json()
     biliCredentials.value = { SESSDATA: '', bili_jct: '', buvid3: '', DedeUserID: '', ac_time_value: '', buvid4: '', DedeUserID__ckMd5: '' }
   } catch (error) { biliError.value = error.message } finally { biliBusy.value = false }
@@ -117,6 +151,26 @@ async function subscribeBilibili(user) {
     feeds.value.push(await response.json())
   } catch (error) { biliError.value = error.message } finally { biliBusy.value = false }
 }
+function openFeedSettings(feed) {
+  selectedFeed.value = { ...feed, contentTypes: [...(feed.contentTypes || [])] }
+  showFeedSettings.value = true
+}
+async function saveFeedSettings() {
+  if (!selectedFeed.value) return
+  settingsBusy.value = true; settingsError.value = ''
+  try {
+    if (selectedFeed.value.source === 'bilibili' && selectedFeed.value.id.startsWith('bili-')) {
+      const response = await fetch('/api/bilibili/subscriptions', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(selectedFeed.value) })
+      if (!response.ok) throw new Error(await responseError(response, '来源设置保存失败'))
+      const saved = await response.json(); const index = feeds.value.findIndex(feed => feed.id === saved.id)
+      if (index >= 0) feeds.value[index] = saved
+    } else {
+      const index = feeds.value.findIndex(feed => feed.id === selectedFeed.value.id)
+      if (index >= 0) feeds.value[index] = { ...selectedFeed.value }
+    }
+    showFeedSettings.value = false
+  } catch (error) { settingsError.value = error.message } finally { settingsBusy.value = false }
+}
 function formatFans(count) { return count >= 10000 ? `${(count / 10000).toFixed(1)}万` : count }
 async function checkSession() {
   try {
@@ -134,7 +188,11 @@ onMounted(checkSession)
 <template>
   <div v-if="!authenticated" class="login-shell">
     <div class="login-panel">
-      <div class="login-brand"><span class="brand-mark">✦</span><strong>Lumic</strong><small>拾光</small></div>
+      <div class="login-brand">
+<span class="brand-mark">✦</span>
+<strong>Lumic</strong>
+<small>拾光</small>
+</div>
       <p class="eyebrow">A QUIET PLACE FOR YOUR MOMENTS</p>
       <h1>欢迎回来</h1>
       <p class="login-subtitle">登录后继续收集你喜欢的动态。</p>
@@ -150,28 +208,186 @@ onMounted(checkSession)
   </div>
   <div v-else class="app-shell" :class="{ dark: isDark }">
     <aside class="sidebar">
-      <div class="brand"><span class="brand-mark">✦</span><span>Lumic</span><small>拾光</small></div>
+      <div class="brand">
+<span class="brand-mark">✦</span>
+<span>Lumic</span>
+<small>拾光</small>
+</div>
       <nav class="main-nav">
-        <button :class="{ active: activeNav === 'all' }" @click="activeNav = 'all'; activeSource = 'all'"><span>⌂</span> 全部动态 <b>{{ posts.length }}</b></button>
-        <button :class="{ active: activeNav === 'liked' }" @click="activeNav = 'liked'; activeSource = 'weibo'"><span>♡</span> 我的点赞 <b>24</b></button>
+        <button :class="{ active: activeNav === 'all' }" @click="activeNav = 'all'; activeSource = 'all'">
+<span>⌂</span> 全部动态 <b>{{ posts.length }}</b>
+</button>
+        <button :class="{ active: activeNav === 'liked' }" @click="activeNav = 'liked'; activeSource = 'weibo'">
+<span>♡</span> 我的点赞 <b>24</b>
+</button>
         <div class="nav-label">来源</div>
-        <button v-for="(meta, key) in sourceMeta" :key="key" :class="{ active: activeSource === key }" @click="activeNav = 'source'; activeSource = key"><i :class="['source-icon', meta.icon]">{{ meta.icon === 'wb' ? '微' : meta.icon === 'px' ? 'P' : '哔' }}</i>{{ meta.label }} <b>{{ posts.filter(p => p.source === key).length }}</b></button>
+        <button v-for="(meta, key) in sourceMeta" :key="key" :class="{ active: activeSource === key }" @click="activeNav = 'source'; activeSource = key">
+<i :class="['source-icon', meta.icon]">{{ meta.icon === 'wb' ? '微' : meta.icon === 'px' ? 'P' : '哔' }}</i>{{ meta.label }} <b>{{ posts.filter(p => p.source === key).length }}</b>
+</button>
       </nav>
       <div class="sidebar-bottom">
-        <button @click="showSettings = true"><span>⚙</span> 设置</button>
-        <div class="profile"><div class="profile-avatar">拾</div><div><strong>我的空间</strong><small>本地收藏</small></div><span>⋮</span></div>
+        <button @click="openSettings()">
+<span>⚙</span> 设置</button>
+        <div class="profile">
+<div class="profile-avatar">拾</div>
+<div>
+<strong>我的空间</strong>
+<small>本地收藏</small>
+</div>
+<span>⋮</span>
+</div>
       </div>
     </aside>
 
     <main class="content">
-      <header class="topbar"><div><p class="eyebrow">SAVED MOMENTS · {{ new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' }) }}</p><h1>早上好，拾光者 <span>☼</span></h1><p class="subtitle">这里有你关注的世界，和刚刚发生的一切。</p></div><div class="header-actions"><button class="icon-button" @click="isDark = !isDark" :title="isDark ? '切换日间主题' : '切换夜间主题'">{{ isDark ? '☀' : '☾' }}</button><button class="sync-button" @click="syncNow"><span :class="{ spin: syncing }">↻</span> {{ syncing ? '同步中' : '立即同步' }}</button></div></header>
-      <section class="stats"><div class="stat-card"><div class="stat-icon mint">✦</div><div><span>今日新动态</span><strong>{{ posts.length }} <em>+12%</em></strong></div><small>较昨日</small></div><div class="stat-card"><div class="stat-icon rose">♡</div><div><span>已收藏动态</span><strong>128</strong></div><small>持续增长中</small></div><div class="stat-card"><div class="stat-icon sand">◷</div><div><span>关注来源</span><strong>{{ sourceCount }} <em class="neutral">个</em></strong></div><small>同步正常</small></div></section>
-      <div class="section-heading"><div><h2>最新动态</h2><p>按时间顺序排列 · 自动同步于 10 分钟前</p></div><div class="filters"><button v-for="(meta, key) in { all: { label: '全部', icon: '✦' }, ...sourceMeta }" :key="key" :class="{ selected: activeSource === key }" @click="activeSource = key"><span v-if="key === 'all'">✦</span><i v-else :class="['source-icon', meta.icon]">{{ meta.icon === 'wb' ? '微' : meta.icon === 'px' ? 'P' : '哔' }}</i>{{ meta.label }}</button><button class="view-button">▦</button></div></div>
-      <section class="feed-list"><article v-for="post in filteredPosts" :key="post.id" class="post-card"><div class="post-head"><img :src="post.avatar" :alt="post.author"><div class="author"><strong>{{ post.author }}</strong><span>{{ relativeTime(post.published) }}</span></div><span :class="['source-pill', sourceMeta[post.source].color]"><i :class="['source-icon', sourceMeta[post.source].icon]">{{ sourceMeta[post.source].icon === 'wb' ? '微' : sourceMeta[post.source].icon === 'px' ? 'P' : '哔' }}</i>{{ sourceMeta[post.source].label }}</span><button class="more">···</button></div><p class="caption">{{ post.caption }}</p><div v-if="post.media?.length" class="media-grid"><img v-for="media in post.media" :key="media" :src="media" alt="动态图片"></div><div class="tag-row"><span v-for="tag in post.tags" :key="tag"># {{ tag }}</span></div><div class="post-foot"><span>◷ {{ new Date(post.published).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }}</span><div><button>♡</button><button>↗</button><button>⌑</button></div></div></article><div v-if="!filteredPosts.length" class="empty">还没有这个来源的动态</div></section>
+      <header class="topbar">
+<div>
+<p class="eyebrow">SAVED MOMENTS · {{ new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' }) }}</p>
+<h1>早上好，拾光者 <span>☼</span>
+</h1>
+<p class="subtitle">这里有你关注的世界，和刚刚发生的一切。</p>
+</div>
+<div class="header-actions">
+<button class="icon-button" @click="isDark = !isDark" :title="isDark ? '切换日间主题' : '切换夜间主题'">{{ isDark ? '☀' : '☾' }}</button>
+<button class="sync-button" @click="syncNow">
+<span :class="{ spin: syncing }">↻</span> {{ syncing ? '同步中' : '立即同步' }}</button>
+</div>
+</header>
+      <section class="stats">
+<div class="stat-card">
+<div class="stat-icon mint">✦</div>
+<div>
+<span>今日新动态</span>
+<strong>{{ posts.length }} <em>+12%</em>
+</strong>
+</div>
+<small>较昨日</small>
+</div>
+<div class="stat-card">
+<div class="stat-icon rose">♡</div>
+<div>
+<span>已收藏动态</span>
+<strong>128</strong>
+</div>
+<small>持续增长中</small>
+</div>
+<div class="stat-card">
+<div class="stat-icon sand">◷</div>
+<div>
+<span>关注来源</span>
+<strong>{{ sourceCount }} <em class="neutral">个</em>
+</strong>
+</div>
+<small>同步正常</small>
+</div>
+</section>
+      <div class="section-heading">
+<div>
+<h2>最新动态</h2>
+<p>按时间顺序排列 · 自动同步于 10 分钟前</p>
+</div>
+<div class="filters">
+<button v-for="(meta, key) in { all: { label: '全部', icon: '✦' }, ...sourceMeta }" :key="key" :class="{ selected: activeSource === key }" @click="activeSource = key">
+<span v-if="key === 'all'">✦</span>
+<i v-else :class="['source-icon', meta.icon]">{{ meta.icon === 'wb' ? '微' : meta.icon === 'px' ? 'P' : '哔' }}</i>{{ meta.label }}</button>
+<button class="view-button">▦</button>
+</div>
+</div>
+      <section class="feed-list">
+<article v-for="post in filteredPosts" :key="post.id" class="post-card">
+<div class="post-head">
+<img :src="post.avatar" :alt="post.author">
+<div class="author">
+<strong>{{ post.author }}</strong>
+<span>{{ relativeTime(post.published) }}</span>
+</div>
+<span :class="['source-pill', sourceMeta[post.source].color]">
+<i :class="['source-icon', sourceMeta[post.source].icon]">{{ sourceMeta[post.source].icon === 'wb' ? '微' : sourceMeta[post.source].icon === 'px' ? 'P' : '哔' }}</i>{{ sourceMeta[post.source].label }}</span>
+<button class="more">···</button>
+</div>
+<p class="caption">{{ post.caption }}</p>
+<div v-if="post.media?.length" class="media-grid">
+<img v-for="media in post.media" :key="media" :src="media" alt="动态图片">
+</div>
+<div class="tag-row">
+<span v-for="tag in post.tags" :key="tag"># {{ tag }}</span>
+</div>
+<div class="post-foot">
+<span>◷ {{ new Date(post.published).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }}</span>
+<div>
+<button>♡</button>
+<button>↗</button>
+<button>⌑</button>
+</div>
+</div>
+</article>
+<div v-if="!filteredPosts.length" class="empty">还没有这个来源的动态</div>
+</section>
     </main>
-    <button class="add-fab" @click="showAdd = true">＋ <span>添加来源</span></button>
-    <div v-if="showAdd" class="modal-backdrop" @click.self="showAdd = false"><div class="modal"><button class="modal-close" @click="showAdd = false">×</button><p class="eyebrow">NEW SOURCE</p><h2>添加一个新来源</h2><p>连接账号后，Lumic 会帮你把喜欢的内容收进同一条时间线。</p><div class="connect-options"><button @click="showAdd = false"><i class="source-icon wb">微</i>连接微博</button><button @click="showAdd = false"><i class="source-icon px">P</i>连接 pixiv</button><button @click="openBilibili"><i class="source-icon bl">哔</i>连接哔哩哔哩</button></div></div></div>
-    <div v-if="showBilibili" class="modal-backdrop" @click.self="showBilibili = false"><div class="modal bili-modal"><button class="modal-close" @click="showBilibili = false">×</button><p class="eyebrow">BILIBILI SOURCE</p><h2>订阅 UP 主图文</h2><p>仅收集图文动态与专栏，视频动态和转发视频不会进入时间线。</p><template v-if="!biliAccount.configured"><form class="settings-form bili-credentials" @submit.prevent="saveBilibiliAccount" autocomplete="off"><label>SESSDATA *</label><input v-model="biliCredentials.SESSDATA" type="password" required><label>bili_jct *</label><input v-model="biliCredentials.bili_jct" type="password" required><label>buvid3 *</label><input v-model="biliCredentials.buvid3" type="password" required><label>DedeUserID *</label><input v-model="biliCredentials.DedeUserID" required inputmode="numeric"><label>ac_time_value</label><input v-model="biliCredentials.ac_time_value" type="password"><label>buvid4</label><input v-model="biliCredentials.buvid4" type="password"><label>DedeUserID__ckMd5</label><input v-model="biliCredentials.DedeUserID__ckMd5" type="password"><p class="credential-note">凭证经验证后加密保存在 /data，页面不会回显。</p><button class="login-button" :disabled="biliBusy">{{ biliBusy ? '验证中…' : '验证并保存' }}</button></form></template><template v-else><div class="bili-account"><span>已连接 B 站账号 · UID {{ biliAccount.userId }}</span><button @click="biliAccount.configured = false">重新配置</button></div><form class="bili-search" @submit.prevent="searchBilibili"><input v-model="biliKeyword" placeholder="搜索 UP 主昵称" maxlength="40" required><button :disabled="biliBusy">⌕ 搜索</button></form><label class="history-option"><input v-model="biliIncludePast" type="checkbox"> 首次订阅时拉取历史图文与专栏</label><div class="bili-results"><article v-for="user in biliResults" :key="user.userId"><img :src="user.avatar" :alt="user.name"><div><strong>{{ user.name }}</strong><span>UID {{ user.userId }} · 粉丝 {{ formatFans(user.fans) }}</span><p>{{ user.description || '这位 UP 主还没有填写简介' }}</p></div><button @click="subscribeBilibili(user)" :disabled="biliBusy">订阅</button></article><div v-if="!biliResults.length" class="bili-placeholder">输入昵称搜索 UP 主，然后选择订阅</div></div></template><p v-if="biliError" class="login-error bili-error">{{ biliError }}</p></div></div>
-    <div v-if="showSettings" class="modal-backdrop" @click.self="showSettings = false"><div class="modal"><button class="modal-close" @click="showSettings = false">×</button><p class="eyebrow">ACCOUNT SECURITY</p><h2>账号设置</h2><p>修改后请使用新的账号和密码登录。密码至少 8 位。</p><form class="settings-form" @submit.prevent="saveSettings" autocomplete="off"><label>新账号</label><input v-model="settingsForm.username" required minlength="3" autocomplete="off"><label>当前密码</label><input v-model="settingsForm.currentPassword" type="password" required autocomplete="current-password"><label>新密码</label><input v-model="settingsForm.newPassword" type="password" required minlength="8" autocomplete="new-password"><p v-if="settingsError" class="login-error">{{ settingsError }}</p><button class="login-button" type="submit" :disabled="settingsBusy">{{ settingsBusy ? '保存中…' : '保存设置' }}</button></form></div></div>
+    <button class="add-fab" @click="showAdd = true">＋ <span>添加来源</span>
+</button>
+    <div v-if="showAdd" class="modal-backdrop" @click.self="showAdd = false">
+<div class="modal">
+<button class="modal-close" @click="showAdd = false">×</button>
+<p class="eyebrow">NEW SOURCE</p>
+<h2>添加一个新来源</h2>
+<p>连接账号后，Lumic 会帮你把喜欢的内容收进同一条时间线。</p>
+<div class="connect-options">
+<button @click="showAdd = false">
+<i class="source-icon wb">微</i>连接微博</button>
+<button @click="showAdd = false">
+<i class="source-icon px">P</i>连接 pixiv</button>
+<button @click="openBilibili">
+<i class="source-icon bl">哔</i>连接哔哩哔哩</button>
+</div>
+</div>
+</div>
+    <div v-if="showBilibili" class="modal-backdrop" @click.self="showBilibili = false">
+      <div class="modal bili-modal">
+        <button class="modal-close" @click="showBilibili = false">×</button>
+        <p class="eyebrow">BILIBILI SOURCE</p>
+        <h2>订阅 UP 主图文</h2>
+        <p>仅收集图文动态与专栏，视频动态和转发视频不会进入时间线。账号凭证请在设置页面管理。</p>
+        <div class="bili-account"><span>已连接 B 站账号 · UID {{ biliAccount.userId }}</span><button @click="showBilibili = false; openSettings('platforms')">管理凭证</button></div>
+        <form class="bili-search" @submit.prevent="searchBilibili"><input v-model="biliKeyword" placeholder="搜索 UP 主昵称" maxlength="40" required><button :disabled="biliBusy">⌕ 搜索</button></form>
+        <label class="history-option"><input v-model="biliIncludePast" type="checkbox"> 首次订阅时拉取历史图文与专栏</label>
+        <div class="bili-results">
+          <article v-for="user in biliResults" :key="user.userId"><img :src="user.avatar" :alt="user.name"><div><strong>{{ user.name }}</strong><span>UID {{ user.userId }} · 粉丝 {{ formatFans(user.fans) }}</span><p>{{ user.description || '这位 UP 主还没有填写简介' }}</p></div><button @click="subscribeBilibili(user)" :disabled="biliBusy">订阅</button></article>
+          <div v-if="!biliResults.length" class="bili-placeholder">输入昵称搜索 UP 主，然后选择订阅</div>
+        </div>
+        <p v-if="biliError" class="login-error bili-error">{{ biliError }}</p>
+      </div>
+    </div>
+    <div v-if="showSettings" class="modal-backdrop" @click.self="showSettings = false">
+      <div class="modal settings-modal">
+        <button class="modal-close" @click="showSettings = false">×</button>
+        <p class="eyebrow">LUMIC SETTINGS</p>
+        <h2>设置</h2>
+        <div class="settings-tabs">
+          <button :class="{ active: settingsTab === 'network' }" @click="settingsTab = 'network'; settingsError = ''">网络代理</button>
+          <button :class="{ active: settingsTab === 'platforms' }" @click="settingsTab = 'platforms'; settingsError = ''">平台凭证</button>
+          <button :class="{ active: settingsTab === 'sources' }" @click="settingsTab = 'sources'; settingsError = ''">来源管理</button>
+          <button :class="{ active: settingsTab === 'security' }" @click="settingsTab = 'security'; settingsError = ''">登录安全</button>
+        </div>
+        <section v-if="settingsTab === 'network'" class="settings-pane">
+          <h3>项目代理</h3><p>用于 Pixiv、B 站等所有后端外部请求。支持 HTTP、HTTPS、SOCKS5。</p>
+          <div v-if="proxyStatus.proxyEnabled" class="setting-status">当前代理：{{ proxyStatus.proxyUrl }}</div>
+          <form class="settings-form" @submit.prevent="saveProxy" autocomplete="off"><label>代理地址</label><input v-model="proxyForm.proxyUrl" placeholder="socks5://host.docker.internal:7890"><p class="credential-note">Docker 中的 127.0.0.1 指向容器自身；访问宿主机代理请使用 host.docker.internal。</p><div class="form-actions"><button type="button" class="secondary-button" @click="testProxy" :disabled="settingsBusy">测试连接</button><button class="login-button" :disabled="settingsBusy">保存代理</button><button type="button" class="danger-link" @click="proxyForm.proxyUrl = ''; saveProxy()">关闭代理</button></div></form>
+          <p v-if="proxyMessage" class="success-message">{{ proxyMessage }}</p>
+        </section>
+        <section v-if="settingsTab === 'platforms'" class="settings-pane">
+          <h3>哔哩哔哩凭证</h3><p v-if="biliAccount.configured">已连接 UID {{ biliAccount.userId }}。重新保存时需完整填写，旧凭证不会回显。</p><p v-else>配置后才可搜索并订阅 UP 主。</p>
+          <form class="settings-form bili-credentials" @submit.prevent="saveBilibiliAccount" autocomplete="off"><label>SESSDATA *</label><input v-model="biliCredentials.SESSDATA" type="password" required><label>bili_jct *</label><input v-model="biliCredentials.bili_jct" type="password" required><label>buvid3 *</label><input v-model="biliCredentials.buvid3" type="password" required><label>DedeUserID *</label><input v-model="biliCredentials.DedeUserID" required inputmode="numeric"><label>ac_time_value</label><input v-model="biliCredentials.ac_time_value" type="password"><label>buvid4</label><input v-model="biliCredentials.buvid4" type="password"><label>DedeUserID__ckMd5</label><input v-model="biliCredentials.DedeUserID__ckMd5" type="password"><p class="credential-note">保存前会验证登录状态；凭证加密保存在 /data，页面不会回显。</p><button class="login-button" :disabled="biliBusy">{{ biliBusy ? '验证中…' : '验证并保存' }}</button></form>
+          <p v-if="biliError" class="login-error bili-error">{{ biliError }}</p>
+        </section>
+        <section v-if="settingsTab === 'sources'" class="settings-pane">
+          <h3>来源管理</h3><p>右键来源卡片打开详细设置；触屏设备可点击“详细设置”。</p>
+          <div class="source-cards"><article v-for="feed in feeds" :key="feed.id" class="source-card" @contextmenu.prevent="openFeedSettings(feed)"><i :class="['source-icon', sourceMeta[feed.source]?.icon]">{{ feed.source === 'weibo' ? '微' : feed.source === 'pixiv' ? 'P' : '哔' }}</i><div><strong>{{ feed.name }}</strong><span>{{ feed.handle }} · {{ feed.schedule }}</span><small>{{ feed.enabled ? '已启用' : '已停用' }}</small></div><button @click="openFeedSettings(feed)">详细设置</button></article><div v-if="!feeds.length" class="bili-placeholder">还没有已配置的来源</div></div>
+        </section>
+        <section v-if="settingsTab === 'security'" class="settings-pane"><h3>登录安全</h3><p>修改后请使用新的账号和密码登录。密码至少 8 位。</p><form class="settings-form" @submit.prevent="saveSettings" autocomplete="off"><label>新账号</label><input v-model="settingsForm.username" required minlength="3" autocomplete="off"><label>当前密码</label><input v-model="settingsForm.currentPassword" type="password" required autocomplete="current-password"><label>新密码</label><input v-model="settingsForm.newPassword" type="password" required minlength="8" autocomplete="new-password"><button class="login-button" type="submit" :disabled="settingsBusy">{{ settingsBusy ? '保存中…' : '保存设置' }}</button></form></section>
+        <p v-if="settingsError" class="login-error settings-page-error">{{ settingsError }}</p>
+      </div>
+    </div>
+    <div v-if="showFeedSettings && selectedFeed" class="modal-backdrop" @click.self="showFeedSettings = false"><div class="modal feed-settings-modal"><button class="modal-close" @click="showFeedSettings = false">×</button><p class="eyebrow">SOURCE DETAILS</p><h2>{{ selectedFeed.name }}</h2><p>{{ sourceMeta[selectedFeed.source]?.label }} · {{ selectedFeed.handle }}</p><form class="settings-form" @submit.prevent="saveFeedSettings"><label class="switch-row"><span>启用自动同步</span><input v-model="selectedFeed.enabled" type="checkbox"></label><label>执行计划</label><select v-model="selectedFeed.schedule"><option>每 1 小时</option><option>每 6 小时</option><option>每 12 小时</option><option>每天 20:00</option></select><label class="switch-row"><span>首次拉取历史内容</span><input v-model="selectedFeed.includePast" type="checkbox"></label><div v-if="selectedFeed.source === 'bilibili'" class="content-scope"><strong>内容范围</strong><span>图文动态（DRAW）</span><span>专栏（ARTICLE）</span><small>视频及转发视频始终过滤，无法在此开启。</small></div><p v-if="settingsError" class="login-error">{{ settingsError }}</p><button class="login-button" :disabled="settingsBusy">保存来源设置</button></form></div></div>
   </div>
 </template>

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -11,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -22,6 +24,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/argon2"
+	xproxy "golang.org/x/net/proxy"
 )
 
 type Source string
@@ -74,6 +77,12 @@ type BilibiliAccount struct {
 type BilibiliConfig struct {
 	Credentials   BilibiliCredentials `json:"credentials"`
 	Subscriptions []SourceConfig      `json:"subscriptions"`
+	ProxyURL      string              `json:"proxyUrl,omitempty"`
+}
+
+type ProjectSettingsView struct {
+	ProxyEnabled bool   `json:"proxyEnabled"`
+	ProxyURL     string `json:"proxyUrl,omitempty"`
 }
 
 type BilibiliStore struct {
@@ -440,7 +449,58 @@ func bilibiliCookie(credentials BilibiliCredentials) string {
 	return strings.Join(parts, "; ")
 }
 
-func bilibiliRequest(endpoint string, credentials BilibiliCredentials, target any) error {
+func validateProxyURL(rawURL string) (*url.URL, error) {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || parsed.Host == "" {
+		return nil, errors.New("代理地址格式无效")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" && parsed.Scheme != "socks5" && parsed.Scheme != "socks5h" {
+		return nil, errors.New("代理仅支持 http、https、socks5 或 socks5h")
+	}
+	return parsed, nil
+}
+
+func externalHTTPClient(proxyURL string) (*http.Client, error) {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = http.ProxyFromEnvironment
+	if strings.TrimSpace(proxyURL) != "" {
+		parsed, err := validateProxyURL(proxyURL)
+		if err != nil {
+			return nil, err
+		}
+		if parsed.Scheme == "socks5" || parsed.Scheme == "socks5h" {
+			var auth *xproxy.Auth
+			if parsed.User != nil {
+				password, _ := parsed.User.Password()
+				auth = &xproxy.Auth{User: parsed.User.Username(), Password: password}
+			}
+			dialer, err := xproxy.SOCKS5("tcp", parsed.Host, auth, xproxy.Direct)
+			if err != nil {
+				return nil, err
+			}
+			transport.Proxy = nil
+			transport.DialContext = func(_ context.Context, network, address string) (net.Conn, error) {
+				return dialer.Dial(network, address)
+			}
+		} else {
+			transport.Proxy = http.ProxyURL(parsed)
+		}
+	}
+	return &http.Client{Transport: transport, Timeout: 15 * time.Second}, nil
+}
+
+func maskedProxyURL(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Host == "" {
+		return ""
+	}
+	if parsed.User != nil {
+		parsed.User = url.UserPassword(parsed.User.Username(), "••••••")
+	}
+	return parsed.String()
+}
+
+func bilibiliRequest(endpoint string, credentials BilibiliCredentials, proxyURL string, target any) error {
 	request, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
 		return err
@@ -448,7 +508,11 @@ func bilibiliRequest(endpoint string, credentials BilibiliCredentials, target an
 	request.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36")
 	request.Header.Set("Referer", "https://www.bilibili.com/")
 	request.Header.Set("Cookie", bilibiliCookie(credentials))
-	response, err := (&http.Client{Timeout: 12 * time.Second}).Do(request)
+	client, err := externalHTTPClient(proxyURL)
+	if err != nil {
+		return err
+	}
+	response, err := client.Do(request)
 	if err != nil {
 		return err
 	}
@@ -459,7 +523,7 @@ func bilibiliRequest(endpoint string, credentials BilibiliCredentials, target an
 	return json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(target)
 }
 
-func verifyBilibiliCredentials(credentials BilibiliCredentials) error {
+func verifyBilibiliCredentials(credentials BilibiliCredentials, proxyURL string) error {
 	if credentials.SESSDATA == "" || credentials.BiliJCT == "" || credentials.Buvid3 == "" || credentials.DedeUserID == "" {
 		return errors.New("missing required credentials")
 	}
@@ -473,11 +537,23 @@ func verifyBilibiliCredentials(credentials BilibiliCredentials) error {
 			Mid     int64 `json:"mid"`
 		} `json:"data"`
 	}
-	if err := bilibiliRequest("https://api.bilibili.com/x/web-interface/nav", credentials, &payload); err != nil {
-		return err
+	if err := bilibiliRequest("https://api.bilibili.com/x/web-interface/nav", credentials, proxyURL, &payload); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || strings.Contains(strings.ToLower(err.Error()), "timeout") {
+			return errors.New("连接 B 站超时，请检查项目代理或容器网络")
+		}
+		if proxyURL != "" {
+			return errors.New("无法通过项目代理连接 B 站，请检查代理地址、认证信息及容器可达性")
+		}
+		return errors.New("无法直连 B 站，请在设置中配置项目代理后重试")
 	}
-	if payload.Code != 0 || !payload.Data.IsLogin || strconv.FormatInt(payload.Data.Mid, 10) != credentials.DedeUserID {
-		return errors.New("invalid credentials or mismatched user ID")
+	if payload.Code != 0 {
+		return fmt.Errorf("B 站接口拒绝验证（代码 %d）", payload.Code)
+	}
+	if !payload.Data.IsLogin {
+		return errors.New("SESSDATA 登录态已失效或 Cookie 不完整")
+	}
+	if strconv.FormatInt(payload.Data.Mid, 10) != credentials.DedeUserID {
+		return fmt.Errorf("DedeUserID 不匹配，当前 Cookie 对应 UID %d", payload.Data.Mid)
 	}
 	return nil
 }
@@ -499,8 +575,11 @@ func (b *BilibiliStore) accountHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid credentials", http.StatusBadRequest)
 		return
 	}
-	if err := verifyBilibiliCredentials(credentials); err != nil {
-		http.Error(w, "unable to verify bilibili account", http.StatusBadRequest)
+	b.RLock()
+	proxyURL := b.config.ProxyURL
+	b.RUnlock()
+	if err := verifyBilibiliCredentials(credentials, proxyURL); err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	b.Lock()
@@ -547,7 +626,10 @@ func (b *BilibiliStore) searchHandler(w http.ResponseWriter, r *http.Request) {
 			} `json:"result"`
 		} `json:"data"`
 	}
-	if err := bilibiliRequest(endpoint, credentials, &payload); err != nil || payload.Code != 0 {
+	b.RLock()
+	proxyURL := b.config.ProxyURL
+	b.RUnlock()
+	if err := bilibiliRequest(endpoint, credentials, proxyURL, &payload); err != nil || payload.Code != 0 {
 		http.Error(w, "bilibili search is temporarily unavailable", http.StatusBadGateway)
 		return
 	}
@@ -568,6 +650,42 @@ func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Requ
 		result := append([]SourceConfig(nil), b.config.Subscriptions...)
 		b.RUnlock()
 		writeJSON(w, result)
+		return
+	}
+	if r.Method == http.MethodPut {
+		var input SourceConfig
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&input) != nil || !strings.HasPrefix(input.ID, "bili-") {
+			writeAPIError(w, http.StatusBadRequest, "来源设置无效")
+			return
+		}
+		allowedSchedules := map[string]bool{"每 1 小时": true, "每 6 小时": true, "每 12 小时": true, "每天 20:00": true}
+		if !allowedSchedules[input.Schedule] {
+			writeAPIError(w, http.StatusBadRequest, "执行计划无效")
+			return
+		}
+		b.Lock()
+		found := false
+		for index := range b.config.Subscriptions {
+			if b.config.Subscriptions[index].ID == input.ID {
+				b.config.Subscriptions[index].Enabled = input.Enabled
+				b.config.Subscriptions[index].IncludePast = input.IncludePast
+				b.config.Subscriptions[index].Schedule = input.Schedule
+				b.config.Subscriptions[index].ContentTypes = []string{"DRAW", "ARTICLE"}
+				input = b.config.Subscriptions[index]
+				found = true
+				break
+			}
+		}
+		b.Unlock()
+		if !found {
+			writeAPIError(w, http.StatusNotFound, "来源不存在")
+			return
+		}
+		if err := b.save(); err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "无法保存来源设置")
+			return
+		}
+		writeJSON(w, input)
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -605,6 +723,61 @@ func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, feed)
 }
 
+func (b *BilibiliStore) projectSettingsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		b.RLock()
+		proxyURL := b.config.ProxyURL
+		b.RUnlock()
+		writeJSON(w, ProjectSettingsView{ProxyEnabled: proxyURL != "", ProxyURL: maskedProxyURL(proxyURL)})
+		return
+	}
+	var input struct {
+		ProxyURL string `json:"proxyUrl"`
+	}
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&input) != nil {
+		writeAPIError(w, http.StatusBadRequest, "代理设置格式无效")
+		return
+	}
+	input.ProxyURL = strings.TrimSpace(input.ProxyURL)
+	if input.ProxyURL != "" {
+		if _, err := validateProxyURL(input.ProxyURL); err != nil {
+			writeAPIError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	if r.Method == http.MethodPost {
+		client, err := externalHTTPClient(input.ProxyURL)
+		if err == nil {
+			request, requestErr := http.NewRequest(http.MethodGet, "https://www.pixiv.net/robots.txt", nil)
+			if requestErr == nil {
+				request.Header.Set("User-Agent", "Lumic/1.0")
+				response, requestErr := client.Do(request)
+				if requestErr == nil {
+					response.Body.Close()
+					if response.StatusCode < 500 {
+						writeJSON(w, map[string]string{"status": "ok", "message": "代理可以访问 pixiv"})
+						return
+					}
+				}
+			}
+		}
+		writeAPIError(w, http.StatusBadGateway, "代理测试失败，请检查地址、认证信息和 Docker 容器网络")
+		return
+	}
+	if r.Method != http.MethodPut {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	b.Lock()
+	b.config.ProxyURL = input.ProxyURL
+	b.Unlock()
+	if err := b.save(); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "无法保存项目代理")
+		return
+	}
+	writeJSON(w, ProjectSettingsView{ProxyEnabled: input.ProxyURL != "", ProxyURL: maskedProxyURL(input.ProxyURL)})
+}
+
 // Bilibili sync accepts only image-text and article cards; video and forwarded-video cards are excluded.
 func allowedBilibiliDynamicType(dynamicType string) bool {
 	return dynamicType == "DYNAMIC_TYPE_DRAW" || dynamicType == "DYNAMIC_TYPE_ARTICLE"
@@ -616,6 +789,12 @@ func syncHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]string{"status": "started", "message": "同步任务已加入队列"})
+}
+
+func writeAPIError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
 
 func writeJSON(w http.ResponseWriter, value any) {
@@ -640,6 +819,7 @@ func main() {
 	mux.HandleFunc("/api/bilibili/account", bilibili.accountHandler)
 	mux.HandleFunc("/api/bilibili/search", bilibili.searchHandler)
 	mux.HandleFunc("/api/bilibili/subscriptions", bilibili.subscriptionsHandler)
+	mux.HandleFunc("/api/project/settings", bilibili.projectSettingsHandler)
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, map[string]string{"status": "ok"}) })
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")

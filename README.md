@@ -29,6 +29,8 @@ API 默认监听 `http://localhost:5500`。Vite 开发服务器默认监听 `htt
 - `GET /api/feeds`：获取来源与同步配置
 - `POST /api/feeds`：新增一个来源配置
 - `POST /api/sync`：触发同步任务
+- `GET|PUT /api/project/settings`：读取脱敏项目设置或保存项目代理
+- `POST /api/project/settings`：测试代理能否访问 pixiv
 - `GET|PUT /api/bilibili/account`：读取脱敏配置状态或验证并保存 B 站凭证
 - `GET /api/bilibili/search?keyword=名称`：搜索 B 站 UP 主
 - `GET|POST /api/bilibili/subscriptions`：读取或新增 UP 主图文/专栏订阅
@@ -64,7 +66,29 @@ docker compose up -d
 
 反向代理启用 HTTPS 后建议设置 `LUMIC_COOKIE_SECURE=true`；该变量不属于当前 Compose 默认配置，可按部署环境单独添加。服务还发送 CSP、`X-Frame-Options: DENY`、`X-Content-Type-Options: nosniff` 和严格 Referrer Policy 等响应头。
 
-B 站账号必填 `SESSDATA`、`bili_jct`、`buvid3`、`DedeUserID`，可选 `ac_time_value`、`buvid4`、`DedeUserID__ckMd5`。保存前服务会调用 B 站接口验证登录状态和 UID；原始值不会返回前端，而是通过 AES-GCM 加密保存在 `/data/bilibili.enc`，密钥保存在 `/data/secret.key`。应将整个 `data` 目录视为敏感数据，限制宿主机访问权限并定期备份；不要提交到 Git 仓库。
+B 站账号凭证统一在「设置 → 平台凭证」中管理。必填 `SESSDATA`、`bili_jct`、`buvid3`、`DedeUserID`，可选 `ac_time_value`、`buvid4`、`DedeUserID__ckMd5`。保存前服务会调用 B 站接口验证登录状态和 UID；失败时页面会区分登录态失效、UID 不匹配、直连失败或代理失败。原始值不会返回前端，而是通过 AES-GCM 加密保存在 `/data/bilibili.enc`，密钥保存在 `/data/secret.key`。应将整个 `data` 目录视为敏感数据，限制宿主机访问权限并定期备份；不要提交到 Git 仓库。
+
+### 项目代理
+
+「设置 → 网络代理」可配置供所有平台连接器复用的项目代理，支持 `http://`、`https://`、`socks5://` 和 `socks5h://`，也支持在 URL 中携带用户名与密码。设置页只显示脱敏地址，修改代理时需要重新输入完整地址。
+
+Docker 容器中的 `127.0.0.1` 指向容器自身，并不是宿主机。如果代理软件运行在宿主机的 `7890` 端口，应填写：
+
+```text
+http://host.docker.internal:7890
+```
+
+或：
+
+```text
+socks5://host.docker.internal:7890
+```
+
+代理软件还必须允许来自 Docker 网络的连接。保存前可以使用「测试连接」检查是否能够访问 pixiv；保存后 B 站凭证验证、UP 主搜索以及后续 Pixiv connector 都会使用该代理。
+
+### 来源详细设置
+
+「设置 → 来源管理」展示所有来源卡片。桌面端可右键卡片打开详细设置，触屏设备可点击「详细设置」。B 站来源可以调整启用状态、执行计划和首次历史拉取策略，但内容范围固定为图文动态与专栏，不能开启视频采集。
 
 ### GitHub Actions
 
