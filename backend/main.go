@@ -1,15 +1,22 @@
 package main
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -45,7 +52,42 @@ type SourceConfig struct {
 	Enabled      bool      `json:"enabled"`
 	IncludePast  bool      `json:"includePast"`
 	Schedule     string    `json:"schedule"`
+	ContentTypes []string  `json:"contentTypes,omitempty"`
 	LastSyncedAt time.Time `json:"lastSyncedAt"`
+}
+
+type BilibiliCredentials struct {
+	SESSDATA        string `json:"SESSDATA"`
+	BiliJCT         string `json:"bili_jct"`
+	Buvid3          string `json:"buvid3"`
+	DedeUserID      string `json:"DedeUserID"`
+	AccessTimeValue string `json:"ac_time_value,omitempty"`
+	Buvid4          string `json:"buvid4,omitempty"`
+	DedeUserIDCKMd5 string `json:"DedeUserID__ckMd5,omitempty"`
+}
+
+type BilibiliAccount struct {
+	Configured bool   `json:"configured"`
+	UserID     string `json:"userId,omitempty"`
+}
+
+type BilibiliConfig struct {
+	Credentials   BilibiliCredentials `json:"credentials"`
+	Subscriptions []SourceConfig      `json:"subscriptions"`
+}
+
+type BilibiliStore struct {
+	sync.RWMutex
+	config BilibiliConfig
+	key    []byte
+}
+
+type BilibiliUser struct {
+	UserID      int64  `json:"userId"`
+	Name        string `json:"name"`
+	Avatar      string `json:"avatar"`
+	Fans        int64  `json:"fans"`
+	Description string `json:"description"`
 }
 
 type Store struct {
@@ -66,6 +108,8 @@ type AuthConfig struct {
 }
 
 var authFile = "/data/auth.json"
+var bilibiliFile = "/data/bilibili.enc"
+var secretFile = "/data/secret.key"
 
 func loadAuthConfig() *AuthConfig {
 	if value := os.Getenv("LUMIC_AUTH_FILE"); value != "" {
@@ -95,6 +139,98 @@ func (a *AuthConfig) save() error {
 		return err
 	}
 	return os.WriteFile(authFile, data, 0600)
+}
+
+func loadOrCreateSecret() ([]byte, error) {
+	if err := os.MkdirAll(filepath.Dir(secretFile), 0700); err != nil {
+		return nil, err
+	}
+	if key, err := os.ReadFile(secretFile); err == nil && len(key) == 32 {
+		return key, nil
+	}
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(secretFile, key, 0600); err != nil {
+		return nil, err
+	}
+	return key, nil
+}
+
+func encryptJSON(key []byte, value any) ([]byte, error) {
+	plain, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, err
+	}
+	return gcm.Seal(nonce, nonce, plain, []byte("lumic-bilibili-v1")), nil
+}
+
+func decryptJSON(key, encrypted []byte, value any) error {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return err
+	}
+	if len(encrypted) < gcm.NonceSize() {
+		return errors.New("invalid encrypted configuration")
+	}
+	nonce, ciphertext := encrypted[:gcm.NonceSize()], encrypted[gcm.NonceSize():]
+	plain, err := gcm.Open(nil, nonce, ciphertext, []byte("lumic-bilibili-v1"))
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(plain, value)
+}
+
+func loadBilibiliStore() (*BilibiliStore, error) {
+	if value := os.Getenv("LUMIC_BILIBILI_FILE"); value != "" {
+		bilibiliFile = value
+	}
+	if value := os.Getenv("LUMIC_SECRET_FILE"); value != "" {
+		secretFile = value
+	}
+	key, err := loadOrCreateSecret()
+	if err != nil {
+		return nil, err
+	}
+	store := &BilibiliStore{key: key, config: BilibiliConfig{Subscriptions: []SourceConfig{}}}
+	if data, err := os.ReadFile(bilibiliFile); err == nil {
+		if err := decryptJSON(key, data, &store.config); err != nil {
+			return nil, fmt.Errorf("decrypt bilibili configuration: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	return store, nil
+}
+
+func (b *BilibiliStore) save() error {
+	b.RLock()
+	data, err := encryptJSON(b.key, b.config)
+	b.RUnlock()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(bilibiliFile), 0700); err != nil {
+		return err
+	}
+	return os.WriteFile(bilibiliFile, data, 0600)
 }
 
 func (s *SessionStore) create() (string, error) {
@@ -293,6 +429,187 @@ func (s *Store) feedsHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, result)
 }
 
+func bilibiliCookie(credentials BilibiliCredentials) string {
+	values := [][2]string{{"SESSDATA", credentials.SESSDATA}, {"bili_jct", credentials.BiliJCT}, {"buvid3", credentials.Buvid3}, {"DedeUserID", credentials.DedeUserID}, {"ac_time_value", credentials.AccessTimeValue}, {"buvid4", credentials.Buvid4}, {"DedeUserID__ckMd5", credentials.DedeUserIDCKMd5}}
+	parts := make([]string, 0, len(values))
+	for _, item := range values {
+		if item[1] != "" {
+			parts = append(parts, item[0]+"="+item[1])
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
+func bilibiliRequest(endpoint string, credentials BilibiliCredentials, target any) error {
+	request, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36")
+	request.Header.Set("Referer", "https://www.bilibili.com/")
+	request.Header.Set("Cookie", bilibiliCookie(credentials))
+	response, err := (&http.Client{Timeout: 12 * time.Second}).Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("bilibili returned status %d", response.StatusCode)
+	}
+	return json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(target)
+}
+
+func verifyBilibiliCredentials(credentials BilibiliCredentials) error {
+	if credentials.SESSDATA == "" || credentials.BiliJCT == "" || credentials.Buvid3 == "" || credentials.DedeUserID == "" {
+		return errors.New("missing required credentials")
+	}
+	if _, err := strconv.ParseInt(credentials.DedeUserID, 10, 64); err != nil {
+		return errors.New("invalid DedeUserID")
+	}
+	var payload struct {
+		Code int `json:"code"`
+		Data struct {
+			IsLogin bool  `json:"isLogin"`
+			Mid     int64 `json:"mid"`
+		} `json:"data"`
+	}
+	if err := bilibiliRequest("https://api.bilibili.com/x/web-interface/nav", credentials, &payload); err != nil {
+		return err
+	}
+	if payload.Code != 0 || !payload.Data.IsLogin || strconv.FormatInt(payload.Data.Mid, 10) != credentials.DedeUserID {
+		return errors.New("invalid credentials or mismatched user ID")
+	}
+	return nil
+}
+
+func (b *BilibiliStore) accountHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		b.RLock()
+		account := BilibiliAccount{Configured: b.config.Credentials.SESSDATA != "", UserID: b.config.Credentials.DedeUserID}
+		b.RUnlock()
+		writeJSON(w, account)
+		return
+	}
+	if r.Method != http.MethodPut {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var credentials BilibiliCredentials
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10)).Decode(&credentials) != nil {
+		http.Error(w, "invalid credentials", http.StatusBadRequest)
+		return
+	}
+	if err := verifyBilibiliCredentials(credentials); err != nil {
+		http.Error(w, "unable to verify bilibili account", http.StatusBadRequest)
+		return
+	}
+	b.Lock()
+	b.config.Credentials = credentials
+	b.Unlock()
+	if err := b.save(); err != nil {
+		http.Error(w, "unable to save bilibili account", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, BilibiliAccount{Configured: true, UserID: credentials.DedeUserID})
+}
+
+func plainBilibiliText(value string) string {
+	return strings.TrimSpace(strings.NewReplacer("<em class=\"keyword\">", "", "</em>", "", "<em>", "").Replace(value))
+}
+
+func (b *BilibiliStore) searchHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	keyword := strings.TrimSpace(r.URL.Query().Get("keyword"))
+	if len([]rune(keyword)) < 1 || len([]rune(keyword)) > 40 {
+		http.Error(w, "invalid keyword", http.StatusBadRequest)
+		return
+	}
+	b.RLock()
+	credentials := b.config.Credentials
+	b.RUnlock()
+	if credentials.SESSDATA == "" {
+		http.Error(w, "bilibili account is not configured", http.StatusPreconditionFailed)
+		return
+	}
+	endpoint := "https://api.bilibili.com/x/web-interface/search/type?search_type=bili_user&page=1&page_size=20&keyword=" + url.QueryEscape(keyword)
+	var payload struct {
+		Code int `json:"code"`
+		Data struct {
+			Result []struct {
+				Mid   int64  `json:"mid"`
+				Uname string `json:"uname"`
+				Upic  string `json:"upic"`
+				Fans  int64  `json:"fans"`
+				Usign string `json:"usign"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+	if err := bilibiliRequest(endpoint, credentials, &payload); err != nil || payload.Code != 0 {
+		http.Error(w, "bilibili search is temporarily unavailable", http.StatusBadGateway)
+		return
+	}
+	users := make([]BilibiliUser, 0, len(payload.Data.Result))
+	for _, result := range payload.Data.Result {
+		avatar := result.Upic
+		if strings.HasPrefix(avatar, "//") {
+			avatar = "https:" + avatar
+		}
+		users = append(users, BilibiliUser{UserID: result.Mid, Name: plainBilibiliText(result.Uname), Avatar: avatar, Fans: result.Fans, Description: result.Usign})
+	}
+	writeJSON(w, users)
+}
+
+func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		b.RLock()
+		result := append([]SourceConfig(nil), b.config.Subscriptions...)
+		b.RUnlock()
+		writeJSON(w, result)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var input struct {
+		UserID      int64  `json:"userId"`
+		Name        string `json:"name"`
+		IncludePast bool   `json:"includePast"`
+		Schedule    string `json:"schedule"`
+	}
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&input) != nil || input.UserID <= 0 || strings.TrimSpace(input.Name) == "" {
+		http.Error(w, "invalid subscription", http.StatusBadRequest)
+		return
+	}
+	if input.Schedule == "" {
+		input.Schedule = "每 6 小时"
+	}
+	feed := SourceConfig{ID: fmt.Sprintf("bili-%d", input.UserID), Source: SourceBilibili, Name: strings.TrimSpace(input.Name), Handle: fmt.Sprintf("UID %d", input.UserID), Enabled: true, IncludePast: input.IncludePast, Schedule: input.Schedule, ContentTypes: []string{"DRAW", "ARTICLE"}}
+	b.Lock()
+	for _, existing := range b.config.Subscriptions {
+		if existing.ID == feed.ID {
+			b.Unlock()
+			http.Error(w, "already subscribed", http.StatusConflict)
+			return
+		}
+	}
+	b.config.Subscriptions = append(b.config.Subscriptions, feed)
+	b.Unlock()
+	if err := b.save(); err != nil {
+		http.Error(w, "unable to save subscription", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, feed)
+}
+
+// Bilibili sync accepts only image-text and article cards; video and forwarded-video cards are excluded.
+func allowedBilibiliDynamicType(dynamicType string) bool {
+	return dynamicType == "DYNAMIC_TYPE_DRAW" || dynamicType == "DYNAMIC_TYPE_ARTICLE"
+}
+
 func syncHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -309,6 +626,10 @@ func writeJSON(w http.ResponseWriter, value any) {
 func main() {
 	store := demoStore()
 	auth := loadAuthConfig()
+	bilibili, err := loadBilibiliStore()
+	if err != nil {
+		log.Fatal("unable to load Bilibili configuration: ", err)
+	}
 	sessions := &SessionStore{tokens: make(map[string]time.Time)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/login", loginHandler(sessions, auth))
@@ -316,6 +637,9 @@ func main() {
 	mux.HandleFunc("/api/posts", store.postsHandler)
 	mux.HandleFunc("/api/feeds", store.feedsHandler)
 	mux.HandleFunc("/api/sync", syncHandler)
+	mux.HandleFunc("/api/bilibili/account", bilibili.accountHandler)
+	mux.HandleFunc("/api/bilibili/search", bilibili.searchHandler)
+	mux.HandleFunc("/api/bilibili/subscriptions", bilibili.subscriptionsHandler)
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, map[string]string{"status": "ok"}) })
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")

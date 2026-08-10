@@ -13,6 +13,14 @@ const activeNav = ref('all')
 const activeSource = ref('all')
 const isDark = ref(false)
 const showAdd = ref(false)
+const showBilibili = ref(false)
+const biliAccount = ref({ configured: false, userId: '' })
+const biliCredentials = ref({ SESSDATA: '', bili_jct: '', buvid3: '', DedeUserID: '', ac_time_value: '', buvid4: '', DedeUserID__ckMd5: '' })
+const biliKeyword = ref('')
+const biliResults = ref([])
+const biliBusy = ref(false)
+const biliError = ref('')
+const biliIncludePast = ref(false)
 const syncing = ref(false)
 const posts = ref([])
 const feeds = ref([])
@@ -52,10 +60,10 @@ async function login() {
 }
 async function loadData() {
   try {
-    const [postResponse, feedResponse] = await Promise.all([fetch('/api/posts'), fetch('/api/feeds')])
-    if (!postResponse.ok || !feedResponse.ok) throw new Error('api unavailable')
+    const [postResponse, feedResponse, biliFeedResponse] = await Promise.all([fetch('/api/posts'), fetch('/api/feeds'), fetch('/api/bilibili/subscriptions')])
+    if (!postResponse.ok || !feedResponse.ok || !biliFeedResponse.ok) throw new Error('api unavailable')
     posts.value = await postResponse.json()
-    feeds.value = await feedResponse.json()
+    feeds.value = [...await feedResponse.json(), ...await biliFeedResponse.json()]
   } catch { posts.value = fallbackPosts; feeds.value = [] }
 }
 async function syncNow() {
@@ -74,14 +82,50 @@ async function saveSettings() {
   } catch (error) { settingsError.value = error.message }
   finally { settingsBusy.value = false }
 }
+async function openBilibili() {
+  showAdd.value = false
+  showBilibili.value = true
+  biliError.value = ''
+  try {
+    const response = await fetch('/api/bilibili/account')
+    if (response.ok) biliAccount.value = await response.json()
+  } catch { biliError.value = '无法读取 B 站配置' }
+}
+async function saveBilibiliAccount() {
+  biliBusy.value = true; biliError.value = ''
+  try {
+    const response = await fetch('/api/bilibili/account', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(biliCredentials.value) })
+    if (!response.ok) throw new Error('凭证验证失败，请检查 Cookie 和 DedeUserID')
+    biliAccount.value = await response.json()
+    biliCredentials.value = { SESSDATA: '', bili_jct: '', buvid3: '', DedeUserID: '', ac_time_value: '', buvid4: '', DedeUserID__ckMd5: '' }
+  } catch (error) { biliError.value = error.message } finally { biliBusy.value = false }
+}
+async function searchBilibili() {
+  if (!biliKeyword.value.trim()) return
+  biliBusy.value = true; biliError.value = ''; biliResults.value = []
+  try {
+    const response = await fetch(`/api/bilibili/search?keyword=${encodeURIComponent(biliKeyword.value.trim())}`)
+    if (!response.ok) throw new Error(response.status === 412 ? '请先配置 B 站凭证' : '搜索暂时不可用，请稍后重试')
+    biliResults.value = await response.json()
+  } catch (error) { biliError.value = error.message } finally { biliBusy.value = false }
+}
+async function subscribeBilibili(user) {
+  biliBusy.value = true; biliError.value = ''
+  try {
+    const response = await fetch('/api/bilibili/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: user.userId, name: user.name, includePast: biliIncludePast.value, schedule: '每 6 小时' }) })
+    if (!response.ok) throw new Error(response.status === 409 ? '已经订阅该 UP 主' : '订阅失败')
+    feeds.value.push(await response.json())
+  } catch (error) { biliError.value = error.message } finally { biliBusy.value = false }
+}
+function formatFans(count) { return count >= 10000 ? `${(count / 10000).toFixed(1)}万` : count }
 async function checkSession() {
   try {
     const response = await fetch('/api/posts')
     if (!response.ok) throw new Error('unauthorized')
     posts.value = await response.json()
     authenticated.value = true
-    const feedResponse = await fetch('/api/feeds')
-    if (feedResponse.ok) feeds.value = await feedResponse.json()
+    const [feedResponse, biliFeedResponse] = await Promise.all([fetch('/api/feeds'), fetch('/api/bilibili/subscriptions')])
+    if (feedResponse.ok && biliFeedResponse.ok) feeds.value = [...await feedResponse.json(), ...await biliFeedResponse.json()]
   } catch { authenticated.value = false }
 }
 onMounted(checkSession)
@@ -126,7 +170,8 @@ onMounted(checkSession)
       <section class="feed-list"><article v-for="post in filteredPosts" :key="post.id" class="post-card"><div class="post-head"><img :src="post.avatar" :alt="post.author"><div class="author"><strong>{{ post.author }}</strong><span>{{ relativeTime(post.published) }}</span></div><span :class="['source-pill', sourceMeta[post.source].color]"><i :class="['source-icon', sourceMeta[post.source].icon]">{{ sourceMeta[post.source].icon === 'wb' ? '微' : sourceMeta[post.source].icon === 'px' ? 'P' : '哔' }}</i>{{ sourceMeta[post.source].label }}</span><button class="more">···</button></div><p class="caption">{{ post.caption }}</p><div v-if="post.media?.length" class="media-grid"><img v-for="media in post.media" :key="media" :src="media" alt="动态图片"></div><div class="tag-row"><span v-for="tag in post.tags" :key="tag"># {{ tag }}</span></div><div class="post-foot"><span>◷ {{ new Date(post.published).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }}</span><div><button>♡</button><button>↗</button><button>⌑</button></div></div></article><div v-if="!filteredPosts.length" class="empty">还没有这个来源的动态</div></section>
     </main>
     <button class="add-fab" @click="showAdd = true">＋ <span>添加来源</span></button>
-    <div v-if="showAdd" class="modal-backdrop" @click.self="showAdd = false"><div class="modal"><button class="modal-close" @click="showAdd = false">×</button><p class="eyebrow">NEW SOURCE</p><h2>添加一个新来源</h2><p>连接账号后，Lumic 会帮你把喜欢的内容收进同一条时间线。</p><div class="connect-options"><button @click="showAdd = false"><i class="source-icon wb">微</i>连接微博</button><button @click="showAdd = false"><i class="source-icon px">P</i>连接 pixiv</button><button @click="showAdd = false"><i class="source-icon bl">哔</i>连接哔哩哔哩</button></div></div></div>
+    <div v-if="showAdd" class="modal-backdrop" @click.self="showAdd = false"><div class="modal"><button class="modal-close" @click="showAdd = false">×</button><p class="eyebrow">NEW SOURCE</p><h2>添加一个新来源</h2><p>连接账号后，Lumic 会帮你把喜欢的内容收进同一条时间线。</p><div class="connect-options"><button @click="showAdd = false"><i class="source-icon wb">微</i>连接微博</button><button @click="showAdd = false"><i class="source-icon px">P</i>连接 pixiv</button><button @click="openBilibili"><i class="source-icon bl">哔</i>连接哔哩哔哩</button></div></div></div>
+    <div v-if="showBilibili" class="modal-backdrop" @click.self="showBilibili = false"><div class="modal bili-modal"><button class="modal-close" @click="showBilibili = false">×</button><p class="eyebrow">BILIBILI SOURCE</p><h2>订阅 UP 主图文</h2><p>仅收集图文动态与专栏，视频动态和转发视频不会进入时间线。</p><template v-if="!biliAccount.configured"><form class="settings-form bili-credentials" @submit.prevent="saveBilibiliAccount" autocomplete="off"><label>SESSDATA *</label><input v-model="biliCredentials.SESSDATA" type="password" required><label>bili_jct *</label><input v-model="biliCredentials.bili_jct" type="password" required><label>buvid3 *</label><input v-model="biliCredentials.buvid3" type="password" required><label>DedeUserID *</label><input v-model="biliCredentials.DedeUserID" required inputmode="numeric"><label>ac_time_value</label><input v-model="biliCredentials.ac_time_value" type="password"><label>buvid4</label><input v-model="biliCredentials.buvid4" type="password"><label>DedeUserID__ckMd5</label><input v-model="biliCredentials.DedeUserID__ckMd5" type="password"><p class="credential-note">凭证经验证后加密保存在 /data，页面不会回显。</p><button class="login-button" :disabled="biliBusy">{{ biliBusy ? '验证中…' : '验证并保存' }}</button></form></template><template v-else><div class="bili-account"><span>已连接 B 站账号 · UID {{ biliAccount.userId }}</span><button @click="biliAccount.configured = false">重新配置</button></div><form class="bili-search" @submit.prevent="searchBilibili"><input v-model="biliKeyword" placeholder="搜索 UP 主昵称" maxlength="40" required><button :disabled="biliBusy">⌕ 搜索</button></form><label class="history-option"><input v-model="biliIncludePast" type="checkbox"> 首次订阅时拉取历史图文与专栏</label><div class="bili-results"><article v-for="user in biliResults" :key="user.userId"><img :src="user.avatar" :alt="user.name"><div><strong>{{ user.name }}</strong><span>UID {{ user.userId }} · 粉丝 {{ formatFans(user.fans) }}</span><p>{{ user.description || '这位 UP 主还没有填写简介' }}</p></div><button @click="subscribeBilibili(user)" :disabled="biliBusy">订阅</button></article><div v-if="!biliResults.length" class="bili-placeholder">输入昵称搜索 UP 主，然后选择订阅</div></div></template><p v-if="biliError" class="login-error bili-error">{{ biliError }}</p></div></div>
     <div v-if="showSettings" class="modal-backdrop" @click.self="showSettings = false"><div class="modal"><button class="modal-close" @click="showSettings = false">×</button><p class="eyebrow">ACCOUNT SECURITY</p><h2>账号设置</h2><p>修改后请使用新的账号和密码登录。密码至少 8 位。</p><form class="settings-form" @submit.prevent="saveSettings" autocomplete="off"><label>新账号</label><input v-model="settingsForm.username" required minlength="3" autocomplete="off"><label>当前密码</label><input v-model="settingsForm.currentPassword" type="password" required autocomplete="current-password"><label>新密码</label><input v-model="settingsForm.newPassword" type="password" required minlength="8" autocomplete="new-password"><p v-if="settingsError" class="login-error">{{ settingsError }}</p><button class="login-button" type="submit" :disabled="settingsBusy">{{ settingsBusy ? '保存中…' : '保存设置' }}</button></form></div></div>
   </div>
 </template>

@@ -4,7 +4,7 @@ Lumic 是一个聚合个人内容流的 Docker 项目，中文名为「拾光」
 
 ## 当前版本
 
-当前仓库包含可运行的 Vue 前端仪表盘和 Go API 基础服务。后端目前使用演示数据作为数据层占位，平台连接器、登录授权和持久化数据库可在此基础上接入。
+当前仓库包含可运行的 Vue 前端仪表盘和 Go API 基础服务。后端目前使用演示动态作为数据层占位；B 站已经支持加密保存账号凭证、搜索 UP 主和持久化图文/专栏订阅，实际动态同步解析器以及微博、pixiv 连接器仍需继续接入。
 
 ## 启动开发环境
 
@@ -29,6 +29,9 @@ API 默认监听 `http://localhost:5500`。Vite 开发服务器默认监听 `htt
 - `GET /api/feeds`：获取来源与同步配置
 - `POST /api/feeds`：新增一个来源配置
 - `POST /api/sync`：触发同步任务
+- `GET|PUT /api/bilibili/account`：读取脱敏配置状态或验证并保存 B 站凭证
+- `GET /api/bilibili/search?keyword=名称`：搜索 B 站 UP 主
+- `GET|POST /api/bilibili/subscriptions`：读取或新增 UP 主图文/专栏订阅
 - `GET /api/health`：健康检查
 
 ## Docker
@@ -42,7 +45,7 @@ docker compose up -d
 docker compose logs -f lumic
 ```
 
-数据目录挂载为 `./data:/data`：左侧是运行 `docker compose` 的目录下的宿主机 `data` 文件夹，右侧是容器内路径。当前演示版本尚未写入持久化数据；后续数据库、Cookie 和任务状态建议统一放在 `/data`。
+数据目录挂载为 `./data:/data`：左侧是运行 `docker compose` 的目录下的宿主机 `data` 文件夹，右侧是容器内路径。登录配置、B 站加密凭证、B 站订阅和本地加密密钥均写入 `/data`；后续数据库与任务游标也应放在该目录。
 
 本地构建镜像时使用：
 
@@ -61,6 +64,8 @@ docker compose up -d
 
 反向代理启用 HTTPS 后建议设置 `LUMIC_COOKIE_SECURE=true`；该变量不属于当前 Compose 默认配置，可按部署环境单独添加。服务还发送 CSP、`X-Frame-Options: DENY`、`X-Content-Type-Options: nosniff` 和严格 Referrer Policy 等响应头。
 
+B 站账号必填 `SESSDATA`、`bili_jct`、`buvid3`、`DedeUserID`，可选 `ac_time_value`、`buvid4`、`DedeUserID__ckMd5`。保存前服务会调用 B 站接口验证登录状态和 UID；原始值不会返回前端，而是通过 AES-GCM 加密保存在 `/data/bilibili.enc`，密钥保存在 `/data/secret.key`。应将整个 `data` 目录视为敏感数据，限制宿主机访问权限并定期备份；不要提交到 Git 仓库。
+
 ### GitHub Actions
 
 工作流 [`docker-publish.yml`](.github/workflows/docker-publish.yml) 会在 `main` 分支推送、`v*` 标签和手动触发时构建并推送镜像；Pull Request 只执行构建校验，不推送镜像。默认构建 `linux/amd64` 与 `linux/arm64`，并使用 `GITHUB_TOKEN` 登录 GHCR。
@@ -73,6 +78,6 @@ docker compose up -d
 
 - 微博：点赞流、指定博主、历史首次拉取、增量同步
 - pixiv：关注画师作品流、标签和作品媒体
-- 哔哩哔哩：关注 UP 主动态、视频 / 图文动态和标签
+- 哔哩哔哩：按昵称搜索并订阅指定 UP 主，仅允许图文动态与专栏；视频投稿、视频动态和转发视频卡片必须过滤
 
 调度器保存每个来源的游标和最后同步时间；首次同步通过 `includePast` 选择是否拉取历史全部，后续仅拉取游标之后的新内容。
