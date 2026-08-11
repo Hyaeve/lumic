@@ -529,6 +529,37 @@ func (s *Store) postsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Store) feedsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodDelete {
+		id := strings.TrimSpace(r.URL.Query().Get("id"))
+		s.Lock()
+		for index, feed := range s.feeds {
+			if feed.ID == id {
+				s.feeds = append(s.feeds[:index], s.feeds[index+1:]...)
+				s.Unlock()
+				writeJSON(w, map[string]string{"status": "deleted", "message": "订阅已删除，已采集文件予以保留"})
+				return
+			}
+		}
+		s.Unlock()
+		writeAPIError(w, http.StatusNotFound, "来源不存在")
+		return
+	}
+	if r.Method == http.MethodPost && r.URL.Query().Get("action") == "sync" {
+		id := strings.TrimSpace(r.URL.Query().Get("id"))
+		s.Lock()
+		for index := range s.feeds {
+			if s.feeds[index].ID == id {
+				s.feeds[index].LastSyncedAt = time.Now()
+				feed := s.feeds[index]
+				s.Unlock()
+				writeJSON(w, map[string]any{"status": "started", "message": "来源拉取任务已加入队列", "source": feed})
+				return
+			}
+		}
+		s.Unlock()
+		writeAPIError(w, http.StatusNotFound, "来源不存在")
+		return
+	}
 	if r.Method == http.MethodPost {
 		var feed SourceConfig
 		if err := json.NewDecoder(r.Body).Decode(&feed); err != nil {
@@ -820,6 +851,45 @@ func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Requ
 		result := append([]SourceConfig(nil), b.config.Subscriptions...)
 		b.RUnlock()
 		writeJSON(w, result)
+		return
+	}
+	if r.Method == http.MethodDelete {
+		id := strings.TrimSpace(r.URL.Query().Get("id"))
+		b.Lock()
+		for index, feed := range b.config.Subscriptions {
+			if feed.ID == id {
+				b.config.Subscriptions = append(b.config.Subscriptions[:index], b.config.Subscriptions[index+1:]...)
+				b.Unlock()
+				if err := b.save(); err != nil {
+					writeAPIError(w, http.StatusInternalServerError, "无法保存订阅变更")
+					return
+				}
+				writeJSON(w, map[string]string{"status": "deleted", "message": "订阅已删除，内容目录和已采集文件予以保留"})
+				return
+			}
+		}
+		b.Unlock()
+		writeAPIError(w, http.StatusNotFound, "订阅不存在")
+		return
+	}
+	if r.Method == http.MethodPost && r.URL.Query().Get("action") == "sync" {
+		id := strings.TrimSpace(r.URL.Query().Get("id"))
+		b.Lock()
+		for index := range b.config.Subscriptions {
+			if b.config.Subscriptions[index].ID == id {
+				b.config.Subscriptions[index].LastSyncedAt = time.Now()
+				feed := b.config.Subscriptions[index]
+				b.Unlock()
+				if err := b.save(); err != nil {
+					writeAPIError(w, http.StatusInternalServerError, "无法保存同步状态")
+					return
+				}
+				writeJSON(w, map[string]any{"status": "started", "message": "UP 主拉取任务已加入队列", "source": feed})
+				return
+			}
+		}
+		b.Unlock()
+		writeAPIError(w, http.StatusNotFound, "订阅不存在")
 		return
 	}
 	if r.Method == http.MethodPut {
