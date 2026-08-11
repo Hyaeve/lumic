@@ -44,13 +44,34 @@ API 默认监听 `http://localhost:5500`。Vite 开发服务器默认监听 `htt
 项目已配置使用 GitHub Container Registry 镜像 [`ghcr.io/hyaeve/lumic:latest`](https://ghcr.io/hyaeve/lumic)。Compose 中宿主机端口 `15500` 映射到容器端口 `5500`，因此访问地址为 `http://localhost:15500`；容器内 API 和前端仍由 `5500` 提供服务。
 
 ```bash
-mkdir data
+mkdir data flow
 docker compose pull
 docker compose up -d
 docker compose logs -f lumic
 ```
 
-数据目录挂载为 `./data:/data`：左侧是运行 `docker compose` 的目录下的宿主机 `data` 文件夹，右侧是容器内路径。登录配置、B 站加密凭证、B 站订阅和本地加密密钥均写入 `/data`；后续数据库与任务游标也应放在该目录。
+Compose 使用两个职责不同的持久化挂载：
+
+- `./data:/data`：保存应用基础设置、加密密钥、平台账号凭证、订阅配置、数据库、同步游标和任务状态。这是应用内部状态目录，不保存采集到的正文与媒体。
+- `./flow:/flow`：保存平台采集的动态、图文、专栏正文和媒体文件。可通过 `LUMIC_FLOW_ROOT` 修改容器内根路径，Compose 默认固定为 `/flow`。
+
+`/flow` 按“平台 → 作者”组织：
+
+```text
+/flow/
+├─ bilibili/
+│  └─ Comelee/
+│     ├─ source.json
+│     └─ （后续同步的动态图文、专栏及媒体）
+├─ pixiv/
+│  └─ 画师名称/
+│     └─ （作品元数据与图片）
+└─ weibo/
+   └─ 博主名称/
+      └─ （微博正文与媒体）
+```
+
+服务启动时会自动创建 `/flow/bilibili`、`/flow/pixiv` 和 `/flow/weibo`。新增 B 站 UP 主订阅时，会立即创建对应的作者目录，并写入不含账号凭证的 `source.json`。已有 B 站订阅会在升级后的首次启动时自动补建目录。作者名称中的路径分隔符、Windows 非法字符及保留设备名会被安全替换，避免目录穿越和跨平台挂载失败。
 
 本地构建镜像时使用：
 

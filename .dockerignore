@@ -6,6 +6,7 @@ frontend/dist
 backend/*.exe
 backend/package-lock.json
 data
+flow
 *.log
 .env
 .env.*

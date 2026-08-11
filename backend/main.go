@@ -58,6 +58,7 @@ type SourceConfig struct {
 	Schedule     string    `json:"schedule"`
 	ContentTypes []string  `json:"contentTypes,omitempty"`
 	LastSyncedAt time.Time `json:"lastSyncedAt"`
+	StoragePath  string    `json:"storagePath,omitempty"`
 }
 
 type BilibiliCredentials struct {
@@ -97,11 +98,12 @@ type BilibiliQRSession struct {
 }
 
 type WeiboQRSession struct {
-	ID        string    `json:"id"`
-	QRID      string    `json:"-"`
-	Image     string    `json:"image,omitempty"`
-	CreatedAt time.Time `json:"createdAt"`
-	ExpiresAt time.Time `json:"expiresAt"`
+	ID         string    `json:"id"`
+	QRID       string    `json:"-"`
+	Image      string    `json:"image,omitempty"`
+	CreatedAt  time.Time `json:"createdAt"`
+	ExpiresAt  time.Time `json:"expiresAt"`
+	Exchanging bool      `json:"-"`
 }
 
 type BilibiliConfig struct {
@@ -155,6 +157,7 @@ type AuthConfig struct {
 var authFile = "/data/auth.json"
 var bilibiliFile = "/data/bilibili.enc"
 var secretFile = "/data/secret.key"
+var flowRoot = "/flow"
 
 func loadAuthConfig() *AuthConfig {
 	if value := os.Getenv("LUMIC_AUTH_FILE"); value != "" {
@@ -263,6 +266,82 @@ func loadBilibiliStore() (*BilibiliStore, error) {
 		return nil, err
 	}
 	return store, nil
+}
+
+func initializeFlowStorage() error {
+	if value := strings.TrimSpace(os.Getenv("LUMIC_FLOW_ROOT")); value != "" {
+		flowRoot = value
+	}
+	for _, source := range []Source{SourceBilibili, SourcePixiv, SourceWeibo} {
+		if err := os.MkdirAll(filepath.Join(flowRoot, string(source)), 0755); err != nil {
+			return fmt.Errorf("create %s flow directory: %w", source, err)
+		}
+	}
+	return nil
+}
+
+func safeFlowDirectoryName(name string) string {
+	name = strings.TrimSpace(name)
+	var builder strings.Builder
+	for _, char := range name {
+		if char < 32 || strings.ContainsRune(`<>:"/\\|?*`, char) {
+			builder.WriteRune('_')
+		} else {
+			builder.WriteRune(char)
+		}
+	}
+	name = strings.Trim(builder.String(), " .")
+	if name == "" || name == "." || name == ".." {
+		name = "unnamed"
+	}
+	reserved := map[string]bool{"CON": true, "PRN": true, "AUX": true, "NUL": true, "COM1": true, "COM2": true, "COM3": true, "COM4": true, "COM5": true, "COM6": true, "COM7": true, "COM8": true, "COM9": true, "LPT1": true, "LPT2": true, "LPT3": true, "LPT4": true, "LPT5": true, "LPT6": true, "LPT7": true, "LPT8": true, "LPT9": true}
+	if reserved[strings.ToUpper(name)] {
+		name = "_" + name
+	}
+	return name
+}
+
+func sourceStoragePath(source Source, name string) string {
+	return filepath.Join(flowRoot, string(source), safeFlowDirectoryName(name))
+}
+
+func prepareSourceStorage(feed SourceConfig) (SourceConfig, error) {
+	feed.StoragePath = sourceStoragePath(feed.Source, feed.Name)
+	if err := os.MkdirAll(feed.StoragePath, 0755); err != nil {
+		return feed, err
+	}
+	metadata, err := json.MarshalIndent(struct {
+		Source       Source   `json:"source"`
+		ID           string   `json:"id"`
+		Name         string   `json:"name"`
+		Handle       string   `json:"handle"`
+		ContentTypes []string `json:"contentTypes,omitempty"`
+	}{feed.Source, feed.ID, feed.Name, feed.Handle, feed.ContentTypes}, "", "  ")
+	if err != nil {
+		return feed, err
+	}
+	temporary := filepath.Join(feed.StoragePath, ".source.json.tmp")
+	if err := os.WriteFile(temporary, metadata, 0644); err != nil {
+		return feed, err
+	}
+	if err := os.Rename(temporary, filepath.Join(feed.StoragePath, "source.json")); err != nil {
+		_ = os.Remove(temporary)
+		return feed, err
+	}
+	return feed, nil
+}
+
+func (b *BilibiliStore) reconcileFlowStorage() error {
+	b.Lock()
+	defer b.Unlock()
+	for index, feed := range b.config.Subscriptions {
+		prepared, err := prepareSourceStorage(feed)
+		if err != nil {
+			return fmt.Errorf("prepare flow storage for %s: %w", feed.Name, err)
+		}
+		b.config.Subscriptions[index] = prepared
+	}
+	return nil
 }
 
 func (b *BilibiliStore) save() error {
@@ -797,6 +876,12 @@ func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Requ
 		input.Schedule = "每 6 小时"
 	}
 	feed := SourceConfig{ID: fmt.Sprintf("bili-%d", input.UserID), Source: SourceBilibili, Name: strings.TrimSpace(input.Name), Handle: fmt.Sprintf("UID %d", input.UserID), Enabled: true, IncludePast: input.IncludePast, Schedule: input.Schedule, ContentTypes: []string{"DRAW", "ARTICLE"}}
+	var storageErr error
+	feed, storageErr = prepareSourceStorage(feed)
+	if storageErr != nil {
+		writeAPIError(w, http.StatusInternalServerError, "无法创建 UP 主内容目录")
+		return
+	}
 	b.Lock()
 	for _, existing := range b.config.Subscriptions {
 		if existing.ID == feed.ID {
@@ -1241,7 +1326,13 @@ func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusGone, "二维码已过期")
 			return
 		}
-		checkURL := "https://passport.weibo.com/sso/v2/qrcode/check?entry=miniblog&qrid=" + url.QueryEscape(session.QRID)
+		checkQuery := url.Values{
+			"entry": {"weibo"},
+			"qrid":  {session.QRID},
+			"tip":   {"1"},
+			"_":     {strconv.FormatInt(time.Now().UnixMilli(), 10)},
+		}
+		checkURL := "https://passport.weibo.com/sso/v2/qrcode/check?" + checkQuery.Encode()
 		request, _ := http.NewRequest(http.MethodGet, checkURL, nil)
 		request.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36")
 		request.Header.Set("Accept", "application/json, text/plain, */*")
@@ -1267,12 +1358,33 @@ func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, map[string]any{"status": "waiting", "message": payload.Msg})
 			return
 		}
+		b.Lock()
+		current, exists := b.weiboQR[id]
+		if !exists || current.Exchanging {
+			b.Unlock()
+			writeJSON(w, map[string]any{"status": "confirming", "message": "正在确认微博登录"})
+			return
+		}
+		current.Exchanging = true
+		b.weiboQR[id] = current
+		b.Unlock()
+		defer func() {
+			b.Lock()
+			if active, exists := b.weiboQR[id]; exists {
+				active.Exchanging = false
+				b.weiboQR[id] = active
+			}
+			b.Unlock()
+		}()
 		loginQuery := url.Values{
-			"entry":       {"miniblog"},
+			"entry":       {"weibo"},
 			"returntype":  {"TEXT"},
 			"crossdomain": {"1"},
 			"cdult":       {"3"},
 			"domain":      {"weibo.com"},
+			"service":     {"miniblog"},
+			"gateway":     {"1"},
+			"useticket":   {"1"},
 			"alt":         {payload.Data.Alt},
 			"savestate":   {"30"},
 			"client":      {"ssologin.js(v1.4.19)"},
@@ -1361,7 +1473,12 @@ func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	request, _ := http.NewRequest(http.MethodGet, "https://passport.weibo.com/sso/v2/qrcode/image?entry=miniblog&size=180", nil)
+	imageQuery := url.Values{
+		"entry": {"weibo"},
+		"size":  {"180"},
+		"_":     {strconv.FormatInt(time.Now().UnixMilli(), 10)},
+	}
+	request, _ := http.NewRequest(http.MethodGet, "https://passport.weibo.com/sso/v2/qrcode/image?"+imageQuery.Encode(), nil)
 	request.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36")
 	request.Header.Set("Accept", "application/json, text/plain, */*")
 	request.Header.Set("Referer", "https://weibo.com/")
@@ -1414,11 +1531,20 @@ func writeJSON(w http.ResponseWriter, value any) {
 }
 
 func main() {
+	if err := initializeFlowStorage(); err != nil {
+		log.Fatal("unable to initialize flow storage: ", err)
+	}
 	store := demoStore()
 	auth := loadAuthConfig()
 	bilibili, err := loadBilibiliStore()
 	if err != nil {
 		log.Fatal("unable to load Bilibili configuration: ", err)
+	}
+	if err := bilibili.reconcileFlowStorage(); err != nil {
+		log.Fatal("unable to prepare source flow storage: ", err)
+	}
+	if err := bilibili.save(); err != nil {
+		log.Fatal("unable to persist source storage paths: ", err)
 	}
 	sessions := &SessionStore{tokens: make(map[string]time.Time)}
 	mux := http.NewServeMux()

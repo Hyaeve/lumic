@@ -5,9 +5,13 @@ services:
     ports:
       - "15500:5500"
     volumes:
+      # 配置、密钥、账号凭证、数据库和同步游标。
       - ./data:/data
+      # 平台动态、图文、专栏正文及媒体文件。
+      - ./flow:/flow
     environment:
       TZ: Asia/Shanghai
+      LUMIC_FLOW_ROOT: /flow
       # Pixiv OAuth 应用凭证；使用 refresh_token 接入时必须配置。
       LUMIC_PIXIV_CLIENT_ID: ${LUMIC_PIXIV_CLIENT_ID:-}
       LUMIC_PIXIV_CLIENT_SECRET: ${LUMIC_PIXIV_CLIENT_SECRET:-}
