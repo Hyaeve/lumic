@@ -107,11 +107,12 @@ type WeiboQRSession struct {
 }
 
 type BilibiliConfig struct {
-	Credentials   BilibiliCredentials `json:"credentials"`
-	Pixiv         PixivCredentials    `json:"pixiv"`
-	Weibo         WeiboCredentials    `json:"weibo"`
-	Subscriptions []SourceConfig      `json:"subscriptions"`
-	ProxyURL      string              `json:"proxyUrl,omitempty"`
+	Credentials        BilibiliCredentials `json:"credentials"`
+	Pixiv              PixivCredentials    `json:"pixiv"`
+	Weibo              WeiboCredentials    `json:"weibo"`
+	Subscriptions      []SourceConfig      `json:"subscriptions"`
+	WeiboSubscriptions []SourceConfig      `json:"weiboSubscriptions"`
+	ProxyURL           string              `json:"proxyUrl,omitempty"`
 }
 
 type ProjectSettingsView struct {
@@ -137,10 +138,24 @@ type BilibiliUser struct {
 	Description string `json:"description"`
 }
 
+type WeiboUser struct {
+	UserID      string `json:"userId"`
+	Name        string `json:"name"`
+	Avatar      string `json:"avatar"`
+	Fans        int64  `json:"fans"`
+	Description string `json:"description"`
+}
+
 type Store struct {
 	sync.RWMutex
 	posts []Post
 	feeds []SourceConfig
+	file  string
+}
+
+type ContentData struct {
+	Posts []Post         `json:"posts"`
+	Feeds []SourceConfig `json:"feeds"`
 }
 
 type SessionStore struct {
@@ -155,6 +170,7 @@ type AuthConfig struct {
 }
 
 var authFile = "/data/auth.json"
+var contentFile = "/data/content.json"
 var bilibiliFile = "/data/bilibili.enc"
 var secretFile = "/data/secret.key"
 var flowRoot = "/flow"
@@ -257,13 +273,19 @@ func loadBilibiliStore() (*BilibiliStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	store := &BilibiliStore{key: key, config: BilibiliConfig{Subscriptions: []SourceConfig{}}, bilibiliQR: make(map[string]BilibiliQRSession), bilibiliClients: make(map[string]*http.Client), weiboQR: make(map[string]WeiboQRSession), weiboClients: make(map[string]*http.Client)}
+	store := &BilibiliStore{key: key, config: BilibiliConfig{Subscriptions: []SourceConfig{}, WeiboSubscriptions: []SourceConfig{}}, bilibiliQR: make(map[string]BilibiliQRSession), bilibiliClients: make(map[string]*http.Client), weiboQR: make(map[string]WeiboQRSession), weiboClients: make(map[string]*http.Client)}
 	if data, err := os.ReadFile(bilibiliFile); err == nil {
 		if err := decryptJSON(key, data, &store.config); err != nil {
 			return nil, fmt.Errorf("decrypt bilibili configuration: %w", err)
 		}
 	} else if !os.IsNotExist(err) {
 		return nil, err
+	}
+	if store.config.Subscriptions == nil {
+		store.config.Subscriptions = []SourceConfig{}
+	}
+	if store.config.WeiboSubscriptions == nil {
+		store.config.WeiboSubscriptions = []SourceConfig{}
 	}
 	return store, nil
 }
@@ -344,6 +366,41 @@ func (b *BilibiliStore) reconcileFlowStorage() error {
 	return nil
 }
 
+func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".lumic-*.tmp")
+	if err != nil {
+		return err
+	}
+	temporaryName := temporary.Name()
+	defer os.Remove(temporaryName)
+	if err := temporary.Chmod(mode); err != nil {
+		temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(data); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(temporaryName, path); err == nil {
+		return nil
+	}
+	// Windows 不允许 Rename 覆盖已有文件；数据已完整同步到临时文件后再替换。
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return os.Rename(temporaryName, path)
+}
+
 func (b *BilibiliStore) save() error {
 	b.RLock()
 	data, err := encryptJSON(b.key, b.config)
@@ -351,10 +408,7 @@ func (b *BilibiliStore) save() error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(bilibiliFile), 0700); err != nil {
-		return err
-	}
-	return os.WriteFile(bilibiliFile, data, 0600)
+	return atomicWriteFile(bilibiliFile, data, 0600)
 }
 
 func (s *SessionStore) create() (string, error) {
@@ -507,6 +561,53 @@ func demoStore() *Store {
 	}
 }
 
+func loadStore() (*Store, error) {
+	if value := strings.TrimSpace(os.Getenv("LUMIC_CONTENT_FILE")); value != "" {
+		contentFile = value
+	}
+	return loadStoreFile(contentFile)
+}
+
+func loadStoreFile(path string) (*Store, error) {
+	data, err := os.ReadFile(path)
+	if err == nil {
+		var content ContentData
+		if err := json.Unmarshal(data, &content); err != nil {
+			return nil, fmt.Errorf("decode content data: %w", err)
+		}
+		if content.Posts == nil {
+			content.Posts = []Post{}
+		}
+		if content.Feeds == nil {
+			content.Feeds = []SourceConfig{}
+		}
+		return &Store{posts: content.Posts, feeds: content.Feeds, file: path}, nil
+	}
+	if !os.IsNotExist(err) {
+		return nil, err
+	}
+	store := demoStore()
+	store.file = path
+	store.Lock()
+	err = store.saveLocked()
+	store.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return store, nil
+}
+
+func (s *Store) saveLocked() error {
+	if s.file == "" {
+		return nil
+	}
+	data, err := json.Marshal(ContentData{Posts: s.posts, Feeds: s.feeds})
+	if err != nil {
+		return err
+	}
+	return atomicWriteFile(s.file, data, 0600)
+}
+
 func (s *Store) postsHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodDelete {
 		id := strings.TrimSpace(r.URL.Query().Get("id"))
@@ -517,9 +618,16 @@ func (s *Store) postsHandler(w http.ResponseWriter, r *http.Request) {
 		s.Lock()
 		for index, post := range s.posts {
 			if post.ID == id {
-				s.posts = append(s.posts[:index], s.posts[index+1:]...)
+				previous := s.posts
+				s.posts = append(append([]Post(nil), s.posts[:index]...), s.posts[index+1:]...)
+				if err := s.saveLocked(); err != nil {
+					s.posts = previous
+					s.Unlock()
+					writeAPIError(w, http.StatusInternalServerError, "无法持久化动态删除")
+					return
+				}
 				s.Unlock()
-				writeJSON(w, map[string]string{"status": "deleted", "message": "动态已删除，已下载的媒体文件予以保留"})
+				writeJSON(w, map[string]string{"status": "deleted", "message": "动态已永久删除，已下载的媒体文件予以保留"})
 				return
 			}
 		}
@@ -553,9 +661,16 @@ func (s *Store) feedsHandler(w http.ResponseWriter, r *http.Request) {
 		s.Lock()
 		for index, feed := range s.feeds {
 			if feed.ID == id {
-				s.feeds = append(s.feeds[:index], s.feeds[index+1:]...)
+				previous := s.feeds
+				s.feeds = append(append([]SourceConfig(nil), s.feeds[:index]...), s.feeds[index+1:]...)
+				if err := s.saveLocked(); err != nil {
+					s.feeds = previous
+					s.Unlock()
+					writeAPIError(w, http.StatusInternalServerError, "无法持久化订阅删除")
+					return
+				}
 				s.Unlock()
-				writeJSON(w, map[string]string{"status": "deleted", "message": "订阅已删除，已采集文件予以保留"})
+				writeJSON(w, map[string]string{"status": "deleted", "message": "订阅已永久删除，已采集文件予以保留"})
 				return
 			}
 		}
@@ -568,8 +683,15 @@ func (s *Store) feedsHandler(w http.ResponseWriter, r *http.Request) {
 		s.Lock()
 		for index := range s.feeds {
 			if s.feeds[index].ID == id {
+				previous := s.feeds[index].LastSyncedAt
 				s.feeds[index].LastSyncedAt = time.Now()
 				feed := s.feeds[index]
+				if err := s.saveLocked(); err != nil {
+					s.feeds[index].LastSyncedAt = previous
+					s.Unlock()
+					writeAPIError(w, http.StatusInternalServerError, "无法保存同步状态")
+					return
+				}
 				s.Unlock()
 				writeJSON(w, map[string]any{"status": "started", "message": "来源拉取任务已加入队列", "source": feed})
 				return
@@ -589,6 +711,12 @@ func (s *Store) feedsHandler(w http.ResponseWriter, r *http.Request) {
 		feed.Enabled = true
 		s.Lock()
 		s.feeds = append(s.feeds, feed)
+		if err := s.saveLocked(); err != nil {
+			s.feeds = s.feeds[:len(s.feeds)-1]
+			s.Unlock()
+			writeAPIError(w, http.StatusInternalServerError, "无法保存新来源")
+			return
+		}
 		s.Unlock()
 		writeJSON(w, feed)
 		return
@@ -867,7 +995,7 @@ func (b *BilibiliStore) searchHandler(w http.ResponseWriter, r *http.Request) {
 func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		b.RLock()
-		result := append([]SourceConfig(nil), b.config.Subscriptions...)
+		result := append([]SourceConfig{}, b.config.Subscriptions...)
 		b.RUnlock()
 		writeJSON(w, result)
 		return
@@ -877,13 +1005,17 @@ func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Requ
 		b.Lock()
 		for index, feed := range b.config.Subscriptions {
 			if feed.ID == id {
-				b.config.Subscriptions = append(b.config.Subscriptions[:index], b.config.Subscriptions[index+1:]...)
+				previous := b.config.Subscriptions
+				b.config.Subscriptions = append(append([]SourceConfig(nil), b.config.Subscriptions[:index]...), b.config.Subscriptions[index+1:]...)
 				b.Unlock()
 				if err := b.save(); err != nil {
-					writeAPIError(w, http.StatusInternalServerError, "无法保存订阅变更")
+					b.Lock()
+					b.config.Subscriptions = previous
+					b.Unlock()
+					writeAPIError(w, http.StatusInternalServerError, "无法持久化订阅删除")
 					return
 				}
-				writeJSON(w, map[string]string{"status": "deleted", "message": "订阅已删除，内容目录和已采集文件予以保留"})
+				writeJSON(w, map[string]string{"status": "deleted", "message": "订阅已永久删除，内容目录和已采集文件予以保留"})
 				return
 			}
 		}
@@ -1354,6 +1486,222 @@ func weiboClient(proxyURL string) (*http.Client, error) {
 	return client, nil
 }
 
+func weiboRequest(endpoint string, credentials WeiboCredentials, proxyURL string, target any) error {
+	request, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Accept", "application/json, text/plain, */*")
+	request.Header.Set("Cookie", credentials.Cookie)
+	request.Header.Set("Referer", "https://m.weibo.cn/")
+	request.Header.Set("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148")
+	client, err := externalHTTPClient(proxyURL)
+	if err != nil {
+		return err
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("weibo HTTP %d", response.StatusCode)
+	}
+	return json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(target)
+}
+
+func (b *BilibiliStore) weiboSearchHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	keyword := strings.TrimSpace(r.URL.Query().Get("keyword"))
+	if len([]rune(keyword)) < 1 || len([]rune(keyword)) > 40 {
+		writeAPIError(w, http.StatusBadRequest, "搜索关键词长度应为 1 到 40 个字符")
+		return
+	}
+	b.RLock()
+	credentials, proxyURL := b.config.Weibo, b.config.ProxyURL
+	b.RUnlock()
+	if credentials.Cookie == "" {
+		writeAPIError(w, http.StatusPreconditionFailed, "请先连接微博账号")
+		return
+	}
+	endpoint := "https://m.weibo.cn/api/container/getIndex?containerid=" + url.QueryEscape("100103type=3&q="+keyword) + "&page_type=searchall"
+	var payload struct {
+		OK   int `json:"ok"`
+		Data struct {
+			Cards []struct {
+				CardGroup []struct {
+					User struct {
+						ID          json.RawMessage `json:"id"`
+						Name        string          `json:"screen_name"`
+						Avatar      string          `json:"profile_image_url"`
+						Fans        int64           `json:"followers_count"`
+						Description string          `json:"description"`
+					} `json:"user"`
+				} `json:"card_group"`
+			} `json:"cards"`
+		} `json:"data"`
+	}
+	if err := weiboRequest(endpoint, credentials, proxyURL, &payload); err != nil || payload.OK != 1 {
+		writeAPIError(w, http.StatusBadGateway, "微博博主搜索暂时不可用")
+		return
+	}
+	users := make([]WeiboUser, 0)
+	seen := make(map[string]bool)
+	for _, card := range payload.Data.Cards {
+		for _, item := range card.CardGroup {
+			id := jsonScalarString(item.User.ID)
+			if id == "" || strings.TrimSpace(item.User.Name) == "" || seen[id] {
+				continue
+			}
+			seen[id] = true
+			users = append(users, WeiboUser{UserID: id, Name: strings.TrimSpace(item.User.Name), Avatar: item.User.Avatar, Fans: item.User.Fans, Description: item.User.Description})
+		}
+	}
+	writeJSON(w, users)
+}
+
+func (b *BilibiliStore) weiboSubscriptionsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		b.RLock()
+		result := append([]SourceConfig{}, b.config.WeiboSubscriptions...)
+		b.RUnlock()
+		writeJSON(w, result)
+		return
+	}
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	if r.Method == http.MethodDelete {
+		b.Lock()
+		for index, feed := range b.config.WeiboSubscriptions {
+			if feed.ID == id {
+				previous := b.config.WeiboSubscriptions
+				b.config.WeiboSubscriptions = append(append([]SourceConfig(nil), previous[:index]...), previous[index+1:]...)
+				b.Unlock()
+				if err := b.save(); err != nil {
+					b.Lock()
+					b.config.WeiboSubscriptions = previous
+					b.Unlock()
+					writeAPIError(w, http.StatusInternalServerError, "无法持久化微博订阅删除")
+					return
+				}
+				writeJSON(w, map[string]string{"status": "deleted", "message": "微博博主订阅已永久删除，已采集文件予以保留"})
+				return
+			}
+		}
+		b.Unlock()
+		writeAPIError(w, http.StatusNotFound, "微博订阅不存在")
+		return
+	}
+	if r.Method == http.MethodPost && r.URL.Query().Get("action") == "sync" {
+		b.Lock()
+		for index := range b.config.WeiboSubscriptions {
+			if b.config.WeiboSubscriptions[index].ID == id {
+				previous := b.config.WeiboSubscriptions[index].LastSyncedAt
+				b.config.WeiboSubscriptions[index].LastSyncedAt = time.Now()
+				feed := b.config.WeiboSubscriptions[index]
+				b.Unlock()
+				if err := b.save(); err != nil {
+					b.Lock()
+					b.config.WeiboSubscriptions[index].LastSyncedAt = previous
+					b.Unlock()
+					writeAPIError(w, http.StatusInternalServerError, "无法保存同步状态")
+					return
+				}
+				writeJSON(w, map[string]any{"status": "started", "message": "微博博主拉取任务已加入队列", "source": feed})
+				return
+			}
+		}
+		b.Unlock()
+		writeAPIError(w, http.StatusNotFound, "微博订阅不存在")
+		return
+	}
+	if r.Method == http.MethodPut {
+		var input SourceConfig
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&input) != nil || !strings.HasPrefix(input.ID, "weibo-") {
+			writeAPIError(w, http.StatusBadRequest, "来源设置无效")
+			return
+		}
+		allowedSchedules := map[string]bool{"每 1 小时": true, "每 6 小时": true, "每 12 小时": true, "每天 20:00": true}
+		if !allowedSchedules[input.Schedule] {
+			writeAPIError(w, http.StatusBadRequest, "执行计划无效")
+			return
+		}
+		b.Lock()
+		found := false
+		for index := range b.config.WeiboSubscriptions {
+			if b.config.WeiboSubscriptions[index].ID == input.ID {
+				b.config.WeiboSubscriptions[index].Enabled = input.Enabled
+				b.config.WeiboSubscriptions[index].IncludePast = input.IncludePast
+				b.config.WeiboSubscriptions[index].Schedule = input.Schedule
+				input = b.config.WeiboSubscriptions[index]
+				found = true
+				break
+			}
+		}
+		b.Unlock()
+		if !found {
+			writeAPIError(w, http.StatusNotFound, "微博来源不存在")
+			return
+		}
+		if err := b.save(); err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "无法保存微博来源设置")
+			return
+		}
+		writeJSON(w, input)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var input struct {
+		UserID      string `json:"userId"`
+		Name        string `json:"name"`
+		IncludePast bool   `json:"includePast"`
+		Schedule    string `json:"schedule"`
+	}
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&input) != nil || strings.TrimSpace(input.UserID) == "" || strings.TrimSpace(input.Name) == "" {
+		writeAPIError(w, http.StatusBadRequest, "微博订阅信息无效")
+		return
+	}
+	b.RLock()
+	configured := b.config.Weibo.Cookie != ""
+	b.RUnlock()
+	if !configured {
+		writeAPIError(w, http.StatusPreconditionFailed, "请先连接微博账号")
+		return
+	}
+	if input.Schedule == "" {
+		input.Schedule = "每 6 小时"
+	}
+	feed := SourceConfig{ID: "weibo-" + strings.TrimSpace(input.UserID), Source: SourceWeibo, Name: strings.TrimSpace(input.Name), Handle: "UID " + strings.TrimSpace(input.UserID), Enabled: true, IncludePast: input.IncludePast, Schedule: input.Schedule}
+	var err error
+	if feed, err = prepareSourceStorage(feed); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "无法创建微博博主内容目录")
+		return
+	}
+	b.Lock()
+	for _, existing := range b.config.WeiboSubscriptions {
+		if existing.ID == feed.ID {
+			b.Unlock()
+			writeAPIError(w, http.StatusConflict, "已经订阅该微博博主")
+			return
+		}
+	}
+	b.config.WeiboSubscriptions = append(b.config.WeiboSubscriptions, feed)
+	b.Unlock()
+	if err := b.save(); err != nil {
+		b.Lock()
+		b.config.WeiboSubscriptions = b.config.WeiboSubscriptions[:len(b.config.WeiboSubscriptions)-1]
+		b.Unlock()
+		writeAPIError(w, http.StatusInternalServerError, "无法保存微博订阅")
+		return
+	}
+	writeJSON(w, feed)
+}
+
 func jsonScalarString(raw json.RawMessage) string {
 	value := strings.TrimSpace(string(raw))
 	if value == "" || value == "null" {
@@ -1392,6 +1740,17 @@ func responseSummary(body []byte) string {
 		value = value[:240]
 	}
 	return value
+}
+
+func (b *BilibiliStore) weiboAccountHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	b.RLock()
+	credentials := b.config.Weibo
+	b.RUnlock()
+	writeJSON(w, map[string]any{"configured": credentials.Cookie != "", "userId": credentials.UserID, "userName": credentials.UserName})
 }
 
 func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
@@ -1641,7 +2000,10 @@ func main() {
 	if err := initializeFlowStorage(); err != nil {
 		log.Fatal("unable to initialize flow storage: ", err)
 	}
-	store := demoStore()
+	store, err := loadStore()
+	if err != nil {
+		log.Fatal("unable to load content data: ", err)
+	}
 	auth := loadAuthConfig()
 	bilibili, err := loadBilibiliStore()
 	if err != nil {
@@ -1663,7 +2025,10 @@ func main() {
 	mux.HandleFunc("/api/bilibili/account", bilibili.accountHandler)
 	mux.HandleFunc("/api/bilibili/qr", bilibili.bilibiliQRHandler)
 	mux.HandleFunc("/api/pixiv/account", bilibili.pixivHandler)
+	mux.HandleFunc("/api/weibo/account", bilibili.weiboAccountHandler)
 	mux.HandleFunc("/api/weibo/qr", bilibili.weiboQRHandler)
+	mux.HandleFunc("/api/weibo/search", bilibili.weiboSearchHandler)
+	mux.HandleFunc("/api/weibo/subscriptions", bilibili.weiboSubscriptionsHandler)
 	mux.HandleFunc("/api/bilibili/search", bilibili.searchHandler)
 	mux.HandleFunc("/api/bilibili/subscriptions", bilibili.subscriptionsHandler)
 	mux.HandleFunc("/api/project/settings", bilibili.projectSettingsHandler)
