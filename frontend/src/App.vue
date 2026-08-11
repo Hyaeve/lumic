@@ -14,6 +14,7 @@ const proxyStatus = ref({ proxyEnabled: false, proxyUrl: '' })
 const proxyMessage = ref('')
 const selectedFeed = ref(null)
 const showFeedSettings = ref(false)
+const selectedPlatform = ref(null)
 const loginBusy = ref(false)
 const credentials = ref({ username: '', password: '' })
 const activeNav = ref('all')
@@ -60,6 +61,11 @@ const sourceMeta = {
 }
 const filteredPosts = computed(() => activeSource.value === 'all' ? posts.value : posts.value.filter(p => p.source === activeSource.value))
 const sourceCount = computed(() => new Set(posts.value.map(p => p.source)).size)
+const platformCards = computed(() => [
+  { key: 'bilibili', label: '哔哩哔哩', short: '哔', icon: 'bl', configured: biliAccount.value.configured, account: biliAccount.value.configured ? `UID ${biliAccount.value.userId}` : '尚未连接账号', path: '/flow/bilibili', description: 'UP 主图文动态与专栏', feeds: feeds.value.filter(feed => feed.source === 'bilibili') },
+  { key: 'pixiv', label: 'Pixiv', short: 'P', icon: 'px', configured: pixivAccount.value.configured, account: pixivAccount.value.configured ? (pixivAccount.value.userName || `UID ${pixivAccount.value.userId}`) : '尚未连接账号', path: '/flow/pixiv', description: '画师作品与插画媒体', feeds: feeds.value.filter(feed => feed.source === 'pixiv') },
+  { key: 'weibo', label: '微博', short: '微', icon: 'wb', configured: weiboAccount.value.configured, account: weiboAccount.value.configured ? (weiboAccount.value.userName || `UID ${weiboAccount.value.userId}`) : '尚未连接账号', path: '/flow/weibo', description: '博主动态与图文媒体', feeds: feeds.value.filter(feed => feed.source === 'weibo') }
+])
 
 async function responseError(response, fallback) {
   try { return (await response.json()).error || fallback } catch { return fallback }
@@ -213,6 +219,16 @@ async function subscribeBilibili(user) {
     feeds.value.push(await response.json())
   } catch (error) { biliError.value = error.message } finally { biliBusy.value = false }
 }
+function openPlatformSettings(platform) {
+  selectedPlatform.value = platform
+}
+function managePlatformCredentials(platformKey) {
+  selectedPlatform.value = null
+  settingsTab.value = 'platforms'
+  settingsError.value = ''
+  if (platformKey === 'bilibili' && !biliAccount.value.configured) startBilibiliQR()
+  if (platformKey === 'weibo' && !weiboAccount.value.configured) startWeiboQR()
+}
 function openFeedSettings(feed) {
   selectedFeed.value = { ...feed, contentTypes: [...(feed.contentTypes || [])] }
   showFeedSettings.value = true
@@ -226,6 +242,10 @@ async function saveFeedSettings() {
       if (!response.ok) throw new Error(await responseError(response, '来源设置保存失败'))
       const saved = await response.json(); const index = feeds.value.findIndex(feed => feed.id === saved.id)
       if (index >= 0) feeds.value[index] = saved
+      if (selectedPlatform.value) {
+        const platformFeedIndex = selectedPlatform.value.feeds.findIndex(feed => feed.id === saved.id)
+        if (platformFeedIndex >= 0) selectedPlatform.value.feeds[platformFeedIndex] = saved
+      }
     } else {
       const index = feeds.value.findIndex(feed => feed.id === selectedFeed.value.id)
       if (index >= 0) feeds.value[index] = { ...selectedFeed.value }
@@ -449,14 +469,23 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling() })
           <details class="manual-credential"><summary>高级：手动导入 Cookie</summary><form class="settings-form bili-credentials" @submit.prevent="saveBilibiliAccount" autocomplete="off"><label>完整 Cookie</label><textarea v-model="biliCredentials.cookie" rows="4" placeholder="仅在扫码不可用时使用"></textarea><label>SESSDATA</label><input v-model="biliCredentials.SESSDATA" type="password"><label>bili_jct</label><input v-model="biliCredentials.bili_jct" type="password"><label>buvid3</label><input v-model="biliCredentials.buvid3" type="password"><label>DedeUserID</label><input v-model="biliCredentials.DedeUserID" inputmode="numeric"><button class="login-button" :disabled="biliBusy">验证并保存手动凭证</button></form></details>
           <p v-if="biliError" class="login-error bili-error">{{ biliError }}</p>
         </section>
-        <section v-if="settingsTab === 'sources'" class="settings-pane">
-          <h3>来源管理</h3><p>右键来源卡片打开详细设置；触屏设备可点击“详细设置”。</p>
-          <div class="source-cards"><article v-for="feed in feeds" :key="feed.id" class="source-card" @contextmenu.prevent="openFeedSettings(feed)"><i :class="['source-icon', sourceMeta[feed.source]?.icon]">{{ feed.source === 'weibo' ? '微' : feed.source === 'pixiv' ? 'P' : '哔' }}</i><div><strong>{{ feed.name }}</strong><span>{{ feed.handle }} · {{ feed.schedule }}</span><small>{{ feed.enabled ? '已启用' : '已停用' }}</small></div><button @click="openFeedSettings(feed)">详细设置</button></article><div v-if="!feeds.length" class="bili-placeholder">还没有已配置的来源</div></div>
+        <section v-if="settingsTab === 'sources'" class="settings-pane source-platform-pane">
+          <div class="pane-heading"><div><h3>来源管理</h3><p>一个平台一个来源卡片。右键卡片打开详细设置，触屏设备可点击按钮。</p></div><span>3 个平台</span></div>
+          <div class="platform-source-grid">
+            <article v-for="platform in platformCards" :key="platform.key" :class="['platform-source-card', platform.key]" @contextmenu.prevent="openPlatformSettings(platform)">
+              <div class="platform-card-head"><i :class="['source-icon', platform.icon]">{{ platform.short }}</i><span :class="['connection-dot', { online: platform.configured }]">{{ platform.configured ? '已连接' : '未连接' }}</span></div>
+              <h4>{{ platform.label }}</h4><p>{{ platform.description }}</p>
+              <dl><div><dt>账号</dt><dd>{{ platform.account }}</dd></div><div><dt>已配置来源</dt><dd>{{ platform.feeds.length }} 个</dd></div><div><dt>内容目录</dt><dd>{{ platform.path }}</dd></div></dl>
+              <button @click="openPlatformSettings(platform)">详细设置 <span>→</span></button>
+            </article>
+          </div>
+          <p class="source-context-tip">提示：也可以在任意平台卡片上点击鼠标右键。</p>
         </section>
         <section v-if="settingsTab === 'security'" class="settings-pane"><h3>登录安全</h3><p>修改后请使用新的账号和密码登录。密码至少 8 位。</p><form class="settings-form" @submit.prevent="saveSettings" autocomplete="off"><label>新账号</label><input v-model="settingsForm.username" required minlength="3" autocomplete="off"><label>当前密码</label><input v-model="settingsForm.currentPassword" type="password" required autocomplete="current-password"><label>新密码</label><input v-model="settingsForm.newPassword" type="password" required minlength="8" autocomplete="new-password"><button class="login-button" type="submit" :disabled="settingsBusy">{{ settingsBusy ? '保存中…' : '保存设置' }}</button></form></section>
         <p v-if="settingsError" class="login-error settings-page-error">{{ settingsError }}</p>
       </div>
     </div>
-    <div v-if="showFeedSettings && selectedFeed" class="modal-backdrop" @click.self="showFeedSettings = false"><div class="modal feed-settings-modal"><button class="modal-close" @click="showFeedSettings = false">×</button><p class="eyebrow">SOURCE DETAILS</p><h2>{{ selectedFeed.name }}</h2><p>{{ sourceMeta[selectedFeed.source]?.label }} · {{ selectedFeed.handle }}</p><form class="settings-form" @submit.prevent="saveFeedSettings"><label class="switch-row"><span>启用自动同步</span><input v-model="selectedFeed.enabled" type="checkbox"></label><label>执行计划</label><select v-model="selectedFeed.schedule"><option>每 1 小时</option><option>每 6 小时</option><option>每 12 小时</option><option>每天 20:00</option></select><label class="switch-row"><span>首次拉取历史内容</span><input v-model="selectedFeed.includePast" type="checkbox"></label><div v-if="selectedFeed.source === 'bilibili'" class="content-scope"><strong>内容范围</strong><span>图文动态（DRAW）</span><span>专栏（ARTICLE）</span><small>视频及转发视频始终过滤，无法在此开启。</small></div><p v-if="settingsError" class="login-error">{{ settingsError }}</p><button class="login-button" :disabled="settingsBusy">保存来源设置</button></form></div></div>
+    <div v-if="selectedPlatform" class="modal-backdrop platform-detail-backdrop" @click.self="selectedPlatform = null"><div class="modal platform-detail-modal"><button class="modal-close" @click="selectedPlatform = null">×</button><div class="platform-detail-title"><i :class="['source-icon', selectedPlatform.icon]">{{ selectedPlatform.short }}</i><div><p class="eyebrow">PLATFORM SOURCE</p><h2>{{ selectedPlatform.label }}</h2></div><span :class="['connection-dot', { online: selectedPlatform.configured }]">{{ selectedPlatform.configured ? '已连接' : '未连接' }}</span></div><div class="platform-detail-summary"><div><span>当前账号</span><strong>{{ selectedPlatform.account }}</strong></div><div><span>内容目录</span><strong>{{ selectedPlatform.path }}</strong></div><div><span>作者来源</span><strong>{{ selectedPlatform.feeds.length }} 个</strong></div></div><div class="platform-detail-actions"><button class="secondary-button" @click="managePlatformCredentials(selectedPlatform.key)">{{ selectedPlatform.configured ? '管理账号凭证' : '连接平台账号' }}</button><button v-if="selectedPlatform.key === 'bilibili' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openBilibili()">添加 UP 主</button></div><div class="configured-source-list"><div class="configured-source-heading"><h3>已配置作者</h3><span>{{ selectedPlatform.feeds.length }} 个</span></div><article v-for="feed in selectedPlatform.feeds" :key="feed.id"><i :class="['source-icon', selectedPlatform.icon]">{{ selectedPlatform.short }}</i><div><strong>{{ feed.name }}</strong><span>{{ feed.handle }} · {{ feed.schedule }}</span><small>{{ feed.storagePath || `${selectedPlatform.path}/${feed.name}` }}</small></div><em :class="{ disabled: !feed.enabled }">{{ feed.enabled ? '同步中' : '已停用' }}</em><button @click="openFeedSettings(feed)">设置</button></article><div v-if="!selectedPlatform.feeds.length" class="platform-empty"><span>＋</span><strong>还没有作者来源</strong><p>{{ selectedPlatform.key === 'bilibili' ? '点击“添加 UP 主”开始订阅图文与专栏。' : '作者订阅连接器将在后续版本开放。' }}</p></div></div></div></div>
+    <div v-if="showFeedSettings && selectedFeed" class="modal-backdrop feed-detail-backdrop" @click.self="showFeedSettings = false"><div class="modal feed-settings-modal"><button class="modal-close" @click="showFeedSettings = false">×</button><p class="eyebrow">SOURCE DETAILS</p><h2>{{ selectedFeed.name }}</h2><p>{{ sourceMeta[selectedFeed.source]?.label }} · {{ selectedFeed.handle }}</p><form class="settings-form" @submit.prevent="saveFeedSettings"><label class="switch-row"><span>启用自动同步</span><input v-model="selectedFeed.enabled" type="checkbox"></label><label>执行计划</label><select v-model="selectedFeed.schedule"><option>每 1 小时</option><option>每 6 小时</option><option>每 12 小时</option><option>每天 20:00</option></select><label class="switch-row"><span>首次拉取历史内容</span><input v-model="selectedFeed.includePast" type="checkbox"></label><div v-if="selectedFeed.source === 'bilibili'" class="content-scope"><strong>内容范围</strong><span>图文动态（DRAW）</span><span>专栏（ARTICLE）</span><small>视频及转发视频始终过滤，无法在此开启。</small></div><p v-if="settingsError" class="login-error">{{ settingsError }}</p><button class="login-button" :disabled="settingsBusy">保存来源设置</button></form></div></div>
   </div>
 </template>
