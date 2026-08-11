@@ -17,6 +17,31 @@ func decodeTestResponse(t *testing.T, recorder *httptest.ResponseRecorder) map[s
 	return payload
 }
 
+func TestWeiboJSONPAndCrossDomainURL(t *testing.T) {
+	body := []byte(`STK_123({"retcode":20000000,"data":{"alt":"ticket"}})`)
+	var payload struct {
+		RetCode int `json:"retcode"`
+		Data    struct {
+			Alt string `json:"alt"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(unwrapJSONP(body), &payload); err != nil {
+		t.Fatalf("decode JSONP: %v", err)
+	}
+	if payload.RetCode != 20000000 || payload.Data.Alt != "ticket" {
+		t.Fatalf("unexpected JSONP payload: %#v", payload)
+	}
+	if got := weiboCrossDomainURL("https://example.com/cross?a=1", 0); got != "https://example.com/cross?a=1&action=login" {
+		t.Fatalf("unexpected first cross-domain URL: %s", got)
+	}
+	if got := weiboCrossDomainURL("https://example.com/cross", 0); got != "https://example.com/cross?action=login" {
+		t.Fatalf("unexpected URL without query: %s", got)
+	}
+	if got := weiboCrossDomainURL("https://example.com/other?a=1", 1); got != "https://example.com/other?a=1" {
+		t.Fatalf("non-first URL changed: %s", got)
+	}
+}
+
 func TestPostDelete(t *testing.T) {
 	store := &Store{posts: []Post{{ID: "post-1", Source: SourceWeibo, Author: "测试作者"}, {ID: "post-2", Source: SourcePixiv, Author: "保留作者"}}}
 

@@ -1375,6 +1375,17 @@ func unwrapJSONP(body []byte) []byte {
 	return body
 }
 
+func weiboCrossDomainURL(rawURL string, index int) string {
+	if index != 0 {
+		return rawURL
+	}
+	separator := "&"
+	if !strings.Contains(rawURL, "?") {
+		separator = "?"
+	}
+	return rawURL + separator + "action=login"
+}
+
 func responseSummary(body []byte) string {
 	value := strings.TrimSpace(string(body))
 	if len(value) > 240 {
@@ -1416,22 +1427,26 @@ func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		checkQuery := url.Values{
-			"entry": {"weibo"},
-			"qrid":  {session.QRID},
-			"tip":   {"1"},
-			"_":     {strconv.FormatInt(time.Now().UnixMilli(), 10)},
+			"entry":    {"weibo"},
+			"qrid":     {session.QRID},
+			"callback": {"STK_" + strconv.FormatInt(time.Now().UnixNano()/100000, 10)},
 		}
-		checkURL := "https://passport.weibo.com/sso/v2/qrcode/check?" + checkQuery.Encode()
+		checkURL := "https://login.sina.com.cn/sso/qrcode/check?" + checkQuery.Encode()
 		request, _ := http.NewRequest(http.MethodGet, checkURL, nil)
-		request.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36")
-		request.Header.Set("Accept", "application/json, text/plain, */*")
-		request.Header.Set("Referer", "https://weibo.com/")
+		request.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36")
+		request.Header.Set("Accept", "*/*")
+		request.Header.Set("Referer", "https://mail.sina.com.cn/")
 		response, requestErr := client.Do(request)
 		if requestErr != nil {
 			writeAPIError(w, http.StatusBadGateway, "无法查询微博扫码状态")
 			return
 		}
 		defer response.Body.Close()
+		checkBody, readErr := io.ReadAll(io.LimitReader(response.Body, 2<<20))
+		if readErr != nil {
+			writeAPIError(w, http.StatusBadGateway, "无法读取微博扫码状态")
+			return
+		}
 		var payload struct {
 			RetCode int    `json:"retcode"`
 			Msg     string `json:"msg"`
@@ -1439,8 +1454,8 @@ func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 				Alt string `json:"alt"`
 			} `json:"data"`
 		}
-		if json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(&payload) != nil {
-			writeAPIError(w, http.StatusBadGateway, "微博扫码状态响应异常")
+		if json.Unmarshal(unwrapJSONP(checkBody), &payload) != nil {
+			writeAPIError(w, http.StatusBadGateway, "微博扫码状态响应异常："+responseSummary(checkBody))
 			return
 		}
 		if payload.RetCode != 20000000 {
@@ -1471,19 +1486,15 @@ func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 			"crossdomain": {"1"},
 			"cdult":       {"3"},
 			"domain":      {"weibo.com"},
-			"service":     {"miniblog"},
-			"gateway":     {"1"},
-			"useticket":   {"1"},
 			"alt":         {payload.Data.Alt},
 			"savestate":   {"30"},
-			"client":      {"ssologin.js(v1.4.19)"},
-			"_":           {strconv.FormatInt(time.Now().UnixMilli(), 10)},
+			"callback":    {"STK_" + strconv.FormatInt(time.Now().UnixMilli(), 10)},
 		}
-		loginURL := "https://login.sina.com.cn/sso/login.php?" + loginQuery.Encode()
+		loginURL := "http://login.sina.com.cn/sso/login.php?" + loginQuery.Encode()
 		loginRequest, _ := http.NewRequest(http.MethodGet, loginURL, nil)
-		loginRequest.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36")
-		loginRequest.Header.Set("Accept", "application/json, text/plain, */*")
-		loginRequest.Header.Set("Referer", "https://weibo.com/")
+		loginRequest.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36")
+		loginRequest.Header.Set("Accept", "*/*")
+		loginRequest.Header.Set("Referer", "https://mail.sina.com.cn/")
 		loginResponse, loginErr := client.Do(loginRequest)
 		if loginErr != nil {
 			writeAPIError(w, http.StatusBadGateway, "微博登录票据交换失败："+loginErr.Error())
@@ -1515,16 +1526,23 @@ func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusBadGateway, fmt.Sprintf("微博登录响应异常（HTTP %d，retcode %s）：%s", loginResponse.StatusCode, loginRetCode, detail))
 			return
 		}
-		for _, crossURL := range loginPayload.CrossDomain {
+		for index, crossURL := range loginPayload.CrossDomain {
+			crossURL = weiboCrossDomainURL(crossURL, index)
 			crossRequest, e := http.NewRequest(http.MethodGet, crossURL, nil)
 			if e == nil {
-				crossRequest.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36")
-				crossRequest.Header.Set("Referer", "https://weibo.com/")
+				crossRequest.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36")
+				crossRequest.Header.Set("Referer", "https://mail.sina.com.cn/")
 				if crossResponse, e := client.Do(crossRequest); e == nil {
 					_, _ = io.Copy(io.Discard, io.LimitReader(crossResponse.Body, 1<<20))
 					crossResponse.Body.Close()
 				}
 			}
+		}
+		homeRequest, _ := http.NewRequest(http.MethodGet, "https://weibo.com/", nil)
+		homeRequest.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36")
+		if homeResponse, homeErr := client.Do(homeRequest); homeErr == nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(homeResponse.Body, 1<<20))
+			homeResponse.Body.Close()
 		}
 		cookieParts, cookieNames := []string{}, map[string]bool{}
 		for _, rawURL := range []string{"https://weibo.com/", "https://www.weibo.com/", "https://m.weibo.cn/", "https://login.sina.com.cn/", "https://passport.weibo.com/"} {
@@ -1563,14 +1581,14 @@ func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	imageQuery := url.Values{
-		"entry": {"weibo"},
-		"size":  {"180"},
-		"_":     {strconv.FormatInt(time.Now().UnixMilli(), 10)},
+		"entry":    {"weibo"},
+		"size":     {"180"},
+		"callback": {strconv.FormatInt(time.Now().UnixMilli(), 10)},
 	}
-	request, _ := http.NewRequest(http.MethodGet, "https://passport.weibo.com/sso/v2/qrcode/image?"+imageQuery.Encode(), nil)
-	request.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36")
-	request.Header.Set("Accept", "application/json, text/plain, */*")
-	request.Header.Set("Referer", "https://weibo.com/")
+	request, _ := http.NewRequest(http.MethodGet, "https://login.sina.com.cn/sso/qrcode/image?"+imageQuery.Encode(), nil)
+	request.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36")
+	request.Header.Set("Accept", "*/*")
+	request.Header.Set("Referer", "https://mail.sina.com.cn/")
 	response, err := client.Do(request)
 	if err != nil {
 		writeAPIError(w, http.StatusBadGateway, "无法连接微博扫码服务")
@@ -1589,7 +1607,7 @@ func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 			Image string `json:"image"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(body, &payload); err != nil || response.StatusCode != http.StatusOK || payload.RetCode != 20000000 || payload.Data.QRID == "" || payload.Data.Image == "" {
+	if err := json.Unmarshal(unwrapJSONP(body), &payload); err != nil || response.StatusCode != http.StatusOK || payload.RetCode != 20000000 || payload.Data.QRID == "" || payload.Data.Image == "" {
 		summary := strings.TrimSpace(string(body))
 		if len(summary) > 180 {
 			summary = summary[:180]

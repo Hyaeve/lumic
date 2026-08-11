@@ -49,7 +49,6 @@ let weiboPollTimer = null
 const syncing = ref(false)
 const posts = ref([])
 const feeds = ref([])
-const activePostMenu = ref('')
 const postActionBusy = ref('')
 const timelineMessage = ref('')
 
@@ -314,7 +313,6 @@ async function deleteSource(feed) {
   } catch (error) { settingsError.value = error.message } finally { sourceActionBusy.value = '' }
 }
 async function deletePost(post) {
-  activePostMenu.value = ''
   const summary = post.caption?.trim() ? `“${post.caption.trim().slice(0, 36)}${post.caption.trim().length > 36 ? '…' : ''}”` : '这条动态'
   const confirmed = await askConfirm({
     title: '删除动态',
@@ -456,7 +454,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
 </div>
 </div>
       <p v-if="timelineMessage" class="timeline-message">{{ timelineMessage }}</p>
-      <section class="feed-list" @click="activePostMenu = ''">
+      <section class="feed-list">
         <article v-for="post in filteredPosts" :key="post.id" class="post-card">
 <div class="post-head">
 <img :src="post.avatar" :alt="post.author">
@@ -466,7 +464,6 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
 </div>
 <span :class="['source-pill', sourceMeta[post.source].color]">
 <i :class="['source-icon', sourceMeta[post.source].icon]">{{ sourceMeta[post.source].icon === 'wb' ? '微' : sourceMeta[post.source].icon === 'px' ? 'P' : '哔' }}</i>{{ sourceMeta[post.source].label }}</span>
-<div class="post-menu-wrap" @click.stop><button class="more" :aria-expanded="activePostMenu === post.id" aria-label="动态操作" @click="activePostMenu = activePostMenu === post.id ? '' : post.id">···</button><div v-if="activePostMenu === post.id" class="post-action-menu"><button class="post-delete-action" :disabled="postActionBusy === post.id" @click="deletePost(post)"><span>⌫</span>{{ postActionBusy === post.id ? '删除中…' : '删除这条动态' }}</button></div></div>
 </div>
 <p class="caption">{{ post.caption }}</p>
 <div v-if="post.media?.length" class="media-grid">
@@ -477,10 +474,11 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
 </div>
 <div class="post-foot">
 <span>◷ {{ new Date(post.published).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }}</span>
-<div>
-<button>♡</button>
-<button>↗</button>
-<button>⌑</button>
+<div class="post-foot-actions">
+<button title="点赞">♡</button>
+<button title="打开原动态">↗</button>
+<button title="收藏">⌑</button>
+<button class="post-delete-button" :disabled="postActionBusy === post.id" title="删除这条动态" @click="deletePost(post)"><span>⌫</span>{{ postActionBusy === post.id ? '删除中…' : '删除' }}</button>
 </div>
 </div>
 </article>
