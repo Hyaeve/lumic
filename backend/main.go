@@ -61,6 +61,7 @@ type SourceConfig struct {
 }
 
 type BilibiliCredentials struct {
+	Cookie          string `json:"cookie,omitempty"`
 	SESSDATA        string `json:"SESSDATA"`
 	BiliJCT         string `json:"bili_jct"`
 	Buvid3          string `json:"buvid3"`
@@ -87,6 +88,14 @@ type WeiboCredentials struct {
 	UserName string `json:"userName,omitempty"`
 }
 
+type BilibiliQRSession struct {
+	ID        string    `json:"id"`
+	Key       string    `json:"-"`
+	URL       string    `json:"url"`
+	CreatedAt time.Time `json:"createdAt"`
+	ExpiresAt time.Time `json:"expiresAt"`
+}
+
 type WeiboQRSession struct {
 	ID        string    `json:"id"`
 	QRID      string    `json:"-"`
@@ -110,10 +119,12 @@ type ProjectSettingsView struct {
 
 type BilibiliStore struct {
 	sync.RWMutex
-	config       BilibiliConfig
-	key          []byte
-	weiboQR      map[string]WeiboQRSession
-	weiboClients map[string]*http.Client
+	config          BilibiliConfig
+	key             []byte
+	bilibiliQR      map[string]BilibiliQRSession
+	bilibiliClients map[string]*http.Client
+	weiboQR         map[string]WeiboQRSession
+	weiboClients    map[string]*http.Client
 }
 
 type BilibiliUser struct {
@@ -243,7 +254,7 @@ func loadBilibiliStore() (*BilibiliStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	store := &BilibiliStore{key: key, config: BilibiliConfig{Subscriptions: []SourceConfig{}}, weiboQR: make(map[string]WeiboQRSession), weiboClients: make(map[string]*http.Client)}
+	store := &BilibiliStore{key: key, config: BilibiliConfig{Subscriptions: []SourceConfig{}}, bilibiliQR: make(map[string]BilibiliQRSession), bilibiliClients: make(map[string]*http.Client), weiboQR: make(map[string]WeiboQRSession), weiboClients: make(map[string]*http.Client)}
 	if data, err := os.ReadFile(bilibiliFile); err == nil {
 		if err := decryptJSON(key, data, &store.config); err != nil {
 			return nil, fmt.Errorf("decrypt bilibili configuration: %w", err)
@@ -463,12 +474,51 @@ func (s *Store) feedsHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, result)
 }
 
+func cleanCookieValue(value string) string {
+	value = strings.TrimSpace(value)
+	return strings.Trim(value, "\"'")
+}
+
+func cookieValue(rawCookie, name string) string {
+	for _, part := range strings.Split(rawCookie, ";") {
+		pair := strings.SplitN(strings.TrimSpace(part), "=", 2)
+		if len(pair) == 2 && strings.EqualFold(strings.TrimSpace(pair[0]), name) {
+			return cleanCookieValue(pair[1])
+		}
+	}
+	return ""
+}
+
+func normalizeBilibiliCredentials(credentials BilibiliCredentials) BilibiliCredentials {
+	credentials.Cookie = strings.TrimSpace(credentials.Cookie)
+	credentials.SESSDATA = cleanCookieValue(credentials.SESSDATA)
+	credentials.BiliJCT = cleanCookieValue(credentials.BiliJCT)
+	credentials.Buvid3 = cleanCookieValue(credentials.Buvid3)
+	credentials.DedeUserID = cleanCookieValue(credentials.DedeUserID)
+	credentials.AccessTimeValue = cleanCookieValue(credentials.AccessTimeValue)
+	credentials.Buvid4 = cleanCookieValue(credentials.Buvid4)
+	credentials.DedeUserIDCKMd5 = cleanCookieValue(credentials.DedeUserIDCKMd5)
+	if credentials.Cookie != "" {
+		credentials.SESSDATA = cookieValue(credentials.Cookie, "SESSDATA")
+		credentials.BiliJCT = cookieValue(credentials.Cookie, "bili_jct")
+		credentials.Buvid3 = cookieValue(credentials.Cookie, "buvid3")
+		credentials.DedeUserID = cookieValue(credentials.Cookie, "DedeUserID")
+		credentials.AccessTimeValue = cookieValue(credentials.Cookie, "ac_time_value")
+		credentials.Buvid4 = cookieValue(credentials.Cookie, "buvid4")
+		credentials.DedeUserIDCKMd5 = cookieValue(credentials.Cookie, "DedeUserID__ckMd5")
+	}
+	return credentials
+}
+
 func bilibiliCookie(credentials BilibiliCredentials) string {
+	if strings.TrimSpace(credentials.Cookie) != "" {
+		return strings.TrimSpace(credentials.Cookie)
+	}
 	values := [][2]string{{"SESSDATA", credentials.SESSDATA}, {"bili_jct", credentials.BiliJCT}, {"buvid3", credentials.Buvid3}, {"DedeUserID", credentials.DedeUserID}, {"ac_time_value", credentials.AccessTimeValue}, {"buvid4", credentials.Buvid4}, {"DedeUserID__ckMd5", credentials.DedeUserIDCKMd5}}
 	parts := make([]string, 0, len(values))
 	for _, item := range values {
-		if item[1] != "" {
-			parts = append(parts, item[0]+"="+item[1])
+		if value := cleanCookieValue(item[1]); value != "" {
+			parts = append(parts, item[0]+"="+value)
 		}
 	}
 	return strings.Join(parts, "; ")
@@ -530,8 +580,14 @@ func bilibiliRequest(endpoint string, credentials BilibiliCredentials, proxyURL 
 	if err != nil {
 		return err
 	}
-	request.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36")
+	request.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
+	request.Header.Set("Accept", "application/json, text/plain, */*")
+	request.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	request.Header.Set("Origin", "https://www.bilibili.com")
 	request.Header.Set("Referer", "https://www.bilibili.com/")
+	request.Header.Set("Sec-Fetch-Dest", "empty")
+	request.Header.Set("Sec-Fetch-Mode", "cors")
+	request.Header.Set("Sec-Fetch-Site", "same-site")
 	request.Header.Set("Cookie", bilibiliCookie(credentials))
 	client, err := externalHTTPClient(proxyURL)
 	if err != nil {
@@ -549,15 +605,17 @@ func bilibiliRequest(endpoint string, credentials BilibiliCredentials, proxyURL 
 }
 
 func verifyBilibiliCredentials(credentials BilibiliCredentials, proxyURL string) error {
-	if credentials.SESSDATA == "" || credentials.BiliJCT == "" || credentials.Buvid3 == "" || credentials.DedeUserID == "" {
-		return errors.New("missing required credentials")
+	credentials = normalizeBilibiliCredentials(credentials)
+	if credentials.SESSDATA == "" || credentials.DedeUserID == "" {
+		return errors.New("完整 Cookie 中缺少 SESSDATA 或 DedeUserID")
 	}
 	if _, err := strconv.ParseInt(credentials.DedeUserID, 10, 64); err != nil {
 		return errors.New("invalid DedeUserID")
 	}
 	var payload struct {
-		Code int `json:"code"`
-		Data struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+		Data    struct {
 			IsLogin bool  `json:"isLogin"`
 			Mid     int64 `json:"mid"`
 		} `json:"data"`
@@ -572,7 +630,14 @@ func verifyBilibiliCredentials(credentials BilibiliCredentials, proxyURL string)
 		return errors.New("无法直连 B 站，请在设置中配置项目代理后重试")
 	}
 	if payload.Code != 0 {
-		return fmt.Errorf("B 站接口拒绝验证（代码 %d）", payload.Code)
+		message := strings.TrimSpace(payload.Message)
+		if message == "" {
+			message = "未知原因"
+		}
+		if payload.Code == -101 {
+			return fmt.Errorf("B 站未识别登录态（代码 -101：%s）。请改用浏览器 Network 请求头中的完整 Cookie，并确保容器与浏览器使用相同出口 IP", message)
+		}
+		return fmt.Errorf("B 站接口拒绝验证（代码 %d：%s）", payload.Code, message)
 	}
 	if !payload.Data.IsLogin {
 		return errors.New("SESSDATA 登录态已失效或 Cookie 不完整")
@@ -603,6 +668,7 @@ func (b *BilibiliStore) accountHandler(w http.ResponseWriter, r *http.Request) {
 	b.RLock()
 	proxyURL := b.config.ProxyURL
 	b.RUnlock()
+	credentials = normalizeBilibiliCredentials(credentials)
 	if err := verifyBilibiliCredentials(credentials, proxyURL); err != nil {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
@@ -891,6 +957,216 @@ func (b *BilibiliStore) pixivHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"configured": true, "userId": credentials.UserID, "userName": credentials.UserName})
 }
 
+func browserClient(proxyURL string) (*http.Client, error) {
+	client, err := externalHTTPClient(proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return nil, err
+	}
+	client.Jar = jar
+	return client, nil
+}
+
+func setBilibiliAPIHeaders(request *http.Request) {
+	request.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
+	request.Header.Set("Accept", "*/*")
+	request.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	request.Header.Set("Referer", "https://www.bilibili.com/")
+	request.Header.Set("Origin", "https://www.bilibili.com")
+	request.Header.Set("Sec-CH-UA", `"Chromium";v="140", "Not=A?Brand";v="24", "Google Chrome";v="140"`)
+	request.Header.Set("Sec-CH-UA-Mobile", "?0")
+	request.Header.Set("Sec-CH-UA-Platform", `"Windows"`)
+	request.Header.Set("Sec-Fetch-Dest", "empty")
+	request.Header.Set("Sec-Fetch-Mode", "cors")
+	request.Header.Set("Sec-Fetch-Site", "cross-site")
+}
+
+func randomSessionID() string {
+	idBytes := make([]byte, 24)
+	_, _ = rand.Read(idBytes)
+	return base64.RawURLEncoding.EncodeToString(idBytes)
+}
+
+func cookiesFromResponse(response *http.Response) BilibiliCredentials {
+	credentials := BilibiliCredentials{}
+	for _, cookie := range response.Cookies() {
+		switch cookie.Name {
+		case "SESSDATA":
+			credentials.SESSDATA = cookie.Value
+		case "bili_jct":
+			credentials.BiliJCT = cookie.Value
+		case "DedeUserID":
+			credentials.DedeUserID = cookie.Value
+		case "DedeUserID__ckMd5":
+			credentials.DedeUserIDCKMd5 = cookie.Value
+		case "buvid3":
+			credentials.Buvid3 = cookie.Value
+		case "buvid4":
+			credentials.Buvid4 = cookie.Value
+		}
+	}
+	return credentials
+}
+
+func mergeBilibiliCookies(credentials BilibiliCredentials, client *http.Client) BilibiliCredentials {
+	for _, rawURL := range []string{"https://www.bilibili.com/", "https://passport.bilibili.com/", "https://api.bilibili.com/"} {
+		parsed, _ := url.Parse(rawURL)
+		for _, cookie := range client.Jar.Cookies(parsed) {
+			switch cookie.Name {
+			case "SESSDATA":
+				credentials.SESSDATA = cookie.Value
+			case "bili_jct":
+				credentials.BiliJCT = cookie.Value
+			case "DedeUserID":
+				credentials.DedeUserID = cookie.Value
+			case "DedeUserID__ckMd5":
+				credentials.DedeUserIDCKMd5 = cookie.Value
+			case "buvid3":
+				credentials.Buvid3 = cookie.Value
+			case "buvid4":
+				credentials.Buvid4 = cookie.Value
+			}
+		}
+	}
+	return credentials
+}
+
+func (b *BilibiliStore) bilibiliQRHandler(w http.ResponseWriter, r *http.Request) {
+	b.RLock()
+	proxyURL := b.config.ProxyURL
+	b.RUnlock()
+	if r.Method == http.MethodPost {
+		client, err := browserClient(proxyURL)
+		if err != nil {
+			writeAPIError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		homeRequest, _ := http.NewRequest(http.MethodGet, "https://www.bilibili.com/", nil)
+		homeRequest.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
+		if response, requestErr := client.Do(homeRequest); requestErr == nil {
+			response.Body.Close()
+		}
+		request, _ := http.NewRequest(http.MethodGet, "https://passport.bilibili.com/x/passport-login/web/qrcode/generate", nil)
+		setBilibiliAPIHeaders(request)
+		response, err := client.Do(request)
+		if err != nil {
+			writeAPIError(w, http.StatusBadGateway, "无法连接 B 站二维码服务")
+			return
+		}
+		defer response.Body.Close()
+		var payload struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+			Data    struct {
+				URL string `json:"url"`
+				Key string `json:"qrcode_key"`
+			} `json:"data"`
+		}
+		if json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(&payload) != nil || payload.Code != 0 || payload.Data.URL == "" || payload.Data.Key == "" {
+			writeAPIError(w, http.StatusBadGateway, "B 站二维码接口响应异常："+payload.Message)
+			return
+		}
+		now := time.Now()
+		session := BilibiliQRSession{ID: randomSessionID(), Key: payload.Data.Key, URL: payload.Data.URL, CreatedAt: now, ExpiresAt: now.Add(3 * time.Minute)}
+		b.Lock()
+		b.bilibiliQR[session.ID] = session
+		b.bilibiliClients[session.ID] = client
+		b.Unlock()
+		writeJSON(w, session)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	b.RLock()
+	session, ok := b.bilibiliQR[id]
+	client := b.bilibiliClients[id]
+	b.RUnlock()
+	if !ok || client == nil {
+		writeAPIError(w, http.StatusNotFound, "B 站扫码会话不存在")
+		return
+	}
+	if time.Now().After(session.ExpiresAt) {
+		b.Lock()
+		delete(b.bilibiliQR, id)
+		delete(b.bilibiliClients, id)
+		b.Unlock()
+		writeAPIError(w, http.StatusGone, "B 站二维码已过期")
+		return
+	}
+	endpoint := "https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key=" + url.QueryEscape(session.Key)
+	request, _ := http.NewRequest(http.MethodGet, endpoint, nil)
+	setBilibiliAPIHeaders(request)
+	response, err := client.Do(request)
+	if err != nil {
+		writeAPIError(w, http.StatusBadGateway, "无法查询 B 站扫码状态")
+		return
+	}
+	defer response.Body.Close()
+	var payload struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+		Data    struct {
+			Code         int    `json:"code"`
+			Message      string `json:"message"`
+			RefreshToken string `json:"refresh_token"`
+		} `json:"data"`
+	}
+	if json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(&payload) != nil || payload.Code != 0 {
+		writeAPIError(w, http.StatusBadGateway, "B 站扫码状态响应异常："+payload.Message)
+		return
+	}
+	switch payload.Data.Code {
+	case 86101:
+		writeJSON(w, map[string]string{"status": "waiting", "message": "等待扫码"})
+		return
+	case 86090:
+		writeJSON(w, map[string]string{"status": "scanned", "message": "已扫码，请在手机上确认"})
+		return
+	case 86038:
+		writeAPIError(w, http.StatusGone, "B 站二维码已过期")
+		return
+	case 0:
+		credentials := mergeBilibiliCookies(cookiesFromResponse(response), client)
+		credentials.AccessTimeValue = payload.Data.RefreshToken
+		if credentials.SESSDATA == "" || credentials.BiliJCT == "" || credentials.DedeUserID == "" {
+			writeAPIError(w, http.StatusBadGateway, "B 站登录成功但响应缺少必要 Cookie")
+			return
+		}
+		if credentials.Buvid3 == "" {
+			var spi struct {
+				Code int `json:"code"`
+				Data struct {
+					B3 string `json:"b_3"`
+					B4 string `json:"b_4"`
+				} `json:"data"`
+			}
+			if err := bilibiliRequest("https://api.bilibili.com/x/frontend/finger/spi", credentials, proxyURL, &spi); err == nil {
+				credentials.Buvid3, credentials.Buvid4 = spi.Data.B3, spi.Data.B4
+			}
+		}
+		b.Lock()
+		b.config.Credentials = credentials
+		delete(b.bilibiliQR, id)
+		delete(b.bilibiliClients, id)
+		b.Unlock()
+		if err := b.save(); err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "无法保存 B 站登录状态")
+			return
+		}
+		writeJSON(w, map[string]string{"status": "connected", "userId": credentials.DedeUserID})
+		return
+	default:
+		writeAPIError(w, http.StatusBadGateway, "B 站扫码失败："+payload.Data.Message)
+		return
+	}
+}
+
 func weiboClient(proxyURL string) (*http.Client, error) {
 	client, err := externalHTTPClient(proxyURL)
 	if err != nil {
@@ -938,7 +1214,9 @@ func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		checkURL := "https://passport.weibo.com/sso/v2/qrcode/check?entry=miniblog&qrid=" + url.QueryEscape(session.QRID)
 		request, _ := http.NewRequest(http.MethodGet, checkURL, nil)
-		request.Header.Set("User-Agent", "Mozilla/5.0")
+		request.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36")
+		request.Header.Set("Accept", "application/json, text/plain, */*")
+		request.Header.Set("Referer", "https://weibo.com/")
 		response, requestErr := client.Do(request)
 		if requestErr != nil {
 			writeAPIError(w, http.StatusBadGateway, "无法查询微博扫码状态")
@@ -1018,13 +1296,20 @@ func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	request, _ := http.NewRequest(http.MethodGet, "https://passport.weibo.com/sso/v2/qrcode/image?entry=miniblog&size=180", nil)
-	request.Header.Set("User-Agent", "Mozilla/5.0")
+	request.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36")
+	request.Header.Set("Accept", "application/json, text/plain, */*")
+	request.Header.Set("Referer", "https://weibo.com/")
 	response, err := client.Do(request)
 	if err != nil {
 		writeAPIError(w, http.StatusBadGateway, "无法连接微博扫码服务")
 		return
 	}
 	defer response.Body.Close()
+	body, readErr := io.ReadAll(io.LimitReader(response.Body, 2<<20))
+	if readErr != nil {
+		writeAPIError(w, http.StatusBadGateway, "无法读取微博扫码响应")
+		return
+	}
 	var payload struct {
 		RetCode int `json:"retcode"`
 		Data    struct {
@@ -1032,8 +1317,12 @@ func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 			Image string `json:"image"`
 		} `json:"data"`
 	}
-	if json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(&payload) != nil || payload.Data.QRID == "" || payload.Data.Image == "" {
-		writeAPIError(w, http.StatusBadGateway, "微博扫码接口响应异常")
+	if err := json.Unmarshal(body, &payload); err != nil || response.StatusCode != http.StatusOK || payload.RetCode != 20000000 || payload.Data.QRID == "" || payload.Data.Image == "" {
+		summary := strings.TrimSpace(string(body))
+		if len(summary) > 180 {
+			summary = summary[:180]
+		}
+		writeAPIError(w, http.StatusBadGateway, fmt.Sprintf("微博扫码接口响应异常（HTTP %d）：%s", response.StatusCode, summary))
 		return
 	}
 	now := time.Now()
@@ -1073,6 +1362,7 @@ func main() {
 	mux.HandleFunc("/api/feeds", store.feedsHandler)
 	mux.HandleFunc("/api/sync", syncHandler)
 	mux.HandleFunc("/api/bilibili/account", bilibili.accountHandler)
+	mux.HandleFunc("/api/bilibili/qr", bilibili.bilibiliQRHandler)
 	mux.HandleFunc("/api/pixiv/account", bilibili.pixivHandler)
 	mux.HandleFunc("/api/weibo/qr", bilibili.weiboQRHandler)
 	mux.HandleFunc("/api/bilibili/search", bilibili.searchHandler)

@@ -10,8 +10,8 @@
   },
   "dependencies": {
     "@vitejs/plugin-vue": "latest",
+    "qrcode": "^1.5.4",
     "vite": "latest",
     "vue": "latest"
-  },
-  "devDependencies": {}
+  }
 }

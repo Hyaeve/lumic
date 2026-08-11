@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import QRCode from 'qrcode'
 
 const authenticated = ref(false)
 const loginError = ref('')
@@ -21,12 +22,16 @@ const isDark = ref(false)
 const showAdd = ref(false)
 const showBilibili = ref(false)
 const biliAccount = ref({ configured: false, userId: '' })
-const biliCredentials = ref({ SESSDATA: '', bili_jct: '', buvid3: '', DedeUserID: '', ac_time_value: '', buvid4: '', DedeUserID__ckMd5: '' })
+const biliCredentials = ref({ cookie: '', SESSDATA: '', bili_jct: '', buvid3: '', DedeUserID: '', ac_time_value: '', buvid4: '', DedeUserID__ckMd5: '' })
 const biliKeyword = ref('')
 const biliResults = ref([])
 const biliBusy = ref(false)
 const biliError = ref('')
 const biliIncludePast = ref(false)
+const biliQR = ref(null)
+const biliQRImage = ref('')
+const biliQRStatus = ref('')
+let biliPollTimer = null
 const pixivAccount = ref({ configured: false, userId: '', userName: '' })
 const pixivRefreshToken = ref('')
 const pixivBusy = ref(false)
@@ -136,13 +141,32 @@ async function openBilibili() {
     showBilibili.value = true
   } catch { biliError.value = '无法读取 B 站配置' }
 }
+function stopBilibiliPolling() { if (biliPollTimer) clearTimeout(biliPollTimer); biliPollTimer = null }
+async function pollBilibiliQR() {
+  if (!biliQR.value?.id) return
+  try {
+    const response = await fetch(`/api/bilibili/qr?id=${encodeURIComponent(biliQR.value.id)}`)
+    if (!response.ok) throw new Error(await responseError(response, 'B 站扫码状态查询失败'))
+    const result = await response.json(); biliQRStatus.value = result.message || '等待扫码'
+    if (result.status === 'connected') { biliAccount.value = { configured: true, userId: result.userId }; biliQR.value = null; biliQRImage.value = ''; biliBusy.value = false; stopBilibiliPolling(); return }
+    biliPollTimer = setTimeout(pollBilibiliQR, 3000)
+  } catch (error) { biliError.value = error.message; biliBusy.value = false; stopBilibiliPolling() }
+}
+async function startBilibiliQR() {
+  stopBilibiliPolling(); biliBusy.value = true; biliError.value = ''; biliQR.value = null; biliQRImage.value = ''; biliQRStatus.value = '正在生成二维码…'
+  try {
+    const response = await fetch('/api/bilibili/qr', { method: 'POST' })
+    if (!response.ok) throw new Error(await responseError(response, '无法获取 B 站二维码'))
+    biliQR.value = await response.json(); biliQRImage.value = await QRCode.toDataURL(biliQR.value.url, { width: 220, margin: 2 }); biliQRStatus.value = '请使用哔哩哔哩手机客户端扫码'; biliPollTimer = setTimeout(pollBilibiliQR, 2000)
+  } catch (error) { biliError.value = error.message; biliBusy.value = false }
+}
 async function saveBilibiliAccount() {
   biliBusy.value = true; biliError.value = ''
   try {
     const response = await fetch('/api/bilibili/account', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(biliCredentials.value) })
     if (!response.ok) throw new Error(await responseError(response, '凭证验证失败'))
     biliAccount.value = await response.json()
-    biliCredentials.value = { SESSDATA: '', bili_jct: '', buvid3: '', DedeUserID: '', ac_time_value: '', buvid4: '', DedeUserID__ckMd5: '' }
+    biliCredentials.value = { cookie: '', SESSDATA: '', bili_jct: '', buvid3: '', DedeUserID: '', ac_time_value: '', buvid4: '', DedeUserID__ckMd5: '' }
   } catch (error) { biliError.value = error.message } finally { biliBusy.value = false }
 }
 async function savePixivAccount() {
@@ -221,7 +245,7 @@ async function checkSession() {
   } catch { authenticated.value = false }
 }
 onMounted(checkSession)
-onUnmounted(stopWeiboPolling)
+onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling() })
 </script>
 
 <template>
@@ -420,8 +444,9 @@ onUnmounted(stopWeiboPolling)
             <article class="platform-auth-card"><h3>微博</h3><p v-if="weiboAccount.configured">已连接 {{ weiboAccount.userName || `UID ${weiboAccount.userId}` }}。</p><p v-else>使用微博客户端扫描二维码登录。</p><div v-if="weiboQR" class="weibo-qr"><img :src="weiboQR.image.startsWith('//') ? `https:${weiboQR.image}` : weiboQR.image" alt="微博登录二维码"><span>请在二维码过期前扫码并确认</span></div><button class="login-button" type="button" @click="startWeiboQR" :disabled="weiboBusy && !weiboQR">{{ weiboQR ? '刷新二维码' : weiboBusy ? '获取中…' : '扫码连接微博' }}</button><p v-if="weiboError" class="login-error">{{ weiboError }}</p></article>
           </div>
           <hr class="platform-divider">
-          <h3>哔哩哔哩凭证</h3><p v-if="biliAccount.configured">已连接 UID {{ biliAccount.userId }}。重新保存时需完整填写，旧凭证不会回显。</p><p v-else>配置后才可搜索并订阅 UP 主。</p>
-          <form class="settings-form bili-credentials" @submit.prevent="saveBilibiliAccount" autocomplete="off"><label>SESSDATA *</label><input v-model="biliCredentials.SESSDATA" type="password" required><label>bili_jct *</label><input v-model="biliCredentials.bili_jct" type="password" required><label>buvid3 *</label><input v-model="biliCredentials.buvid3" type="password" required><label>DedeUserID *</label><input v-model="biliCredentials.DedeUserID" required inputmode="numeric"><label>ac_time_value</label><input v-model="biliCredentials.ac_time_value" type="password"><label>buvid4</label><input v-model="biliCredentials.buvid4" type="password"><label>DedeUserID__ckMd5</label><input v-model="biliCredentials.DedeUserID__ckMd5" type="password"><p class="credential-note">保存前会验证登录状态；凭证加密保存在 /data，页面不会回显。</p><button class="login-button" :disabled="biliBusy">{{ biliBusy ? '验证中…' : '验证并保存' }}</button></form>
+          <h3>哔哩哔哩扫码登录</h3><p v-if="biliAccount.configured">已连接 UID {{ biliAccount.userId }}。扫码可切换账号。</p><p v-else>使用哔哩哔哩手机客户端扫码，登录凭证将自动获取并加密保存。</p>
+          <div v-if="biliQRImage" class="weibo-qr"><img :src="biliQRImage" alt="哔哩哔哩登录二维码"><span>{{ biliQRStatus }}</span></div><button class="login-button platform-login-button" type="button" @click="startBilibiliQR" :disabled="biliBusy && !biliQR">{{ biliQR ? '刷新二维码' : biliBusy ? '获取中…' : biliAccount.configured ? '扫码切换 B 站账号' : '扫码连接 B 站' }}</button>
+          <details class="manual-credential"><summary>高级：手动导入 Cookie</summary><form class="settings-form bili-credentials" @submit.prevent="saveBilibiliAccount" autocomplete="off"><label>完整 Cookie</label><textarea v-model="biliCredentials.cookie" rows="4" placeholder="仅在扫码不可用时使用"></textarea><label>SESSDATA</label><input v-model="biliCredentials.SESSDATA" type="password"><label>bili_jct</label><input v-model="biliCredentials.bili_jct" type="password"><label>buvid3</label><input v-model="biliCredentials.buvid3" type="password"><label>DedeUserID</label><input v-model="biliCredentials.DedeUserID" inputmode="numeric"><button class="login-button" :disabled="biliBusy">验证并保存手动凭证</button></form></details>
           <p v-if="biliError" class="login-error bili-error">{{ biliError }}</p>
         </section>
         <section v-if="settingsTab === 'sources'" class="settings-pane">

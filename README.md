@@ -31,7 +31,8 @@ API 默认监听 `http://localhost:5500`。Vite 开发服务器默认监听 `htt
 - `POST /api/sync`：触发同步任务
 - `GET|PUT /api/project/settings`：读取脱敏项目设置或保存项目代理
 - `POST /api/project/settings`：测试代理能否访问 pixiv
-- `GET|PUT /api/bilibili/account`：读取脱敏配置状态或验证并保存 B 站凭证
+- `GET|PUT /api/bilibili/account`：读取脱敏配置状态或手动验证并保存 B 站凭证
+- `GET|POST /api/bilibili/qr`：创建 B 站登录二维码或携带 `id` 轮询扫码状态
 - `GET|PUT /api/pixiv/account`：读取 Pixiv 连接状态或验证并加密保存 `refresh_token`
 - `GET|POST /api/weibo/qr`：读取微博账号状态、创建二维码或携带 `id` 轮询扫码状态
 - `GET /api/bilibili/search?keyword=名称`：搜索 B 站 UP 主
@@ -68,7 +69,7 @@ docker compose up -d
 
 反向代理启用 HTTPS 后建议设置 `LUMIC_COOKIE_SECURE=true`；该变量不属于当前 Compose 默认配置，可按部署环境单独添加。服务还发送 CSP、`X-Frame-Options: DENY`、`X-Content-Type-Options: nosniff` 和严格 Referrer Policy 等响应头。
 
-平台账号统一在「设置 → 平台凭证」中管理。B 站必填 `SESSDATA`、`bili_jct`、`buvid3`、`DedeUserID`，可选 `ac_time_value`、`buvid4`、`DedeUserID__ckMd5`。Pixiv 使用 OAuth `refresh_token`，服务端还必须通过 `LUMIC_PIXIV_CLIENT_ID` 和 `LUMIC_PIXIV_CLIENT_SECRET` 提供合法 OAuth 应用凭证；可在 Compose 同目录的 `.env` 中配置。微博使用移动端扫码登录，二维码会自动轮询，成功后只在服务端保存会话 Cookie。
+平台账号统一在「设置 → 平台凭证」中管理。B 站默认使用手机客户端扫码登录：后端先访问 B 站主页建立设备会话，再生成二维码并轮询确认状态；登录成功后自动从响应 Cookie 中提取 `SESSDATA`、`bili_jct`、`DedeUserID` 等凭证，并保存 `refresh_token`。手动 Cookie 导入仅作为高级备用方式。Pixiv 使用 OAuth `refresh_token`，服务端还必须通过 `LUMIC_PIXIV_CLIENT_ID` 和 `LUMIC_PIXIV_CLIENT_SECRET` 提供合法 OAuth 应用凭证；可在 Compose 同目录的 `.env` 中配置。微博使用移动端扫码登录，二维码会自动轮询，成功后只在服务端保存会话 Cookie。
 
 保存前服务会验证平台登录状态。原始 token 与 Cookie 不会返回前端，而是随平台配置通过 AES-GCM 加密保存在 `/data/bilibili.enc`，密钥保存在 `/data/secret.key`。应将整个 `data` 目录视为敏感数据，限制宿主机访问权限并定期备份；不要提交到 Git 仓库。Pixiv 和微博接口策略可能随平台调整，使用时应遵守各平台服务条款，并使用自己有权访问的账号与 OAuth 应用。
 
