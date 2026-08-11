@@ -508,6 +508,25 @@ func demoStore() *Store {
 }
 
 func (s *Store) postsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodDelete {
+		id := strings.TrimSpace(r.URL.Query().Get("id"))
+		if id == "" {
+			writeAPIError(w, http.StatusBadRequest, "动态 ID 不能为空")
+			return
+		}
+		s.Lock()
+		for index, post := range s.posts {
+			if post.ID == id {
+				s.posts = append(s.posts[:index], s.posts[index+1:]...)
+				s.Unlock()
+				writeJSON(w, map[string]string{"status": "deleted", "message": "动态已删除，已下载的媒体文件予以保留"})
+				return
+			}
+		}
+		s.Unlock()
+		writeAPIError(w, http.StatusNotFound, "动态不存在或已删除")
+		return
+	}
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return

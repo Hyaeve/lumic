@@ -49,6 +49,9 @@ let weiboPollTimer = null
 const syncing = ref(false)
 const posts = ref([])
 const feeds = ref([])
+const activePostMenu = ref('')
+const postActionBusy = ref('')
+const timelineMessage = ref('')
 
 const fallbackPosts = [
   { id: 'wb-001', source: 'weibo', author: '林间拾光', avatar: 'https://i.pravatar.cc/96?img=47', caption: '把黄昏收藏进今天的相册里。风经过树梢，带来一点夏天的回声。', tags: ['日常', '摄影'], published: new Date(Date.now() - 42 * 60000), liked: true },
@@ -310,6 +313,24 @@ async function deleteSource(feed) {
     sourceActionMessage.value = '订阅已删除，已采集文件予以保留'
   } catch (error) { settingsError.value = error.message } finally { sourceActionBusy.value = '' }
 }
+async function deletePost(post) {
+  activePostMenu.value = ''
+  const summary = post.caption?.trim() ? `“${post.caption.trim().slice(0, 36)}${post.caption.trim().length > 36 ? '…' : ''}”` : '这条动态'
+  const confirmed = await askConfirm({
+    title: '删除动态',
+    message: `确定删除 ${post.author} 的${summary}吗？该操作只移除时间线记录，已下载到 /flow 的媒体文件会保留。`,
+    confirmText: '删除动态'
+  })
+  if (!confirmed) return
+  postActionBusy.value = post.id; timelineMessage.value = ''
+  try {
+    const response = await fetch(`/api/posts?id=${encodeURIComponent(post.id)}`, { method: 'DELETE' })
+    if (!response.ok) throw new Error(await responseError(response, '删除动态失败'))
+    posts.value = posts.value.filter(item => item.id !== post.id)
+    timelineMessage.value = '动态已从时间线删除'
+    window.setTimeout(() => { if (timelineMessage.value === '动态已从时间线删除') timelineMessage.value = '' }, 2500)
+  } catch (error) { timelineMessage.value = error.message } finally { postActionBusy.value = '' }
+}
 function closeSettingsPage() { showSettings.value = false; selectedPlatform.value = null; activeNav.value = activeSource.value === 'all' ? 'all' : 'source' }
 function formatFans(count) { return count >= 10000 ? `${(count / 10000).toFixed(1)}万` : count }
 async function checkSession() {
@@ -434,8 +455,9 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
 <button class="view-button">▦</button>
 </div>
 </div>
-      <section class="feed-list">
-<article v-for="post in filteredPosts" :key="post.id" class="post-card">
+      <p v-if="timelineMessage" class="timeline-message">{{ timelineMessage }}</p>
+      <section class="feed-list" @click="activePostMenu = ''">
+        <article v-for="post in filteredPosts" :key="post.id" class="post-card">
 <div class="post-head">
 <img :src="post.avatar" :alt="post.author">
 <div class="author">
@@ -444,7 +466,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
 </div>
 <span :class="['source-pill', sourceMeta[post.source].color]">
 <i :class="['source-icon', sourceMeta[post.source].icon]">{{ sourceMeta[post.source].icon === 'wb' ? '微' : sourceMeta[post.source].icon === 'px' ? 'P' : '哔' }}</i>{{ sourceMeta[post.source].label }}</span>
-<button class="more">···</button>
+<div class="post-menu-wrap" @click.stop><button class="more" :aria-expanded="activePostMenu === post.id" aria-label="动态操作" @click="activePostMenu = activePostMenu === post.id ? '' : post.id">···</button><div v-if="activePostMenu === post.id" class="post-action-menu"><button class="post-delete-action" :disabled="postActionBusy === post.id" @click="deletePost(post)"><span>⌫</span>{{ postActionBusy === post.id ? '删除中…' : '删除这条动态' }}</button></div></div>
 </div>
 <p class="caption">{{ post.caption }}</p>
 <div v-if="post.media?.length" class="media-grid">

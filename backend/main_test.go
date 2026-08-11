@@ -17,6 +17,27 @@ func decodeTestResponse(t *testing.T, recorder *httptest.ResponseRecorder) map[s
 	return payload
 }
 
+func TestPostDelete(t *testing.T) {
+	store := &Store{posts: []Post{{ID: "post-1", Source: SourceWeibo, Author: "测试作者"}, {ID: "post-2", Source: SourcePixiv, Author: "保留作者"}}}
+
+	request := httptest.NewRequest(http.MethodDelete, "/api/posts?id=post-1", nil)
+	response := httptest.NewRecorder()
+	store.postsHandler(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("delete status=%d body=%s", response.Code, response.Body.String())
+	}
+	if len(store.posts) != 1 || store.posts[0].ID != "post-2" {
+		t.Fatalf("unexpected posts after delete: %#v", store.posts)
+	}
+
+	missingRequest := httptest.NewRequest(http.MethodDelete, "/api/posts?id=post-1", nil)
+	missingResponse := httptest.NewRecorder()
+	store.postsHandler(missingResponse, missingRequest)
+	if missingResponse.Code != http.StatusNotFound {
+		t.Fatalf("second delete status=%d body=%s", missingResponse.Code, missingResponse.Body.String())
+	}
+}
+
 func TestRegularFeedSyncAndDelete(t *testing.T) {
 	store := &Store{feeds: []SourceConfig{{ID: "feed-demo", Source: SourceBilibili, Name: "演示来源", Enabled: true}}}
 
