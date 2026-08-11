@@ -14,6 +14,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -74,8 +75,30 @@ type BilibiliAccount struct {
 	UserID     string `json:"userId,omitempty"`
 }
 
+type PixivCredentials struct {
+	RefreshToken string `json:"refreshToken,omitempty"`
+	UserID       string `json:"userId,omitempty"`
+	UserName     string `json:"userName,omitempty"`
+}
+
+type WeiboCredentials struct {
+	Cookie   string `json:"cookie,omitempty"`
+	UserID   string `json:"userId,omitempty"`
+	UserName string `json:"userName,omitempty"`
+}
+
+type WeiboQRSession struct {
+	ID        string    `json:"id"`
+	QRID      string    `json:"-"`
+	Image     string    `json:"image,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+	ExpiresAt time.Time `json:"expiresAt"`
+}
+
 type BilibiliConfig struct {
 	Credentials   BilibiliCredentials `json:"credentials"`
+	Pixiv         PixivCredentials    `json:"pixiv"`
+	Weibo         WeiboCredentials    `json:"weibo"`
 	Subscriptions []SourceConfig      `json:"subscriptions"`
 	ProxyURL      string              `json:"proxyUrl,omitempty"`
 }
@@ -87,8 +110,10 @@ type ProjectSettingsView struct {
 
 type BilibiliStore struct {
 	sync.RWMutex
-	config BilibiliConfig
-	key    []byte
+	config       BilibiliConfig
+	key          []byte
+	weiboQR      map[string]WeiboQRSession
+	weiboClients map[string]*http.Client
 }
 
 type BilibiliUser struct {
@@ -218,7 +243,7 @@ func loadBilibiliStore() (*BilibiliStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	store := &BilibiliStore{key: key, config: BilibiliConfig{Subscriptions: []SourceConfig{}}}
+	store := &BilibiliStore{key: key, config: BilibiliConfig{Subscriptions: []SourceConfig{}}, weiboQR: make(map[string]WeiboQRSession), weiboClients: make(map[string]*http.Client)}
 	if data, err := os.ReadFile(bilibiliFile); err == nil {
 		if err := decryptJSON(key, data, &store.config); err != nil {
 			return nil, fmt.Errorf("decrypt bilibili configuration: %w", err)
@@ -791,6 +816,237 @@ func syncHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"status": "started", "message": "同步任务已加入队列"})
 }
 
+func pixivTokenRequest(refreshToken, proxyURL string) (PixivCredentials, error) {
+	if strings.TrimSpace(refreshToken) == "" {
+		return PixivCredentials{}, errors.New("refresh_token 不能为空")
+	}
+	clientID, clientSecret := strings.TrimSpace(os.Getenv("LUMIC_PIXIV_CLIENT_ID")), strings.TrimSpace(os.Getenv("LUMIC_PIXIV_CLIENT_SECRET"))
+	if clientID == "" || clientSecret == "" {
+		return PixivCredentials{}, errors.New("服务端未配置 LUMIC_PIXIV_CLIENT_ID 和 LUMIC_PIXIV_CLIENT_SECRET")
+	}
+	form := url.Values{"client_id": {clientID}, "client_secret": {clientSecret}, "grant_type": {"refresh_token"}, "refresh_token": {refreshToken}}
+	request, err := http.NewRequest(http.MethodPost, "https://oauth.secure.pixiv.net/auth/token", strings.NewReader(form.Encode()))
+	if err != nil {
+		return PixivCredentials{}, err
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("User-Agent", "PixivIOSApp/7.13.0")
+	client, err := externalHTTPClient(proxyURL)
+	if err != nil {
+		return PixivCredentials{}, err
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return PixivCredentials{}, err
+	}
+	defer response.Body.Close()
+	var payload struct {
+		Error string `json:"error"`
+		User  struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"user"`
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(&payload); err != nil {
+		return PixivCredentials{}, err
+	}
+	if response.StatusCode != http.StatusOK || payload.Error != "" {
+		return PixivCredentials{}, errors.New("Pixiv refresh_token 无效或已过期")
+	}
+	return PixivCredentials{RefreshToken: refreshToken, UserID: payload.User.ID, UserName: payload.User.Name}, nil
+}
+
+func (b *BilibiliStore) pixivHandler(w http.ResponseWriter, r *http.Request) {
+	b.RLock()
+	proxyURL, current := b.config.ProxyURL, b.config.Pixiv
+	b.RUnlock()
+	if r.Method == http.MethodGet {
+		current.RefreshToken = ""
+		writeJSON(w, map[string]any{"configured": current.UserID != "", "userId": current.UserID, "userName": current.UserName})
+		return
+	}
+	if r.Method != http.MethodPut {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var input struct {
+		RefreshToken string `json:"refreshToken"`
+	}
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&input) != nil {
+		writeAPIError(w, http.StatusBadRequest, "Pixiv 凭证格式无效")
+		return
+	}
+	credentials, err := pixivTokenRequest(strings.TrimSpace(input.RefreshToken), proxyURL)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	b.Lock()
+	b.config.Pixiv = credentials
+	b.Unlock()
+	if err := b.save(); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "无法保存 Pixiv 凭证")
+		return
+	}
+	writeJSON(w, map[string]any{"configured": true, "userId": credentials.UserID, "userName": credentials.UserName})
+}
+
+func weiboClient(proxyURL string) (*http.Client, error) {
+	client, err := externalHTTPClient(proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return nil, err
+	}
+	client.Jar = jar
+	return client, nil
+}
+
+func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
+	b.RLock()
+	proxyURL := b.config.ProxyURL
+	b.RUnlock()
+	if r.Method == http.MethodGet {
+		id := strings.TrimSpace(r.URL.Query().Get("id"))
+		b.RLock()
+		if id == "" {
+			account := b.config.Weibo
+			b.RUnlock()
+			writeJSON(w, map[string]any{"configured": account.UserID != "", "userId": account.UserID, "userName": account.UserName})
+			return
+		}
+		session, ok := b.weiboQR[id]
+		client := b.weiboClients[id]
+		b.RUnlock()
+		if client == nil {
+			writeAPIError(w, http.StatusNotFound, "扫码会话已失效，请重新获取二维码")
+			return
+		}
+		if !ok {
+			writeAPIError(w, http.StatusNotFound, "扫码会话不存在，请重新获取二维码")
+			return
+		}
+		if time.Now().After(session.ExpiresAt) {
+			b.Lock()
+			delete(b.weiboQR, id)
+			delete(b.weiboClients, id)
+			b.Unlock()
+			writeAPIError(w, http.StatusGone, "二维码已过期")
+			return
+		}
+		checkURL := "https://passport.weibo.com/sso/v2/qrcode/check?entry=miniblog&qrid=" + url.QueryEscape(session.QRID)
+		request, _ := http.NewRequest(http.MethodGet, checkURL, nil)
+		request.Header.Set("User-Agent", "Mozilla/5.0")
+		response, requestErr := client.Do(request)
+		if requestErr != nil {
+			writeAPIError(w, http.StatusBadGateway, "无法查询微博扫码状态")
+			return
+		}
+		defer response.Body.Close()
+		var payload struct {
+			RetCode int    `json:"retcode"`
+			Msg     string `json:"msg"`
+			Data    struct {
+				Alt string `json:"alt"`
+			} `json:"data"`
+		}
+		if json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(&payload) != nil {
+			writeAPIError(w, http.StatusBadGateway, "微博扫码状态响应异常")
+			return
+		}
+		if payload.RetCode != 20000000 {
+			writeJSON(w, map[string]any{"status": "waiting", "message": payload.Msg})
+			return
+		}
+		loginURL := "https://login.sina.com.cn/sso/login.php?entry=miniblog&returntype=TEXT&crossdomain=1&cdult=3&domain=weibo.com&alt=" + url.QueryEscape(payload.Data.Alt)
+		loginRequest, _ := http.NewRequest(http.MethodGet, loginURL, nil)
+		loginRequest.Header.Set("User-Agent", "Mozilla/5.0")
+		loginResponse, loginErr := client.Do(loginRequest)
+		if loginErr != nil {
+			writeAPIError(w, http.StatusBadGateway, "微博登录票据交换失败")
+			return
+		}
+		defer loginResponse.Body.Close()
+		var loginPayload struct {
+			UID         string   `json:"uid"`
+			Nick        string   `json:"nick"`
+			CrossDomain []string `json:"crossDomainUrlList"`
+		}
+		if json.NewDecoder(io.LimitReader(loginResponse.Body, 2<<20)).Decode(&loginPayload) != nil || loginPayload.UID == "" {
+			writeAPIError(w, http.StatusBadGateway, "微博登录响应异常")
+			return
+		}
+		for _, crossURL := range loginPayload.CrossDomain {
+			crossRequest, e := http.NewRequest(http.MethodGet, crossURL, nil)
+			if e == nil {
+				if crossResponse, e := client.Do(crossRequest); e == nil {
+					crossResponse.Body.Close()
+				}
+			}
+		}
+		cookieURL, _ := url.Parse("https://weibo.com/")
+		cookieParts := []string{}
+		for _, cookie := range client.Jar.Cookies(cookieURL) {
+			cookieParts = append(cookieParts, cookie.Name+"="+cookie.Value)
+		}
+		if len(cookieParts) == 0 {
+			writeAPIError(w, http.StatusBadGateway, "微博未返回登录 Cookie")
+			return
+		}
+		credentials := WeiboCredentials{Cookie: strings.Join(cookieParts, "; "), UserID: loginPayload.UID, UserName: loginPayload.Nick}
+		b.Lock()
+		b.config.Weibo = credentials
+		delete(b.weiboQR, id)
+		delete(b.weiboClients, id)
+		b.Unlock()
+		if err := b.save(); err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "无法保存微博登录状态")
+			return
+		}
+		writeJSON(w, map[string]any{"status": "connected", "userId": credentials.UserID, "userName": credentials.UserName})
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	client, err := weiboClient(proxyURL)
+	if err != nil {
+		writeAPIError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	request, _ := http.NewRequest(http.MethodGet, "https://passport.weibo.com/sso/v2/qrcode/image?entry=miniblog&size=180", nil)
+	request.Header.Set("User-Agent", "Mozilla/5.0")
+	response, err := client.Do(request)
+	if err != nil {
+		writeAPIError(w, http.StatusBadGateway, "无法连接微博扫码服务")
+		return
+	}
+	defer response.Body.Close()
+	var payload struct {
+		RetCode int `json:"retcode"`
+		Data    struct {
+			QRID  string `json:"qrid"`
+			Image string `json:"image"`
+		} `json:"data"`
+	}
+	if json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(&payload) != nil || payload.Data.QRID == "" || payload.Data.Image == "" {
+		writeAPIError(w, http.StatusBadGateway, "微博扫码接口响应异常")
+		return
+	}
+	now := time.Now()
+	idBytes := make([]byte, 24)
+	_, _ = rand.Read(idBytes)
+	session := WeiboQRSession{ID: base64.RawURLEncoding.EncodeToString(idBytes), QRID: payload.Data.QRID, Image: payload.Data.Image, CreatedAt: now, ExpiresAt: now.Add(3 * time.Minute)}
+	b.Lock()
+	b.weiboQR[session.ID] = session
+	b.weiboClients[session.ID] = client
+	b.Unlock()
+	writeJSON(w, session)
+}
+
 func writeAPIError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
@@ -817,6 +1073,8 @@ func main() {
 	mux.HandleFunc("/api/feeds", store.feedsHandler)
 	mux.HandleFunc("/api/sync", syncHandler)
 	mux.HandleFunc("/api/bilibili/account", bilibili.accountHandler)
+	mux.HandleFunc("/api/pixiv/account", bilibili.pixivHandler)
+	mux.HandleFunc("/api/weibo/qr", bilibili.weiboQRHandler)
 	mux.HandleFunc("/api/bilibili/search", bilibili.searchHandler)
 	mux.HandleFunc("/api/bilibili/subscriptions", bilibili.subscriptionsHandler)
 	mux.HandleFunc("/api/project/settings", bilibili.projectSettingsHandler)

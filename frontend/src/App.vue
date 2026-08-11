@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 
 const authenticated = ref(false)
 const loginError = ref('')
@@ -27,6 +27,15 @@ const biliResults = ref([])
 const biliBusy = ref(false)
 const biliError = ref('')
 const biliIncludePast = ref(false)
+const pixivAccount = ref({ configured: false, userId: '', userName: '' })
+const pixivRefreshToken = ref('')
+const pixivBusy = ref(false)
+const pixivError = ref('')
+const weiboAccount = ref({ configured: false, userId: '', userName: '' })
+const weiboQR = ref(null)
+const weiboBusy = ref(false)
+const weiboError = ref('')
+let weiboPollTimer = null
 const syncing = ref(false)
 const posts = ref([])
 const feeds = ref([])
@@ -81,11 +90,13 @@ async function syncNow() {
   setTimeout(() => { syncing.value = false }, 900)
 }
 async function openSettings(tab = 'network') {
-  settingsTab.value = tab; showSettings.value = true; settingsError.value = ''; proxyMessage.value = ''
+  settingsTab.value = tab; showSettings.value = true; settingsError.value = ''; proxyMessage.value = ''; pixivError.value = ''; weiboError.value = ''
   try {
-    const [projectResponse, biliResponse] = await Promise.all([fetch('/api/project/settings'), fetch('/api/bilibili/account')])
+    const [projectResponse, biliResponse, pixivResponse, weiboResponse] = await Promise.all([fetch('/api/project/settings'), fetch('/api/bilibili/account'), fetch('/api/pixiv/account'), fetch('/api/weibo/qr')])
     if (projectResponse.ok) proxyStatus.value = await projectResponse.json()
     if (biliResponse.ok) biliAccount.value = await biliResponse.json()
+    if (pixivResponse.ok) pixivAccount.value = await pixivResponse.json()
+    if (weiboResponse.ok) weiboAccount.value = await weiboResponse.json()
   } catch { settingsError.value = '无法读取项目设置' }
 }
 async function saveProxy() {
@@ -133,6 +144,33 @@ async function saveBilibiliAccount() {
     biliAccount.value = await response.json()
     biliCredentials.value = { SESSDATA: '', bili_jct: '', buvid3: '', DedeUserID: '', ac_time_value: '', buvid4: '', DedeUserID__ckMd5: '' }
   } catch (error) { biliError.value = error.message } finally { biliBusy.value = false }
+}
+async function savePixivAccount() {
+  pixivBusy.value = true; pixivError.value = ''
+  try {
+    const response = await fetch('/api/pixiv/account', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refreshToken: pixivRefreshToken.value.trim() }) })
+    if (!response.ok) throw new Error(await responseError(response, 'Pixiv 凭证验证失败'))
+    pixivAccount.value = await response.json(); pixivRefreshToken.value = ''
+  } catch (error) { pixivError.value = error.message } finally { pixivBusy.value = false }
+}
+function stopWeiboPolling() { if (weiboPollTimer) clearTimeout(weiboPollTimer); weiboPollTimer = null }
+async function pollWeiboQR() {
+  if (!weiboQR.value?.id) return
+  try {
+    const response = await fetch(`/api/weibo/qr?id=${encodeURIComponent(weiboQR.value.id)}`)
+    if (!response.ok) throw new Error(await responseError(response, '微博扫码状态查询失败'))
+    const result = await response.json()
+    if (result.status === 'connected') { weiboAccount.value = { configured: true, userId: result.userId, userName: result.userName }; weiboQR.value = null; weiboBusy.value = false; return }
+    weiboPollTimer = setTimeout(pollWeiboQR, 2000)
+  } catch (error) { weiboError.value = error.message; weiboBusy.value = false; stopWeiboPolling() }
+}
+async function startWeiboQR() {
+  stopWeiboPolling(); weiboBusy.value = true; weiboError.value = ''; weiboQR.value = null
+  try {
+    const response = await fetch('/api/weibo/qr', { method: 'POST' })
+    if (!response.ok) throw new Error(await responseError(response, '无法获取微博二维码'))
+    weiboQR.value = await response.json(); weiboPollTimer = setTimeout(pollWeiboQR, 1500)
+  } catch (error) { weiboError.value = error.message; weiboBusy.value = false }
 }
 async function searchBilibili() {
   if (!biliKeyword.value.trim()) return
@@ -183,6 +221,7 @@ async function checkSession() {
   } catch { authenticated.value = false }
 }
 onMounted(checkSession)
+onUnmounted(stopWeiboPolling)
 </script>
 
 <template>
@@ -333,9 +372,9 @@ onMounted(checkSession)
 <h2>添加一个新来源</h2>
 <p>连接账号后，Lumic 会帮你把喜欢的内容收进同一条时间线。</p>
 <div class="connect-options">
-<button @click="showAdd = false">
+<button @click="showAdd = false; openSettings('platforms'); startWeiboQR()">
 <i class="source-icon wb">微</i>连接微博</button>
-<button @click="showAdd = false">
+<button @click="showAdd = false; openSettings('platforms')">
 <i class="source-icon px">P</i>连接 pixiv</button>
 <button @click="openBilibili">
 <i class="source-icon bl">哔</i>连接哔哩哔哩</button>
@@ -376,6 +415,11 @@ onMounted(checkSession)
           <p v-if="proxyMessage" class="success-message">{{ proxyMessage }}</p>
         </section>
         <section v-if="settingsTab === 'platforms'" class="settings-pane">
+          <div class="platform-auth-grid">
+            <article class="platform-auth-card"><h3>Pixiv</h3><p v-if="pixivAccount.configured">已连接 {{ pixivAccount.userName || pixivAccount.userId }}，重新保存时需填写新 token。</p><p v-else>使用 OAuth refresh_token 连接，不保存账号密码。</p><form class="settings-form" @submit.prevent="savePixivAccount"><label>refresh_token</label><input v-model="pixivRefreshToken" type="password" required autocomplete="off"><p class="credential-note">服务端需配置 Pixiv OAuth 客户端环境变量，token 将加密保存。</p><button class="login-button" :disabled="pixivBusy">{{ pixivBusy ? '验证中…' : '验证并保存 Pixiv' }}</button></form><p v-if="pixivError" class="login-error">{{ pixivError }}</p></article>
+            <article class="platform-auth-card"><h3>微博</h3><p v-if="weiboAccount.configured">已连接 {{ weiboAccount.userName || `UID ${weiboAccount.userId}` }}。</p><p v-else>使用微博客户端扫描二维码登录。</p><div v-if="weiboQR" class="weibo-qr"><img :src="weiboQR.image.startsWith('//') ? `https:${weiboQR.image}` : weiboQR.image" alt="微博登录二维码"><span>请在二维码过期前扫码并确认</span></div><button class="login-button" type="button" @click="startWeiboQR" :disabled="weiboBusy && !weiboQR">{{ weiboQR ? '刷新二维码' : weiboBusy ? '获取中…' : '扫码连接微博' }}</button><p v-if="weiboError" class="login-error">{{ weiboError }}</p></article>
+          </div>
+          <hr class="platform-divider">
           <h3>哔哩哔哩凭证</h3><p v-if="biliAccount.configured">已连接 UID {{ biliAccount.userId }}。重新保存时需完整填写，旧凭证不会回显。</p><p v-else>配置后才可搜索并订阅 UP 主。</p>
           <form class="settings-form bili-credentials" @submit.prevent="saveBilibiliAccount" autocomplete="off"><label>SESSDATA *</label><input v-model="biliCredentials.SESSDATA" type="password" required><label>bili_jct *</label><input v-model="biliCredentials.bili_jct" type="password" required><label>buvid3 *</label><input v-model="biliCredentials.buvid3" type="password" required><label>DedeUserID *</label><input v-model="biliCredentials.DedeUserID" required inputmode="numeric"><label>ac_time_value</label><input v-model="biliCredentials.ac_time_value" type="password"><label>buvid4</label><input v-model="biliCredentials.buvid4" type="password"><label>DedeUserID__ckMd5</label><input v-model="biliCredentials.DedeUserID__ckMd5" type="password"><p class="credential-note">保存前会验证登录状态；凭证加密保存在 /data，页面不会回显。</p><button class="login-button" :disabled="biliBusy">{{ biliBusy ? '验证中…' : '验证并保存' }}</button></form>
           <p v-if="biliError" class="login-error bili-error">{{ biliError }}</p>

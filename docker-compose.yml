@@ -8,4 +8,7 @@ services:
       - ./data:/data
     environment:
       TZ: Asia/Shanghai
+      # Pixiv OAuth 应用凭证；使用 refresh_token 接入时必须配置。
+      LUMIC_PIXIV_CLIENT_ID: ${LUMIC_PIXIV_CLIENT_ID:-}
+      LUMIC_PIXIV_CLIENT_SECRET: ${LUMIC_PIXIV_CLIENT_SECRET:-}
     restart: unless-stopped
