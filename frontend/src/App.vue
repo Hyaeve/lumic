@@ -17,6 +17,8 @@ const showFeedSettings = ref(false)
 const selectedPlatform = ref(null)
 const sourceActionBusy = ref('')
 const sourceActionMessage = ref('')
+const confirmDialog = ref({ open: false, title: '', message: '', confirmText: '确认', cancelText: '取消', tone: 'danger' })
+let confirmResolver = null
 const loginBusy = ref(false)
 const credentials = ref({ username: '', password: '' })
 const activeNav = ref('all')
@@ -255,21 +257,51 @@ async function saveFeedSettings() {
     showFeedSettings.value = false
   } catch (error) { settingsError.value = error.message } finally { settingsBusy.value = false }
 }
+function sourceOperationEndpoint(feed) {
+  return feed.source === 'bilibili' && feed.id.startsWith('bili-') ? '/api/bilibili/subscriptions' : '/api/feeds'
+}
 async function syncSource(feed) {
   sourceActionBusy.value = `sync:${feed.id}`; sourceActionMessage.value = ''; settingsError.value = ''
-  const endpoint = feed.source === 'bilibili' ? '/api/bilibili/subscriptions' : '/api/feeds'
+  const endpoint = sourceOperationEndpoint(feed)
   try {
     const response = await fetch(`${endpoint}?action=sync&id=${encodeURIComponent(feed.id)}`, { method: 'POST' })
     if (!response.ok) throw new Error(await responseError(response, '无法启动来源拉取'))
     const result = await response.json(); sourceActionMessage.value = result.message || '拉取任务已加入队列'
     const updated = result.source; const index = feeds.value.findIndex(item => item.id === feed.id)
     if (updated && index >= 0) feeds.value[index] = updated
+    if (updated && selectedPlatform.value) {
+      const platformIndex = selectedPlatform.value.feeds.findIndex(item => item.id === feed.id)
+      if (platformIndex >= 0) selectedPlatform.value.feeds[platformIndex] = updated
+    }
   } catch (error) { settingsError.value = error.message } finally { sourceActionBusy.value = '' }
 }
+function closeConfirmDialog(result = false) {
+  confirmDialog.value.open = false
+  if (confirmResolver) {
+    const resolve = confirmResolver
+    confirmResolver = null
+    resolve(result)
+  }
+}
+function askConfirm({ title, message, confirmText = '确认', cancelText = '取消', tone = 'danger' }) {
+  if (confirmResolver) closeConfirmDialog(false)
+  confirmDialog.value = { open: true, title, message, confirmText, cancelText, tone }
+  return new Promise(resolve => { confirmResolver = resolve })
+}
+function handleConfirmKeydown(event) {
+  if (!confirmDialog.value.open) return
+  if (event.key === 'Escape') closeConfirmDialog(false)
+  if (event.key === 'Enter') closeConfirmDialog(true)
+}
 async function deleteSource(feed) {
-  if (!window.confirm(`确定删除“${feed.name}”的订阅吗？已采集到 /flow 的文件会保留。`)) return
+  const confirmed = await askConfirm({
+    title: '删除订阅',
+    message: `确定删除“${feed.name}”的订阅吗？已采集到 /flow 的文件会保留。`,
+    confirmText: '删除订阅'
+  })
+  if (!confirmed) return
   sourceActionBusy.value = `delete:${feed.id}`; sourceActionMessage.value = ''; settingsError.value = ''
-  const endpoint = feed.source === 'bilibili' ? '/api/bilibili/subscriptions' : '/api/feeds'
+  const endpoint = sourceOperationEndpoint(feed)
   try {
     const response = await fetch(`${endpoint}?id=${encodeURIComponent(feed.id)}`, { method: 'DELETE' })
     if (!response.ok) throw new Error(await responseError(response, '删除订阅失败'))
@@ -290,8 +322,8 @@ async function checkSession() {
     if (feedResponse.ok && biliFeedResponse.ok) feeds.value = [...await feedResponse.json(), ...await biliFeedResponse.json()]
   } catch { authenticated.value = false }
 }
-onMounted(checkSession)
-onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling() })
+onMounted(() => { checkSession(); window.addEventListener('keydown', handleConfirmKeydown) })
+onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEventListener('keydown', handleConfirmKeydown); if (confirmResolver) closeConfirmDialog(false) })
 </script>
 
 <template>
@@ -513,5 +545,19 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling() })
     </main>
     <div v-if="selectedPlatform" class="modal-backdrop platform-detail-backdrop" @click.self="selectedPlatform = null"><div class="modal platform-detail-modal"><button class="modal-close" @click="selectedPlatform = null">×</button><div class="platform-detail-title"><i :class="['source-icon', selectedPlatform.icon]">{{ selectedPlatform.short }}</i><div><p class="eyebrow">PLATFORM SOURCE</p><h2>{{ selectedPlatform.label }}</h2></div><span :class="['connection-dot', { online: selectedPlatform.configured }]">{{ selectedPlatform.configured ? '已连接' : '未连接' }}</span></div><div class="platform-detail-summary"><div><span>当前账号</span><strong>{{ selectedPlatform.account }}</strong></div><div><span>内容目录</span><strong>{{ selectedPlatform.path }}</strong></div><div><span>作者来源</span><strong>{{ selectedPlatform.feeds.length }} 个</strong></div></div><div class="platform-detail-actions"><button class="secondary-button" @click="managePlatformCredentials(selectedPlatform.key)">{{ selectedPlatform.configured ? '管理账号凭证' : '连接平台账号' }}</button><button v-if="selectedPlatform.key === 'bilibili' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openBilibili()">添加 UP 主</button></div><p v-if="sourceActionMessage" class="success-message source-action-message">{{ sourceActionMessage }}</p><p v-if="settingsError" class="login-error">{{ settingsError }}</p><div class="configured-source-list"><div class="configured-source-heading"><h3>已配置作者</h3><span>{{ selectedPlatform.feeds.length }} 个</span></div><article v-for="feed in selectedPlatform.feeds" :key="feed.id"><i :class="['source-icon', selectedPlatform.icon]">{{ selectedPlatform.short }}</i><div><strong>{{ feed.name }}</strong><span>{{ feed.handle }} · {{ feed.schedule }}</span><small>{{ feed.storagePath || `${selectedPlatform.path}/${feed.name}` }}</small></div><em :class="{ disabled: !feed.enabled }">{{ feed.enabled ? '同步中' : '已停用' }}</em><div class="source-row-actions"><button @click="syncSource(feed)" :disabled="sourceActionBusy === `sync:${feed.id}`">{{ sourceActionBusy === `sync:${feed.id}` ? '拉取中…' : '立即拉取' }}</button><button @click="openFeedSettings(feed)">设置</button><button class="delete-source-button" @click="deleteSource(feed)" :disabled="sourceActionBusy === `delete:${feed.id}`">{{ sourceActionBusy === `delete:${feed.id}` ? '删除中…' : '删除' }}</button></div></article><div v-if="!selectedPlatform.feeds.length" class="platform-empty"><span>＋</span><strong>还没有作者来源</strong><p>{{ selectedPlatform.key === 'bilibili' ? '点击“添加 UP 主”开始订阅图文与专栏。' : '作者订阅连接器将在后续版本开放。' }}</p></div></div></div></div>
     <div v-if="showFeedSettings && selectedFeed" class="modal-backdrop feed-detail-backdrop" @click.self="showFeedSettings = false"><div class="modal feed-settings-modal"><button class="modal-close" @click="showFeedSettings = false">×</button><p class="eyebrow">SOURCE DETAILS</p><h2>{{ selectedFeed.name }}</h2><p>{{ sourceMeta[selectedFeed.source]?.label }} · {{ selectedFeed.handle }}</p><form class="settings-form" @submit.prevent="saveFeedSettings"><label class="switch-row"><span>启用自动同步</span><input v-model="selectedFeed.enabled" type="checkbox"></label><label>执行计划</label><select v-model="selectedFeed.schedule"><option>每 1 小时</option><option>每 6 小时</option><option>每 12 小时</option><option>每天 20:00</option></select><label class="switch-row"><span>首次拉取历史内容</span><input v-model="selectedFeed.includePast" type="checkbox"></label><div v-if="selectedFeed.source === 'bilibili'" class="content-scope"><strong>内容范围</strong><span>图文动态（DRAW）</span><span>专栏（ARTICLE）</span><small>视频及转发视频始终过滤，无法在此开启。</small></div><p v-if="settingsError" class="login-error">{{ settingsError }}</p><button class="login-button" :disabled="settingsBusy">保存来源设置</button></form></div></div>
+    <div v-if="confirmDialog.open" class="confirm-dialog-layer" @click.self="closeConfirmDialog(false)">
+      <section class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
+        <div :class="['confirm-dialog-icon', confirmDialog.tone]">!</div>
+        <div class="confirm-dialog-content">
+          <p class="eyebrow">PLEASE CONFIRM</p>
+          <h3 id="confirm-dialog-title">{{ confirmDialog.title }}</h3>
+          <p>{{ confirmDialog.message }}</p>
+          <div class="confirm-dialog-actions">
+            <button class="secondary-button" type="button" @click="closeConfirmDialog(false)">{{ confirmDialog.cancelText }}</button>
+            <button :class="['dialog-confirm-button', confirmDialog.tone]" type="button" @click="closeConfirmDialog(true)">{{ confirmDialog.confirmText }}</button>
+          </div>
+        </div>
+      </section>
+    </div>
   </div>
 </template>
