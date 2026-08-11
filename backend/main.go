@@ -1180,6 +1180,35 @@ func weiboClient(proxyURL string) (*http.Client, error) {
 	return client, nil
 }
 
+func jsonScalarString(raw json.RawMessage) string {
+	value := strings.TrimSpace(string(raw))
+	if value == "" || value == "null" {
+		return ""
+	}
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return text
+	}
+	return strings.Trim(value, "\"")
+}
+
+func unwrapJSONP(body []byte) []byte {
+	value := strings.TrimSpace(string(body))
+	start, end := strings.IndexByte(value, '{'), strings.LastIndexByte(value, '}')
+	if start >= 0 && end >= start {
+		return []byte(value[start : end+1])
+	}
+	return body
+}
+
+func responseSummary(body []byte) string {
+	value := strings.TrimSpace(string(body))
+	if len(value) > 240 {
+		value = value[:240]
+	}
+	return value
+}
+
 func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 	b.RLock()
 	proxyURL := b.config.ProxyURL
@@ -1238,42 +1267,79 @@ func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, map[string]any{"status": "waiting", "message": payload.Msg})
 			return
 		}
-		loginURL := "https://login.sina.com.cn/sso/login.php?entry=miniblog&returntype=TEXT&crossdomain=1&cdult=3&domain=weibo.com&alt=" + url.QueryEscape(payload.Data.Alt)
+		loginQuery := url.Values{
+			"entry":       {"miniblog"},
+			"returntype":  {"TEXT"},
+			"crossdomain": {"1"},
+			"cdult":       {"3"},
+			"domain":      {"weibo.com"},
+			"alt":         {payload.Data.Alt},
+			"savestate":   {"30"},
+			"client":      {"ssologin.js(v1.4.19)"},
+			"_":           {strconv.FormatInt(time.Now().UnixMilli(), 10)},
+		}
+		loginURL := "https://login.sina.com.cn/sso/login.php?" + loginQuery.Encode()
 		loginRequest, _ := http.NewRequest(http.MethodGet, loginURL, nil)
-		loginRequest.Header.Set("User-Agent", "Mozilla/5.0")
+		loginRequest.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36")
+		loginRequest.Header.Set("Accept", "application/json, text/plain, */*")
+		loginRequest.Header.Set("Referer", "https://weibo.com/")
 		loginResponse, loginErr := client.Do(loginRequest)
 		if loginErr != nil {
-			writeAPIError(w, http.StatusBadGateway, "微博登录票据交换失败")
+			writeAPIError(w, http.StatusBadGateway, "微博登录票据交换失败："+loginErr.Error())
 			return
 		}
 		defer loginResponse.Body.Close()
-		var loginPayload struct {
-			UID         string   `json:"uid"`
-			Nick        string   `json:"nick"`
-			CrossDomain []string `json:"crossDomainUrlList"`
+		loginBody, readErr := io.ReadAll(io.LimitReader(loginResponse.Body, 2<<20))
+		if readErr != nil {
+			writeAPIError(w, http.StatusBadGateway, "无法读取微博登录响应")
+			return
 		}
-		if json.NewDecoder(io.LimitReader(loginResponse.Body, 2<<20)).Decode(&loginPayload) != nil || loginPayload.UID == "" {
-			writeAPIError(w, http.StatusBadGateway, "微博登录响应异常")
+		var loginPayload struct {
+			RetCode     json.RawMessage `json:"retcode"`
+			UID         json.RawMessage `json:"uid"`
+			Nick        string          `json:"nick"`
+			Reason      string          `json:"reason"`
+			CrossDomain []string        `json:"crossDomainUrlList"`
+		}
+		if err := json.Unmarshal(unwrapJSONP(loginBody), &loginPayload); err != nil {
+			writeAPIError(w, http.StatusBadGateway, fmt.Sprintf("微博登录响应无法解析（HTTP %d）：%s", loginResponse.StatusCode, responseSummary(loginBody)))
+			return
+		}
+		loginUID, loginRetCode := jsonScalarString(loginPayload.UID), jsonScalarString(loginPayload.RetCode)
+		if loginResponse.StatusCode != http.StatusOK || (loginRetCode != "" && loginRetCode != "0") || loginUID == "" {
+			detail := loginPayload.Reason
+			if detail == "" {
+				detail = responseSummary(loginBody)
+			}
+			writeAPIError(w, http.StatusBadGateway, fmt.Sprintf("微博登录响应异常（HTTP %d，retcode %s）：%s", loginResponse.StatusCode, loginRetCode, detail))
 			return
 		}
 		for _, crossURL := range loginPayload.CrossDomain {
 			crossRequest, e := http.NewRequest(http.MethodGet, crossURL, nil)
 			if e == nil {
+				crossRequest.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36")
+				crossRequest.Header.Set("Referer", "https://weibo.com/")
 				if crossResponse, e := client.Do(crossRequest); e == nil {
+					_, _ = io.Copy(io.Discard, io.LimitReader(crossResponse.Body, 1<<20))
 					crossResponse.Body.Close()
 				}
 			}
 		}
-		cookieURL, _ := url.Parse("https://weibo.com/")
-		cookieParts := []string{}
-		for _, cookie := range client.Jar.Cookies(cookieURL) {
-			cookieParts = append(cookieParts, cookie.Name+"="+cookie.Value)
+		cookieParts, cookieNames := []string{}, map[string]bool{}
+		for _, rawURL := range []string{"https://weibo.com/", "https://www.weibo.com/", "https://m.weibo.cn/", "https://login.sina.com.cn/", "https://passport.weibo.com/"} {
+			cookieURL, _ := url.Parse(rawURL)
+			for _, cookie := range client.Jar.Cookies(cookieURL) {
+				if !cookieNames[cookie.Name] {
+					cookieNames[cookie.Name] = true
+					cookieParts = append(cookieParts, cookie.Name+"="+cookie.Value)
+				}
+			}
 		}
 		if len(cookieParts) == 0 {
 			writeAPIError(w, http.StatusBadGateway, "微博未返回登录 Cookie")
 			return
 		}
-		credentials := WeiboCredentials{Cookie: strings.Join(cookieParts, "; "), UserID: loginPayload.UID, UserName: loginPayload.Nick}
+		credentials := WeiboCredentials{Cookie: strings.Join(cookieParts, "; "), UserID: loginUID, UserName: loginPayload.Nick}
 		b.Lock()
 		b.config.Weibo = credentials
 		delete(b.weiboQR, id)
