@@ -58,7 +58,7 @@ const posts = ref([])
 const feeds = ref([])
 const postActionBusy = ref('')
 const timelineMessage = ref('')
-const lightbox = ref({ open: false, media: [], index: 0, author: '' })
+const lightbox = ref({ open: false, media: [], index: 0, author: '', scale: 1 })
 
 const fallbackPosts = [
   { id: 'wb-001', source: 'weibo', author: '林间拾光', avatar: 'https://i.pravatar.cc/96?img=47', caption: '把黄昏收藏进今天的相册里。风经过树梢，带来一点夏天的回声。', tags: ['日常', '摄影'], published: new Date(Date.now() - 42 * 60000), liked: true },
@@ -338,12 +338,19 @@ function askConfirm({ title, message, confirmText = '确认', cancelText = '取�
   return new Promise(resolve => { confirmResolver = resolve })
 }
 function openLightbox(post, index) {
-  lightbox.value = { open: true, media: post.media || [], index, author: post.author }
+  lightbox.value = { open: true, media: post.media || [], index, author: post.author, scale: 1 }
 }
-function closeLightbox() { lightbox.value = { open: false, media: [], index: 0, author: '' } }
+function closeLightbox() { lightbox.value = { open: false, media: [], index: 0, author: '', scale: 1 } }
 function moveLightbox(step) {
   const total = lightbox.value.media.length
-  if (total > 1) lightbox.value.index = (lightbox.value.index + step + total) % total
+  if (total > 1) {
+    lightbox.value.index = (lightbox.value.index + step + total) % total
+    lightbox.value.scale = 1
+  }
+}
+function zoomLightbox(event) {
+  const step = event.deltaY < 0 ? 0.15 : -0.15
+  lightbox.value.scale = Math.min(5, Math.max(0.5, Number((lightbox.value.scale + step).toFixed(2))))
 }
 function handleGlobalKeydown(event) {
   if (lightbox.value.open) {
@@ -574,10 +581,10 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
         <div v-if="!feeds.length" class="empty">还没有订阅作者，请先添加 UP 主或微博博主。</div>
       </section>
     </main>
-    <div v-if="lightbox.open" class="lightbox-layer" role="dialog" aria-modal="true" :aria-label="`${lightbox.author} 的动态图片`" @click.self="closeLightbox">
+    <div v-if="lightbox.open" class="lightbox-layer" role="dialog" aria-modal="true" :aria-label="`${lightbox.author} 的动态图片`" @click.self="closeLightbox" @wheel.prevent="zoomLightbox">
       <button class="lightbox-close" type="button" title="关闭大图" @click="closeLightbox">×</button>
       <button v-if="lightbox.media.length > 1" class="lightbox-nav lightbox-prev" type="button" title="上一张" @click="moveLightbox(-1)">‹</button>
-      <figure><img :src="lightbox.media[lightbox.index]" :alt="`${lightbox.author} 的动态图片 ${lightbox.index + 1}`"><figcaption v-if="lightbox.media.length > 1">{{ lightbox.index + 1 }} / {{ lightbox.media.length }}</figcaption></figure>
+      <figure><img :src="lightbox.media[lightbox.index]" :alt="`${lightbox.author} 的动态图片 ${lightbox.index + 1}`" :style="{ transform: `scale(${lightbox.scale})` }"><figcaption>{{ lightbox.media.length > 1 ? `${lightbox.index + 1} / ${lightbox.media.length} · ` : '' }}{{ Math.round(lightbox.scale * 100) }}%</figcaption></figure>
       <button v-if="lightbox.media.length > 1" class="lightbox-nav lightbox-next" type="button" title="下一张" @click="moveLightbox(1)">›</button>
     </div>
     <button v-if="!showSettings" class="add-fab" @click="showAdd = true">＋ <span>添加来源</span>
