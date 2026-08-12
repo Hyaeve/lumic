@@ -390,7 +390,14 @@ async function deletePost(post) {
     window.setTimeout(() => { if (timelineMessage.value === '动态已从时间线删除') timelineMessage.value = '' }, 2500)
   } catch (error) { timelineMessage.value = error.message } finally { postActionBusy.value = '' }
 }
-function closeSettingsPage() { showSettings.value = false; selectedPlatform.value = null; activeNav.value = activeSource.value === 'all' ? 'all' : 'source' }
+function navigateTo(nav, source = activeSource.value) {
+  showSettings.value = false
+  selectedPlatform.value = null
+  showFeedSettings.value = false
+  activeNav.value = nav
+  activeSource.value = source
+}
+function closeSettingsPage() { navigateTo(activeSource.value === 'all' ? 'all' : 'source') }
 function formatFans(count) { return count >= 10000 ? `${(count / 10000).toFixed(1)}万` : count }
 function platformEmptyMessage(platformKey) {
   if (platformKey === 'bilibili') return '点击“添加 UP 主”开始订阅图文与专栏。'
@@ -440,17 +447,17 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
 <small>拾光</small>
 </div>
       <nav class="main-nav">
-        <button :class="{ active: activeNav === 'all' }" @click="activeNav = 'all'; activeSource = 'all'">
+        <button :class="{ active: activeNav === 'all' }" @click="navigateTo('all', 'all')">
 <span>⌂</span> 全部动态 <b>{{ posts.length }}</b>
 </button>
-        <button :class="{ active: activeNav === 'liked' }" @click="activeNav = 'liked'; activeSource = 'weibo'">
+        <button :class="{ active: activeNav === 'liked' }" @click="navigateTo('liked', 'weibo')">
 <span>♡</span> 我的点赞 <b>24</b>
 </button>
-        <button :class="{ active: activeNav === 'pulls' }" @click="activeNav = 'pulls'">
+        <button :class="{ active: activeNav === 'pulls' }" @click="navigateTo('pulls')">
 <span>↻</span> 拉取列表 <b>{{ feeds.length }}</b>
 </button>
         <div class="nav-label">来源</div>
-        <button v-for="(meta, key) in sourceMeta" :key="key" :class="{ active: activeSource === key }" @click="activeNav = 'source'; activeSource = key">
+        <button v-for="(meta, key) in sourceMeta" :key="key" :class="{ active: activeSource === key }" @click="navigateTo('source', key)">
 <img class="source-icon" :src="meta.image" :alt="`${meta.label}图标`">{{ meta.label }} <b>{{ posts.filter(p => p.source === key).length }}</b>
 </button>
       </nav>
