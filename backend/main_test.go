@@ -11,6 +11,44 @@ import (
 	"testing"
 )
 
+func TestDownloadRemoteImageAndFlowPath(t *testing.T) {
+	root := t.TempDir()
+	oldFlowRoot := flowRoot
+	flowRoot = root
+	t.Cleanup(func() { flowRoot = oldFlowRoot })
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Referer") != "https://www.bilibili.com/" || !strings.Contains(r.Header.Get("Cookie"), "SESSDATA=test") {
+			http.Error(w, "missing anti-hotlink headers", http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write([]byte("png-image"))
+	}))
+	defer server.Close()
+	targetBase := filepath.Join(sourceStoragePath(SourceBilibili, "测试/UP"), "avatar")
+	localPath, err := downloadRemoteImage(server.Client(), server.URL+"/avatar", targetBase, "https://www.bilibili.com/", "SESSDATA=test")
+	if err != nil {
+		t.Fatalf("download image: %v", err)
+	}
+	if _, err := os.Stat(localPath); err != nil {
+		t.Fatalf("downloaded image missing: %v", err)
+	}
+	if got := flowPublicPath(SourceBilibili, "测试/UP", filepath.Base(localPath)); got != "/flow/bilibili/%E6%B5%8B%E8%AF%95_UP/avatar.png" {
+		t.Fatalf("unexpected public path: %s", got)
+	}
+}
+
+func TestMergePostsUpdatesArchivedMedia(t *testing.T) {
+	store := &Store{posts: []Post{{ID: "post-1", Source: SourceBilibili, Author: "UP", Media: []string{"https://remote/image.jpg"}, Liked: true}}}
+	added, err := store.mergePosts([]Post{{ID: "post-1", Source: SourceBilibili, Author: "UP", Media: []string{"/flow/bilibili/UP/post-1.jpg"}}})
+	if err != nil || added != 0 {
+		t.Fatalf("merge existing post: added=%d err=%v", added, err)
+	}
+	if store.posts[0].Media[0] != "/flow/bilibili/UP/post-1.jpg" || !store.posts[0].Liked {
+		t.Fatalf("existing post was not updated correctly: %#v", store.posts[0])
+	}
+}
+
 func decodeTestResponse(t *testing.T, recorder *httptest.ResponseRecorder) map[string]any {
 	t.Helper()
 	var payload map[string]any
