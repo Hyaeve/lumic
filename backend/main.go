@@ -2065,22 +2065,60 @@ func weiboClient(proxyURL string) (*http.Client, error) {
 	return client, nil
 }
 
+func normalizeWeiboCookie(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if index := strings.Index(raw, "\n"); index >= 0 {
+		raw = raw[:index]
+	}
+	if strings.HasPrefix(strings.ToLower(raw), "cookie:") {
+		raw = strings.TrimSpace(raw[len("cookie:"):])
+	}
+	parts, seen := make([]string, 0), make(map[string]bool)
+	for _, item := range strings.Split(raw, ";") {
+		pair := strings.SplitN(strings.TrimSpace(item), "=", 2)
+		if len(pair) != 2 || strings.TrimSpace(pair[0]) == "" {
+			continue
+		}
+		name := strings.TrimSpace(pair[0])
+		if !seen[strings.ToLower(name)] {
+			seen[strings.ToLower(name)] = true
+			parts = append(parts, name+"="+strings.TrimSpace(pair[1]))
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
+func weiboCookieValue(cookie, name string) string {
+	for _, item := range strings.Split(cookie, ";") {
+		pair := strings.SplitN(strings.TrimSpace(item), "=", 2)
+		if len(pair) == 2 && strings.EqualFold(pair[0], name) {
+			return pair[1]
+		}
+	}
+	return ""
+}
+
+func weiboRequestHeaders(request *http.Request, cookie string) {
+	origin := "https://weibo.com"
+	if strings.EqualFold(request.URL.Hostname(), "m.weibo.cn") {
+		origin = "https://m.weibo.cn"
+	}
+	request.Header.Set("Accept", "application/json, text/plain, */*")
+	request.Header.Set("Cookie", cookie)
+	request.Header.Set("Referer", origin+"/")
+	request.Header.Set("Origin", origin)
+	request.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36")
+	if token := weiboCookieValue(cookie, "XSRF-TOKEN"); token != "" {
+		request.Header.Set("X-XSRF-TOKEN", token)
+	}
+}
+
 func weiboRawRequest(endpoint string, credentials WeiboCredentials, proxyURL string) (map[string]any, int, error) {
 	request, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, 0, err
 	}
-	request.Header.Set("Accept", "application/json, text/plain, */*")
-	request.Header.Set("Cookie", credentials.Cookie)
-	request.Header.Set("Referer", "https://weibo.com/")
-	request.Header.Set("Origin", "https://weibo.com")
-	request.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36")
-	for _, cookie := range strings.Split(credentials.Cookie, ";") {
-		parts := strings.SplitN(strings.TrimSpace(cookie), "=", 2)
-		if len(parts) == 2 && strings.EqualFold(parts[0], "XSRF-TOKEN") {
-			request.Header.Set("X-XSRF-TOKEN", parts[1])
-		}
-	}
+	weiboRequestHeaders(request, credentials.Cookie)
 	client, err := externalHTTPClient(proxyURL)
 	if err != nil {
 		return nil, 0, err
@@ -2094,17 +2132,24 @@ func weiboRawRequest(endpoint string, credentials WeiboCredentials, proxyURL str
 	if readErr != nil {
 		return nil, response.StatusCode, readErr
 	}
+	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
+		return nil, response.StatusCode, fmt.Errorf("微博登录 Cookie 已失效或当前出口被限制（HTTP %d）", response.StatusCode)
+	}
 	if response.StatusCode != http.StatusOK {
-		return nil, response.StatusCode, fmt.Errorf("微博接口返回 HTTP %d，请检查登录状态或代理出口", response.StatusCode)
+		return nil, response.StatusCode, fmt.Errorf("微博接口返回 HTTP %d，请检查代理出口", response.StatusCode)
 	}
 	var payload map[string]any
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
 	if err := decoder.Decode(&payload); err != nil {
-		if bytes.Contains(bytes.ToLower(body), []byte("<html")) || bytes.Contains(bytes.ToLower(body), []byte("<!doctype")) {
-			return nil, response.StatusCode, errors.New("微博返回了网页拦截页，请重新扫码登录或更换代理出口")
+		lowerBody := bytes.ToLower(body)
+		if bytes.Contains(lowerBody, []byte("passport.weibo")) || bytes.Contains(lowerBody, []byte("login.sina")) {
+			return nil, response.StatusCode, errors.New("微博登录 Cookie 已失效，请重新扫码或导入浏览器 Cookie")
 		}
-		return nil, response.StatusCode, errors.New("微博接口返回格式异常，请重新扫码登录")
+		if bytes.Contains(lowerBody, []byte("<html")) || bytes.Contains(lowerBody, []byte("<!doctype")) {
+			return nil, response.StatusCode, errors.New("微博当前出口触发网页风控，请导入同一出口的浏览器 Cookie 或更换代理出口")
+		}
+		return nil, response.StatusCode, errors.New("微博接口返回了非 JSON 内容，请检查 Cookie 与代理出口")
 	}
 	return payload, response.StatusCode, nil
 }
@@ -2425,15 +2470,75 @@ func responseSummary(body []byte) string {
 	return value
 }
 
+func validateWeiboCredentials(cookie, userID, proxyURL string) (WeiboCredentials, error) {
+	cookie, userID = normalizeWeiboCookie(cookie), strings.TrimSpace(userID)
+	if cookie == "" || userID == "" {
+		return WeiboCredentials{}, errors.New("完整 Cookie 和微博 UID 均不能为空")
+	}
+	if weiboCookieValue(cookie, "SUB") == "" && weiboCookieValue(cookie, "SUBP") == "" {
+		return WeiboCredentials{}, errors.New("Cookie 缺少 SUB/SUBP 登录凭证，请从已登录微博的浏览器请求头中复制完整 Cookie")
+	}
+	endpoints := []string{
+		"https://weibo.com/ajax/profile/info?uid=" + url.QueryEscape(userID),
+		"https://m.weibo.cn/api/container/getIndex?type=uid&value=" + url.QueryEscape(userID) + "&containerid=" + url.QueryEscape("100505"+userID),
+	}
+	credentials := WeiboCredentials{Cookie: cookie, UserID: userID}
+	var lastErr error
+	for _, endpoint := range endpoints {
+		payload, _, err := weiboRawRequest(endpoint, credentials, proxyURL)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		users := make([]WeiboUser, 0)
+		collectWeiboUsers(payload, &users, make(map[string]bool))
+		for _, user := range users {
+			if user.UserID == userID {
+				credentials.UserName = user.Name
+				return credentials, nil
+			}
+		}
+		lastErr = errors.New("微博接口未返回指定 UID 的账号资料")
+	}
+	return WeiboCredentials{}, fmt.Errorf("微博 Cookie 验证失败：%w", lastErr)
+}
+
 func (b *BilibiliStore) weiboAccountHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	b.RLock()
+	current, proxyURL := b.config.Weibo, b.config.ProxyURL
+	b.RUnlock()
+	if r.Method == http.MethodGet {
+		writeJSON(w, map[string]any{"configured": current.Cookie != "", "userId": current.UserID, "userName": current.UserName})
+		return
+	}
+	if r.Method != http.MethodPut {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	b.RLock()
-	credentials := b.config.Weibo
-	b.RUnlock()
-	writeJSON(w, map[string]any{"configured": credentials.Cookie != "", "userId": credentials.UserID, "userName": credentials.UserName})
+	var input struct {
+		Cookie string `json:"cookie"`
+		UserID string `json:"userId"`
+	}
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10)).Decode(&input) != nil {
+		writeAPIError(w, http.StatusBadRequest, "微博凭证格式无效")
+		return
+	}
+	credentials, err := validateWeiboCredentials(input.Cookie, input.UserID, proxyURL)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	b.Lock()
+	b.config.Weibo = credentials
+	b.Unlock()
+	if err := b.save(); err != nil {
+		b.Lock()
+		b.config.Weibo = current
+		b.Unlock()
+		writeAPIError(w, http.StatusInternalServerError, "无法保存微博凭证")
+		return
+	}
+	writeJSON(w, map[string]any{"configured": true, "userId": credentials.UserID, "userName": credentials.UserName})
 }
 
 func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
@@ -2601,6 +2706,15 @@ func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		credentials := WeiboCredentials{Cookie: strings.Join(cookieParts, "; "), UserID: loginUID, UserName: loginPayload.Nick}
+		validated, validateErr := validateWeiboCredentials(credentials.Cookie, credentials.UserID, proxyURL)
+		if validateErr != nil {
+			writeAPIError(w, http.StatusBadGateway, "微博扫码登录已确认，但当前出口无法使用该会话："+validateErr.Error())
+			return
+		}
+		if validated.UserName == "" {
+			validated.UserName = credentials.UserName
+		}
+		credentials = validated
 		b.Lock()
 		b.config.Weibo = credentials
 		delete(b.weiboQR, id)

@@ -68,6 +68,29 @@ func decodeTestResponse(t *testing.T, recorder *httptest.ResponseRecorder) map[s
 	return payload
 }
 
+func TestNormalizeWeiboCookieAndRequestHeaders(t *testing.T) {
+	cookie := normalizeWeiboCookie("Cookie: SUB=first; XSRF-TOKEN=token; sub=duplicate; empty\nignored")
+	if cookie != "SUB=first; XSRF-TOKEN=token" {
+		t.Fatalf("unexpected normalized cookie: %q", cookie)
+	}
+	if got := weiboCookieValue(cookie, "xsrf-token"); got != "token" {
+		t.Fatalf("unexpected cookie value: %q", got)
+	}
+	mobileRequest := httptest.NewRequest(http.MethodGet, "https://m.weibo.cn/api/container/getIndex", nil)
+	weiboRequestHeaders(mobileRequest, cookie)
+	if mobileRequest.Header.Get("Origin") != "https://m.weibo.cn" || mobileRequest.Header.Get("Referer") != "https://m.weibo.cn/" {
+		t.Fatalf("unexpected mobile headers: origin=%q referer=%q", mobileRequest.Header.Get("Origin"), mobileRequest.Header.Get("Referer"))
+	}
+	if mobileRequest.Header.Get("X-XSRF-TOKEN") != "token" {
+		t.Fatalf("missing XSRF header: %q", mobileRequest.Header.Get("X-XSRF-TOKEN"))
+	}
+	webRequest := httptest.NewRequest(http.MethodGet, "https://weibo.com/ajax/profile/info", nil)
+	weiboRequestHeaders(webRequest, cookie)
+	if webRequest.Header.Get("Origin") != "https://weibo.com" || webRequest.Header.Get("Referer") != "https://weibo.com/" {
+		t.Fatalf("unexpected web headers: origin=%q referer=%q", webRequest.Header.Get("Origin"), webRequest.Header.Get("Referer"))
+	}
+}
+
 func TestWeiboJSONPAndCrossDomainURL(t *testing.T) {
 	body := []byte(`STK_123({"retcode":20000000,"data":{"alt":"ticket"}})`)
 	var payload struct {

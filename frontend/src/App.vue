@@ -49,6 +49,7 @@ const pixivRefreshToken = ref('')
 const pixivBusy = ref(false)
 const pixivError = ref('')
 const weiboAccount = ref({ configured: false, userId: '', userName: '' })
+const weiboCredentials = ref({ cookie: '', userId: '' })
 const weiboQR = ref(null)
 const weiboBusy = ref(false)
 const weiboError = ref('')
@@ -225,6 +226,15 @@ async function startWeiboQR() {
     if (!response.ok) throw new Error(await responseError(response, '无法获取微博二维码'))
     weiboQR.value = await response.json(); weiboPollTimer = setTimeout(pollWeiboQR, 1500)
   } catch (error) { weiboError.value = error.message; weiboBusy.value = false }
+}
+async function saveWeiboAccount() {
+  weiboBusy.value = true; weiboError.value = ''
+  try {
+    const response = await fetch('/api/weibo/account', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cookie: weiboCredentials.value.cookie.trim(), userId: weiboCredentials.value.userId.trim() }) })
+    if (!response.ok) throw new Error(await responseError(response, '微博 Cookie 验证失败'))
+    weiboAccount.value = await response.json()
+    weiboCredentials.value = { cookie: '', userId: '' }
+  } catch (error) { weiboError.value = error.message } finally { weiboBusy.value = false }
 }
 async function searchBilibili() {
   if (!biliKeyword.value.trim()) return
@@ -693,9 +703,9 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
               <details class="manual-credential"><summary>高级：手动导入 Cookie</summary><form class="settings-form bili-credentials" @submit.prevent="saveBilibiliAccount" autocomplete="off"><label>完整 Cookie</label><textarea v-model="biliCredentials.cookie" rows="4" placeholder="仅在扫码不可用时使用"></textarea><label>SESSDATA</label><input v-model="biliCredentials.SESSDATA" type="password"><label>bili_jct</label><input v-model="biliCredentials.bili_jct" type="password"><label>buvid3</label><input v-model="biliCredentials.buvid3" type="password"><label>DedeUserID</label><input v-model="biliCredentials.DedeUserID" inputmode="numeric"><button class="login-button" :disabled="biliBusy">验证并保存手动凭证</button></form></details><p v-if="biliError" class="login-error bili-error">{{ biliError }}</p>
             </article>
             <article class="platform-auth-card weibo">
-              <header class="platform-auth-head"><img class="source-icon" :src="sourceMeta.weibo.image" alt="微博图标"><div><h3>微博</h3><span>客户端扫码登录</span></div><em :class="['connection-dot', { online: weiboAccount.configured }]">{{ weiboAccount.configured ? '已连接' : '未连接' }}</em></header>
-              <p v-if="weiboAccount.configured">当前账号：{{ weiboAccount.userName || `UID ${weiboAccount.userId}` }}。</p><p v-else>使用微博客户端扫描二维码登录。</p>
-              <div v-if="weiboQR" class="weibo-qr"><img :src="weiboQR.image.startsWith('//') ? `https:${weiboQR.image}` : weiboQR.image" alt="微博登录二维码"><span>请在二维码过期前扫码并确认</span></div><button class="login-button platform-login-button" type="button" @click="startWeiboQR" :disabled="weiboBusy && !weiboQR">{{ weiboQR ? '刷新二维码' : weiboBusy ? '获取中…' : weiboAccount.configured ? '扫码切换微博账号' : '扫码连接微博' }}</button><p v-if="weiboError" class="login-error">{{ weiboError }}</p>
+              <header class="platform-auth-head"><img class="source-icon" :src="sourceMeta.weibo.image" alt="微博图标"><div><h3>微博</h3><span>扫码或 Cookie 登录</span></div><em :class="['connection-dot', { online: weiboAccount.configured }]">{{ weiboAccount.configured ? '已连接' : '未连接' }}</em></header>
+              <p v-if="weiboAccount.configured">当前账号：{{ weiboAccount.userName || `UID ${weiboAccount.userId}` }}。</p><p v-else>优先使用微博客户端扫码，也可导入浏览器登录 Cookie。</p>
+              <div v-if="weiboQR" class="weibo-qr"><img :src="weiboQR.image.startsWith('//') ? `https:${weiboQR.image}` : weiboQR.image" alt="微博登录二维码"><span>请在二维码过期前扫码并确认</span></div><button class="login-button platform-login-button" type="button" @click="startWeiboQR" :disabled="weiboBusy && !weiboQR">{{ weiboQR ? '刷新二维码' : weiboBusy ? '获取中…' : weiboAccount.configured ? '扫码切换微博账号' : '扫码连接微博' }}</button><details class="manual-credential"><summary>高级：手动导入 Cookie</summary><form class="settings-form bili-credentials" @submit.prevent="saveWeiboAccount" autocomplete="off"><label>微博 UID</label><input v-model="weiboCredentials.userId" inputmode="numeric" required placeholder="个人主页地址中的数字 UID"><label>完整 Cookie</label><textarea v-model="weiboCredentials.cookie" rows="4" required placeholder="可粘贴浏览器请求头中的 Cookie: 完整内容"></textarea><p class="credential-note">请使用已成功打开微博的同一网络出口获取 Cookie；保存前会验证账号资料，不会回显原始 Cookie。</p><button class="login-button" :disabled="weiboBusy">{{ weiboBusy ? '验证中…' : '验证并保存 Cookie' }}</button></form></details><p v-if="weiboError" class="login-error">{{ weiboError }}</p>
             </article>
             <article class="platform-auth-card pixiv">
               <header class="platform-auth-head"><img class="source-icon" :src="sourceMeta.pixiv.image" alt="Pixiv图标"><div><h3>Pixiv</h3><span>OAuth refresh_token</span></div><em :class="['connection-dot', { online: pixivAccount.configured }]">{{ pixivAccount.configured ? '已连接' : '未连接' }}</em></header>
