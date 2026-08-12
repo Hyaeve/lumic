@@ -38,6 +38,16 @@ func TestDownloadRemoteImageAndFlowPath(t *testing.T) {
 	}
 }
 
+func TestBilibiliCaptionPreservesText(t *testing.T) {
+	caption := firstNonEmptyRemoteText("\n第一行\n第二行\n")
+	if caption != "第一行\n第二行" {
+		t.Fatalf("caption lost line breaks: %q", caption)
+	}
+	if got := firstNonEmptyRemoteText("", "标题"); got != "标题" {
+		t.Fatalf("caption fallback: %q", got)
+	}
+}
+
 func TestMergePostsUpdatesArchivedMedia(t *testing.T) {
 	store := &Store{posts: []Post{{ID: "post-1", Source: SourceBilibili, Author: "UP", Media: []string{"https://remote/image.jpg"}, Liked: true}}}
 	added, err := store.mergePosts([]Post{{ID: "post-1", Source: SourceBilibili, Author: "UP", Media: []string{"/flow/bilibili/UP/post-1.jpg"}}})

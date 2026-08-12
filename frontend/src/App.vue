@@ -58,6 +58,7 @@ const posts = ref([])
 const feeds = ref([])
 const postActionBusy = ref('')
 const timelineMessage = ref('')
+const lightbox = ref({ open: false, media: [], index: 0, author: '' })
 
 const fallbackPosts = [
   { id: 'wb-001', source: 'weibo', author: '林间拾光', avatar: 'https://i.pravatar.cc/96?img=47', caption: '把黄昏收藏进今天的相册里。风经过树梢，带来一点夏天的回声。', tags: ['日常', '摄影'], published: new Date(Date.now() - 42 * 60000), liked: true },
@@ -336,7 +337,21 @@ function askConfirm({ title, message, confirmText = '确认', cancelText = '取�
   confirmDialog.value = { open: true, title, message, confirmText, cancelText, tone }
   return new Promise(resolve => { confirmResolver = resolve })
 }
-function handleConfirmKeydown(event) {
+function openLightbox(post, index) {
+  lightbox.value = { open: true, media: post.media || [], index, author: post.author }
+}
+function closeLightbox() { lightbox.value = { open: false, media: [], index: 0, author: '' } }
+function moveLightbox(step) {
+  const total = lightbox.value.media.length
+  if (total > 1) lightbox.value.index = (lightbox.value.index + step + total) % total
+}
+function handleGlobalKeydown(event) {
+  if (lightbox.value.open) {
+    if (event.key === 'Escape') closeLightbox()
+    if (event.key === 'ArrowLeft') moveLightbox(-1)
+    if (event.key === 'ArrowRight') moveLightbox(1)
+    return
+  }
   if (!confirmDialog.value.open) return
   if (event.key === 'Escape') closeConfirmDialog(false)
   if (event.key === 'Enter') closeConfirmDialog(true)
@@ -392,8 +407,8 @@ async function checkSession() {
     if (feedResponse.ok && biliFeedResponse.ok && weiboFeedResponse.ok) feeds.value = [...await feedResponse.json(), ...await biliFeedResponse.json(), ...await weiboFeedResponse.json()]
   } catch { authenticated.value = false }
 }
-onMounted(() => { checkSession(); window.addEventListener('keydown', handleConfirmKeydown) })
-onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEventListener('keydown', handleConfirmKeydown); if (confirmResolver) closeConfirmDialog(false) })
+onMounted(() => { checkSession(); window.addEventListener('keydown', handleGlobalKeydown) })
+onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEventListener('keydown', handleGlobalKeydown); if (confirmResolver) closeConfirmDialog(false) })
 </script>
 
 <template>
@@ -519,9 +534,9 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
 <span :class="['source-pill', 'post-source-pill', sourceMeta[post.source].color]">
 <img class="source-icon" :src="sourceMeta[post.source].image" :alt="`${sourceMeta[post.source].label}图标`">{{ sourceMeta[post.source].label }}</span>
 </div>
-<p class="caption">{{ post.caption }}</p>
-<div v-if="post.media?.length" class="media-grid">
-<img v-for="media in post.media" :key="media" :src="media" alt="动态图片">
+<p v-if="post.caption" class="caption">{{ post.caption }}</p>
+<div v-if="post.media?.length" :class="['media-grid', `media-count-${Math.min(post.media.length, 4)}`]">
+<button v-for="(media, mediaIndex) in post.media" :key="media" type="button" :aria-label="`查看 ${post.author} 的第 ${mediaIndex + 1} 张图片`" @click="openLightbox(post, mediaIndex)"><img :src="media" alt=""></button>
 </div>
 <div class="tag-row">
 <span v-for="tag in post.tags" :key="tag"># {{ tag }}</span>
@@ -552,6 +567,12 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
         <div v-if="!feeds.length" class="empty">还没有订阅作者，请先添加 UP 主或微博博主。</div>
       </section>
     </main>
+    <div v-if="lightbox.open" class="lightbox-layer" role="dialog" aria-modal="true" :aria-label="`${lightbox.author} 的动态图片`" @click.self="closeLightbox">
+      <button class="lightbox-close" type="button" title="关闭大图" @click="closeLightbox">×</button>
+      <button v-if="lightbox.media.length > 1" class="lightbox-nav lightbox-prev" type="button" title="上一张" @click="moveLightbox(-1)">‹</button>
+      <figure><img :src="lightbox.media[lightbox.index]" :alt="`${lightbox.author} 的动态图片 ${lightbox.index + 1}`"><figcaption v-if="lightbox.media.length > 1">{{ lightbox.index + 1 }} / {{ lightbox.media.length }}</figcaption></figure>
+      <button v-if="lightbox.media.length > 1" class="lightbox-nav lightbox-next" type="button" title="下一张" @click="moveLightbox(1)">›</button>
+    </div>
     <button v-if="!showSettings" class="add-fab" @click="showAdd = true">＋ <span>添加来源</span>
 </button>
     <div v-if="showAdd" class="modal-backdrop" @click.self="showAdd = false">

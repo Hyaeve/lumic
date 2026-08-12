@@ -1314,6 +1314,16 @@ func cleanRemoteText(value string) string {
 	return strings.TrimSpace(html.UnescapeString(htmlTagPattern.ReplaceAllString(value, "")))
 }
 
+func firstNonEmptyRemoteText(values ...string) string {
+	for _, value := range values {
+		value = cleanRemoteText(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func mediaFileExtension(remoteURL, contentType string) string {
 	extension := strings.ToLower(filepath.Ext(path.Base(strings.Split(remoteURL, "?")[0])))
 	if matched, _ := regexp.MatchString(`^\.(jpe?g|png|gif|webp|avif)$`, extension); matched {
@@ -1489,10 +1499,16 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig) ([]Post, error) {
 								} `json:"items"`
 							} `json:"draw"`
 							Article *struct {
-								Covers []string `json:"covers"`
+								Title   string   `json:"title"`
+								Desc    string   `json:"desc"`
+								Content string   `json:"content"`
+								Covers  []string `json:"covers"`
 							} `json:"article"`
 							Opus *struct {
-								Pics []struct {
+								Title   string `json:"title"`
+								Summary string `json:"summary"`
+								Content string `json:"content"`
+								Pics    []struct {
 									URL string `json:"url"`
 								} `json:"pics"`
 							} `json:"opus"`
@@ -1534,6 +1550,12 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig) ([]Post, error) {
 				for _, image := range major.Opus.Pics {
 					media = append(media, normalizeRemoteImage(image.URL))
 				}
+			}
+			if caption == "" && major.Article != nil {
+				caption = firstNonEmptyRemoteText(major.Article.Content, major.Article.Desc, major.Article.Title)
+			}
+			if caption == "" && major.Opus != nil {
+				caption = firstNonEmptyRemoteText(major.Opus.Content, major.Opus.Summary, major.Opus.Title)
 			}
 		}
 		publishedAt := parseRemoteTimestamp(item.Modules.Author.PubTs)
