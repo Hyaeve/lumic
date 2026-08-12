@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDownloadRemoteImageAndFlowPath(t *testing.T) {
@@ -56,6 +57,49 @@ func TestMergePostsUpdatesArchivedMedia(t *testing.T) {
 	}
 	if store.posts[0].Media[0] != "/flow/bilibili/UP/post-1.jpg" || !store.posts[0].Liked {
 		t.Fatalf("existing post was not updated correctly: %#v", store.posts[0])
+	}
+}
+
+func TestPostsAfterUsesStrictIncrementalBoundary(t *testing.T) {
+	boundary := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	posts := []Post{
+		{ID: "new", Published: boundary.Add(time.Second)},
+		{ID: "same", Published: boundary},
+		{ID: "old", Published: boundary.Add(-time.Second)},
+	}
+	filtered := postsAfter(posts, boundary)
+	if len(filtered) != 1 || filtered[0].ID != "new" {
+		t.Fatalf("incremental sync kept the wrong posts: %#v", filtered)
+	}
+	all := postsAfter(posts, time.Time{})
+	if len(all) != len(posts) {
+		t.Fatalf("full sync boundary unexpectedly filtered posts: %#v", all)
+	}
+}
+
+func TestPostsHandlerPersistsLikedState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "content.json")
+	store := &Store{posts: []Post{{ID: "post-1", Author: "作者"}}, feeds: []SourceConfig{}, file: path}
+	request := httptest.NewRequest(http.MethodPatch, "/api/posts?id=post-1", strings.NewReader(`{"liked":true}`))
+	recorder := httptest.NewRecorder()
+	store.postsHandler(recorder, request)
+	if recorder.Code != http.StatusOK || !store.posts[0].Liked {
+		t.Fatalf("like request failed: status=%d post=%#v body=%s", recorder.Code, store.posts[0], recorder.Body.String())
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read persisted content: %v", err)
+	}
+	var content ContentData
+	if err := json.Unmarshal(data, &content); err != nil || len(content.Posts) != 1 || !content.Posts[0].Liked {
+		t.Fatalf("liked state was not persisted: err=%v content=%#v", err, content)
+	}
+
+	missingRequest := httptest.NewRequest(http.MethodPatch, "/api/posts?id=missing", strings.NewReader(`{"liked":true}`))
+	missingRecorder := httptest.NewRecorder()
+	store.postsHandler(missingRecorder, missingRequest)
+	if missingRecorder.Code != http.StatusNotFound {
+		t.Fatalf("missing post returned status %d", missingRecorder.Code)
 	}
 }
 

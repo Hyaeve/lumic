@@ -38,6 +38,7 @@ const (
 	SourceWeibo    Source = "weibo"
 	SourcePixiv    Source = "pixiv"
 	SourceBilibili Source = "bilibili"
+	SourceTwitter  Source = "twitter"
 )
 
 type Post struct {
@@ -303,7 +304,7 @@ func initializeFlowStorage() error {
 	if value := strings.TrimSpace(os.Getenv("LUMIC_FLOW_ROOT")); value != "" {
 		flowRoot = value
 	}
-	for _, source := range []Source{SourceBilibili, SourcePixiv, SourceWeibo} {
+	for _, source := range []Source{SourceBilibili, SourcePixiv, SourceWeibo, SourceTwitter} {
 		if err := os.MkdirAll(filepath.Join(flowRoot, string(source)), 0755); err != nil {
 			return fmt.Errorf("create %s flow directory: %w", source, err)
 		}
@@ -570,7 +571,6 @@ func demoStore() *Store {
 			{ID: "px-005", Source: SourcePixiv, Author: "Mori", Avatar: "https://i.pravatar.cc/96?img=20", Caption: "夏日习作 #sketch #summer", Tags: []string{"sketch", "summer"}, Published: now.Add(-24 * time.Hour)},
 		},
 		feeds: []SourceConfig{
-			{ID: "feed-1", Source: SourceWeibo, Name: "我的点赞", Handle: "个人账号", Enabled: true, IncludePast: false, Schedule: "每 6 小时", LastSyncedAt: now.Add(-42 * time.Minute)},
 			{ID: "feed-2", Source: SourceWeibo, Name: "建筑可视化研究所", Handle: "@arch_visual", Enabled: true, Schedule: "每天 09:00", LastSyncedAt: now.Add(-3 * time.Hour)},
 			{ID: "feed-3", Source: SourcePixiv, Name: "Aoi Sora", Handle: "@aoisora", Enabled: true, Schedule: "每 12 小时", LastSyncedAt: now.Add(-2 * time.Hour)},
 			{ID: "feed-4", Source: SourceBilibili, Name: "慢慢生活研究所", Handle: "UID 184729", Enabled: false, Schedule: "每天 20:00", LastSyncedAt: now.Add(-24 * time.Hour)},
@@ -665,6 +665,24 @@ func (s *Store) mergePosts(incoming []Post) (int, error) {
 	return added, nil
 }
 
+func (s *Store) setPostLiked(id string, liked bool) (Post, error) {
+	s.Lock()
+	defer s.Unlock()
+	for index := range s.posts {
+		if s.posts[index].ID != id {
+			continue
+		}
+		previous := s.posts[index].Liked
+		s.posts[index].Liked = liked
+		if err := s.saveLocked(); err != nil {
+			s.posts[index].Liked = previous
+			return Post{}, err
+		}
+		return s.posts[index], nil
+	}
+	return Post{}, os.ErrNotExist
+}
+
 func postsEqual(left, right Post) bool {
 	leftJSON, leftErr := json.Marshal(left)
 	rightJSON, rightErr := json.Marshal(right)
@@ -715,6 +733,31 @@ func deletePostMedia(media []string) error {
 }
 
 func (s *Store) postsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPatch {
+		id := strings.TrimSpace(r.URL.Query().Get("id"))
+		if id == "" {
+			writeAPIError(w, http.StatusBadRequest, "动态 ID 不能为空")
+			return
+		}
+		var input struct {
+			Liked *bool `json:"liked"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&input); err != nil || input.Liked == nil {
+			writeAPIError(w, http.StatusBadRequest, "请提供有效的点赞状态")
+			return
+		}
+		post, err := s.setPostLiked(id, *input.Liked)
+		if errors.Is(err, os.ErrNotExist) {
+			writeAPIError(w, http.StatusNotFound, "动态不存在或已删除")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "无法持久化点赞状态")
+			return
+		}
+		writeJSON(w, post)
+		return
+	}
 	if r.Method == http.MethodDelete {
 		id := strings.TrimSpace(r.URL.Query().Get("id"))
 		if id == "" {
@@ -1134,7 +1177,7 @@ func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Requ
 		writeAPIError(w, http.StatusNotFound, "订阅不存在")
 		return
 	}
-	if r.Method == http.MethodPost && r.URL.Query().Get("action") == "sync" {
+	if r.Method == http.MethodPost && (r.URL.Query().Get("action") == "sync" || r.URL.Query().Get("action") == "resync") {
 		id := strings.TrimSpace(r.URL.Query().Get("id"))
 		b.RLock()
 		var feed SourceConfig
@@ -1149,7 +1192,7 @@ func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Requ
 			writeAPIError(w, http.StatusNotFound, "订阅不存在")
 			return
 		}
-		updated, err := b.syncSource(feed)
+		updated, err := b.syncSource(feed, r.URL.Query().Get("action") == "resync")
 		if err != nil {
 			writeJSON(w, map[string]any{"status": "failed", "message": err.Error(), "source": updated})
 			return
@@ -1467,7 +1510,7 @@ func (b *BilibiliStore) findBilibiliUser(name string) (BilibiliUser, error) {
 	return BilibiliUser{}, errors.New("无法按昵称找到原 UP 主，请删除后重新订阅")
 }
 
-func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig) ([]Post, error) {
+func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post, error) {
 	userID := strings.TrimSpace(strings.TrimPrefix(feed.ID, "bili-"))
 	b.RLock()
 	credentials, proxyURL := b.config.Credentials, b.config.ProxyURL
@@ -1516,61 +1559,78 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig) ([]Post, error) {
 					} `json:"module_dynamic"`
 				} `json:"modules"`
 			} `json:"items"`
+			Offset  string `json:"offset"`
+			HasMore bool   `json:"has_more"`
 		} `json:"data"`
 	}
-	endpoint := "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space?host_mid=" + url.QueryEscape(userID)
-	if err := bilibiliRequest(endpoint, credentials, proxyURL, &payload); err != nil {
-		return nil, fmt.Errorf("B 站请求失败: %w", err)
-	}
-	if payload.Code != 0 {
-		return nil, fmt.Errorf("B 站接口拒绝拉取: %s", payload.Message)
-	}
-	posts := make([]Post, 0, len(payload.Data.Items))
-	for _, item := range payload.Data.Items {
-		if item.ID == "" || (item.Type != "DYNAMIC_TYPE_DRAW" && item.Type != "DYNAMIC_TYPE_ARTICLE") {
-			continue
+	posts := make([]Post, 0)
+	offset := ""
+	for page := 0; page < 100; page++ {
+		endpoint := "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space?host_mid=" + url.QueryEscape(userID)
+		if offset != "" {
+			endpoint += "&offset=" + url.QueryEscape(offset)
 		}
-		caption := ""
-		if item.Modules.Dynamic.Desc != nil {
-			caption = cleanRemoteText(item.Modules.Dynamic.Desc.Text)
+		payload.Data.Items = nil
+		if err := bilibiliRequest(endpoint, credentials, proxyURL, &payload); err != nil {
+			return nil, fmt.Errorf("B 站请求失败: %w", err)
 		}
-		media := make([]string, 0)
-		if major := item.Modules.Dynamic.Major; major != nil {
-			if major.Draw != nil {
-				for _, image := range major.Draw.Items {
-					media = append(media, normalizeRemoteImage(image.Src))
+		if payload.Code != 0 {
+			return nil, fmt.Errorf("B 站接口拒绝拉取: %s", payload.Message)
+		}
+		reachedBoundary := false
+		for _, item := range payload.Data.Items {
+			if item.ID == "" || (item.Type != "DYNAMIC_TYPE_DRAW" && item.Type != "DYNAMIC_TYPE_ARTICLE") {
+				continue
+			}
+			caption := ""
+			if item.Modules.Dynamic.Desc != nil {
+				caption = cleanRemoteText(item.Modules.Dynamic.Desc.Text)
+			}
+			media := make([]string, 0)
+			if major := item.Modules.Dynamic.Major; major != nil {
+				if major.Draw != nil {
+					for _, image := range major.Draw.Items {
+						media = append(media, normalizeRemoteImage(image.Src))
+					}
+				}
+				if major.Article != nil {
+					for _, image := range major.Article.Covers {
+						media = append(media, normalizeRemoteImage(image))
+					}
+				}
+				if major.Opus != nil {
+					for _, image := range major.Opus.Pics {
+						media = append(media, normalizeRemoteImage(image.URL))
+					}
+				}
+				if caption == "" && major.Article != nil {
+					caption = firstNonEmptyRemoteText(major.Article.Content, major.Article.Desc, major.Article.Title)
+				}
+				if caption == "" && major.Opus != nil {
+					caption = firstNonEmptyRemoteText(major.Opus.Content, major.Opus.Summary, major.Opus.Title)
 				}
 			}
-			if major.Article != nil {
-				for _, image := range major.Article.Covers {
-					media = append(media, normalizeRemoteImage(image))
-				}
+			publishedAt := parseRemoteTimestamp(item.Modules.Author.PubTs)
+			published := time.Unix(publishedAt, 0)
+			if publishedAt == 0 {
+				published = time.Now()
 			}
-			if major.Opus != nil {
-				for _, image := range major.Opus.Pics {
-					media = append(media, normalizeRemoteImage(image.URL))
-				}
+			name, avatar := item.Modules.Author.Name, normalizeRemoteImage(item.Modules.Author.Face)
+			if name == "" {
+				name = feed.Name
 			}
-			if caption == "" && major.Article != nil {
-				caption = firstNonEmptyRemoteText(major.Article.Content, major.Article.Desc, major.Article.Title)
+			if avatar == "" {
+				avatar = feed.Avatar
 			}
-			if caption == "" && major.Opus != nil {
-				caption = firstNonEmptyRemoteText(major.Opus.Content, major.Opus.Summary, major.Opus.Title)
+			posts = append(posts, Post{ID: "bili-dynamic-" + item.ID, Source: SourceBilibili, Author: name, Avatar: avatar, Caption: caption, Tags: []string{}, Media: media, Published: published})
+			if !full && !feed.LastSyncedAt.IsZero() && !published.After(feed.LastSyncedAt) {
+				reachedBoundary = true
 			}
 		}
-		publishedAt := parseRemoteTimestamp(item.Modules.Author.PubTs)
-		published := time.Unix(publishedAt, 0)
-		if publishedAt == 0 {
-			published = time.Now()
+		if len(payload.Data.Items) == 0 || !payload.Data.HasMore || payload.Data.Offset == "" || payload.Data.Offset == offset || reachedBoundary {
+			break
 		}
-		name, avatar := item.Modules.Author.Name, normalizeRemoteImage(item.Modules.Author.Face)
-		if name == "" {
-			name = feed.Name
-		}
-		if avatar == "" {
-			avatar = feed.Avatar
-		}
-		posts = append(posts, Post{ID: "bili-dynamic-" + item.ID, Source: SourceBilibili, Author: name, Avatar: avatar, Caption: caption, Tags: []string{}, Media: media, Published: published})
+		offset = payload.Data.Offset
 	}
 	return posts, nil
 }
@@ -1644,7 +1704,7 @@ func collectWeiboPosts(value any, feed SourceConfig, posts *[]Post, seen map[str
 	}
 }
 
-func (b *BilibiliStore) fetchWeiboPosts(feed SourceConfig) ([]Post, error) {
+func (b *BilibiliStore) fetchWeiboPosts(feed SourceConfig, full bool) ([]Post, error) {
 	userID := strings.TrimSpace(strings.TrimPrefix(feed.ID, "weibo-"))
 	b.RLock()
 	credentials, proxyURL := b.config.Weibo, b.config.ProxyURL
@@ -1652,29 +1712,70 @@ func (b *BilibiliStore) fetchWeiboPosts(feed SourceConfig) ([]Post, error) {
 	if credentials.Cookie == "" {
 		return nil, errors.New("微博账号未连接")
 	}
-	endpoints := []string{
-		"https://weibo.com/ajax/statuses/mymblog?uid=" + url.QueryEscape(userID) + "&page=1&feature=0",
-		"https://weibo.com/ajax/statuses/mymblog?uid=" + url.QueryEscape(userID) + "&page=1&feature=0&profile_ftype=1",
-		"https://m.weibo.cn/api/container/getIndex?type=uid&value=" + url.QueryEscape(userID) + "&containerid=" + url.QueryEscape("107603"+userID),
+	endpointForPage := []func(int) string{
+		func(page int) string {
+			return fmt.Sprintf("https://weibo.com/ajax/statuses/mymblog?uid=%s&page=%d&feature=0", url.QueryEscape(userID), page)
+		},
+		func(page int) string {
+			return fmt.Sprintf("https://weibo.com/ajax/statuses/mymblog?uid=%s&page=%d&feature=0&profile_ftype=1", url.QueryEscape(userID), page)
+		},
+		func(page int) string {
+			return fmt.Sprintf("https://m.weibo.cn/api/container/getIndex?type=uid&value=%s&containerid=%s&page=%d", url.QueryEscape(userID), url.QueryEscape("107603"+userID), page)
+		},
 	}
 	var lastErr error
-	for _, endpoint := range endpoints {
-		payload, _, err := weiboRawRequest(endpoint, credentials, proxyURL)
-		if err != nil {
-			lastErr = err
-			continue
-		}
+	for _, makeEndpoint := range endpointForPage {
 		posts := make([]Post, 0)
-		collectWeiboPosts(payload, feed, &posts, make(map[string]bool))
+		seen := make(map[string]bool)
+		for page := 1; page <= 100; page++ {
+			payload, _, err := weiboRawRequest(makeEndpoint(page), credentials, proxyURL)
+			if err != nil {
+				lastErr = err
+				break
+			}
+			pagePosts := make([]Post, 0)
+			collectWeiboPosts(payload, feed, &pagePosts, seen)
+			if len(pagePosts) == 0 {
+				break
+			}
+			posts = append(posts, pagePosts...)
+			if !full && !feed.LastSyncedAt.IsZero() {
+				reachedBoundary := false
+				for _, post := range pagePosts {
+					if !post.Published.After(feed.LastSyncedAt) {
+						reachedBoundary = true
+						break
+					}
+				}
+				if reachedBoundary {
+					break
+				}
+			}
+		}
 		if len(posts) > 0 {
 			return posts, nil
 		}
-		lastErr = errors.New("接口未返回该博主的动态")
+		if lastErr == nil {
+			lastErr = errors.New("接口未返回该博主的动态")
+		}
 	}
 	return nil, fmt.Errorf("微博拉取失败：%w", lastErr)
 }
 
-func (b *BilibiliStore) syncSource(feed SourceConfig) (SourceConfig, error) {
+func postsAfter(posts []Post, boundary time.Time) []Post {
+	if boundary.IsZero() {
+		return posts
+	}
+	filtered := make([]Post, 0, len(posts))
+	for _, post := range posts {
+		if post.Published.After(boundary) {
+			filtered = append(filtered, post)
+		}
+	}
+	return filtered
+}
+
+func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, error) {
 	originalID := feed.ID
 	if feed.Source == SourceBilibili {
 		userID := strings.TrimPrefix(feed.ID, "bili-")
@@ -1690,14 +1791,17 @@ func (b *BilibiliStore) syncSource(feed SourceConfig) (SourceConfig, error) {
 	var err error
 	switch feed.Source {
 	case SourceBilibili:
-		posts, err = b.fetchBilibiliPosts(feed)
+		posts, err = b.fetchBilibiliPosts(feed, full)
 	case SourceWeibo:
-		posts, err = b.fetchWeiboPosts(feed)
+		posts, err = b.fetchWeiboPosts(feed, full)
 	default:
 		err = errors.New("该来源尚未配置采集器")
 	}
 	added := 0
 	if err == nil {
+		if !full {
+			posts = postsAfter(posts, feed.LastSyncedAt)
+		}
 		if len(posts) > 0 {
 			if strings.TrimSpace(posts[0].Author) != "" {
 				feed.Name = posts[0].Author
@@ -1736,7 +1840,11 @@ func (b *BilibiliStore) syncSource(feed SourceConfig) (SourceConfig, error) {
 				(*list)[index].LastSyncMessage = err.Error()
 			} else {
 				(*list)[index].LastSyncStatus = "success"
-				(*list)[index].LastSyncMessage = fmt.Sprintf("拉取完成，新增 %d 条动态", added)
+				if full {
+					(*list)[index].LastSyncMessage = fmt.Sprintf("重新拉取完成，归档 %d 条新动态", added)
+				} else {
+					(*list)[index].LastSyncMessage = fmt.Sprintf("增量拉取完成，新增 %d 条动态", added)
+				}
 			}
 			feed = (*list)[index]
 		}
@@ -1761,7 +1869,7 @@ func (b *BilibiliStore) syncHandler(w http.ResponseWriter, r *http.Request) {
 		if !feed.Enabled {
 			continue
 		}
-		updated, _ := b.syncSource(feed)
+		updated, _ := b.syncSource(feed, false)
 		results = append(results, updated)
 	}
 	writeJSON(w, map[string]any{"status": "completed", "message": fmt.Sprintf("已完成 %d 个来源的拉取", len(results)), "sources": results})
@@ -2302,7 +2410,7 @@ func (b *BilibiliStore) weiboSubscriptionsHandler(w http.ResponseWriter, r *http
 		writeAPIError(w, http.StatusNotFound, "微博订阅不存在")
 		return
 	}
-	if r.Method == http.MethodPost && r.URL.Query().Get("action") == "sync" {
+	if r.Method == http.MethodPost && (r.URL.Query().Get("action") == "sync" || r.URL.Query().Get("action") == "resync") {
 		id := strings.TrimSpace(r.URL.Query().Get("id"))
 		b.RLock()
 		var feed SourceConfig
@@ -2317,7 +2425,7 @@ func (b *BilibiliStore) weiboSubscriptionsHandler(w http.ResponseWriter, r *http
 			writeAPIError(w, http.StatusNotFound, "微博订阅不存在")
 			return
 		}
-		updated, err := b.syncSource(feed)
+		updated, err := b.syncSource(feed, r.URL.Query().Get("action") == "resync")
 		if err != nil {
 			writeJSON(w, map[string]any{"status": "failed", "message": err.Error(), "source": updated})
 			return

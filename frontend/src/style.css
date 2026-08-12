@@ -70,3 +70,42 @@ button { border: 0; font: inherit; cursor: pointer; color: inherit; }
 .settings-page .manual-credential { margin-top: 14px; }
 @media (max-width: 1150px) { .settings-page { padding: 25px 32px 55px; }.settings-page .platform-source-grid, .settings-page .platform-auth-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 760px) { .settings-page { width: 100%; margin-left: 0; padding: 18px 16px 45px; }.settings-page .settings-tabs { gap: 20px; overflow-x: auto; }.settings-page .settings-tabs button { min-width: max-content; }.settings-page .settings-pane { min-height: 0; padding: 22px 18px 25px; }.settings-page .platform-source-grid, .settings-page .platform-auth-grid { grid-template-columns: 1fr; }.settings-page .form-actions { align-items: stretch; flex-direction: column; }.settings-page .form-actions .login-button { flex-basis: 45px; } }
+
+/* Readability and source-management refinements */
+:root { font-size: 16px; }
+body, button, input, textarea, select { font-size: 14px; }
+.main-nav button, .sidebar-bottom > button { min-height: 48px; font-size: 16px; }
+.main-nav button b { font-size: 14px; }
+.nav-line-symbol { display: inline-grid; place-items: center; width: 24px!important; height: 24px; flex: none; color: #77847e; font-size: 22px!important; line-height: 1; }
+.sidebar-source-icon { display: block; width: 24px; height: 24px; flex: none; object-fit: contain; opacity: .82; filter: grayscale(1); }
+.main-nav button.active .sidebar-source-icon { opacity: 1; }
+.subtitle, .caption, .modal p:not(.eyebrow) { font-size: 15px; }
+.author strong, .pull-title strong { font-size: 15px; }
+.author span, .pull-handle, .pull-info small, .source-pill, .post-foot, .pane-heading p, .settings-form label { font-size: 12px; }
+.settings-page .pane-heading p, .settings-page .settings-form label { font-size: 12px; }
+.platform-auth-card > p, .manual-credential, .credential-note { font-size: 12px; }
+.configured-source-avatar { width: 42px; height: 42px; flex: none; object-fit: cover; background: #e7efe8; border: 1px solid var(--line); border-radius: 50%; }
+.source-row-actions { gap: 7px; }
+.configured-source-list article .source-row-actions .source-icon-action { display: inline-grid; place-items: center; width: 36px; height: 36px; padding: 0; color: #607b6a; background: transparent; border: 1px solid var(--line); border-radius: 6px; font-size: 20px; line-height: 1; }
+.configured-source-list article .source-row-actions .source-icon-action:hover { color: #426e56; background: #edf4ee; border-color: #b8cdbd; }
+.configured-source-list article .source-row-actions .source-icon-action span { display: inline-block; }
+.pull-actions { display: flex; flex: none; gap: 7px; }
+.pull-action.secondary { color: #6f766f; background: transparent; border: 1px solid var(--line); }
+
+/* Liked timeline, Twitter source, and larger full-image previews */
+.source-pill.twitter { color: #536e82; background: #e4edf2; }
+.platform-source-card.twitter::before { background: radial-gradient(circle at top right, #7c9eb42b, transparent 68%); }
+.post-foot .post-like-button { color: #9aa49e; border: 1px solid transparent; font-size: 20px; line-height: 1; }
+.post-foot .post-like-button:hover { color: #bd6b70; background: #f8e9e9; }
+.post-foot .post-like-button.liked { color: #bf5f67; background: #f8e4e5; border-color: #edc8cb; }
+.post-foot .post-like-button:disabled { opacity: .55; cursor: wait; }
+.media-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; width: min(100%, 760px); margin: 14px 0 18px; }
+.media-grid button { display: grid; place-items: center; aspect-ratio: 4 / 3; background: #edf1ee; border: 1px solid #e0e7e2; }
+.media-grid img { width: 100%; height: 100%; object-fit: contain; }
+.media-grid button:hover img { transform: none; }
+.media-count-1 { display: block; width: min(100%, 760px); }
+.media-count-1 button { width: 100%; height: clamp(360px, 58vw, 620px); aspect-ratio: auto; }
+@media (max-width: 760px) {
+  .media-grid { grid-template-columns: 1fr; }
+  .media-count-1 button { height: clamp(300px, 85vw, 520px); }
+}
