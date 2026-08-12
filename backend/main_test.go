@@ -45,6 +45,25 @@ func TestWeiboJSONPAndCrossDomainURL(t *testing.T) {
 	}
 }
 
+func TestCollectWeiboUsers(t *testing.T) {
+	payload := map[string]any{
+		"data": map[string]any{
+			"cards": []any{
+				map[string]any{"user": map[string]any{"id": "42", "screen_name": "测试博主", "profile_image_url": "https://example.com/avatar.jpg", "followers_count": float64(1234)}},
+				map[string]any{"user": map[string]any{"id": "42", "name": "重复用户"}},
+			},
+		},
+	}
+	users := make([]WeiboUser, 0)
+	collectWeiboUsers(payload, &users, make(map[string]bool))
+	if len(users) != 1 {
+		t.Fatalf("expected one unique user, got %#v", users)
+	}
+	if users[0].UserID != "42" || users[0].Name != "测试博主" || users[0].Fans != 1234 {
+		t.Fatalf("unexpected parsed user: %#v", users[0])
+	}
+}
+
 func TestPostDelete(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "content.json")
 	store := &Store{posts: []Post{{ID: "post-1", Source: SourceWeibo, Author: "测试作者"}, {ID: "post-2", Source: SourcePixiv, Author: "保留作者"}}, feeds: []SourceConfig{}, file: path}

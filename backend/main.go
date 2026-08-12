@@ -1486,28 +1486,90 @@ func weiboClient(proxyURL string) (*http.Client, error) {
 	return client, nil
 }
 
-func weiboRequest(endpoint string, credentials WeiboCredentials, proxyURL string, target any) error {
+func weiboRawRequest(endpoint string, credentials WeiboCredentials, proxyURL string) (map[string]any, int, error) {
 	request, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
-		return err
+		return nil, 0, err
 	}
 	request.Header.Set("Accept", "application/json, text/plain, */*")
 	request.Header.Set("Cookie", credentials.Cookie)
-	request.Header.Set("Referer", "https://m.weibo.cn/")
-	request.Header.Set("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148")
+	request.Header.Set("Referer", "https://weibo.com/")
+	request.Header.Set("Origin", "https://weibo.com")
+	request.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36")
+	for _, cookie := range strings.Split(credentials.Cookie, ";") {
+		parts := strings.SplitN(strings.TrimSpace(cookie), "=", 2)
+		if len(parts) == 2 && strings.EqualFold(parts[0], "XSRF-TOKEN") {
+			request.Header.Set("X-XSRF-TOKEN", parts[1])
+		}
+	}
 	client, err := externalHTTPClient(proxyURL)
 	if err != nil {
-		return err
+		return nil, 0, err
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return err
+		return nil, 0, err
 	}
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("weibo HTTP %d", response.StatusCode)
+	body, readErr := io.ReadAll(io.LimitReader(response.Body, 4<<20))
+	if readErr != nil {
+		return nil, response.StatusCode, readErr
 	}
-	return json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(target)
+	if response.StatusCode != http.StatusOK {
+		return nil, response.StatusCode, fmt.Errorf("weibo HTTP %d", response.StatusCode)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, response.StatusCode, err
+	}
+	return payload, response.StatusCode, nil
+}
+
+func weiboRequest(endpoint string, credentials WeiboCredentials, proxyURL string, target any) error {
+	payload, _, err := weiboRawRequest(endpoint, credentials, proxyURL)
+	if err != nil {
+		return err
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, target)
+}
+
+func collectWeiboUsers(value any, users *[]WeiboUser, seen map[string]bool) {
+	if object, ok := value.(map[string]any); ok {
+		id := strings.TrimSpace(fmt.Sprint(object["id"]))
+		name := strings.TrimSpace(fmt.Sprint(object["screen_name"]))
+		if name == "<nil>" {
+			name = strings.TrimSpace(fmt.Sprint(object["name"]))
+		}
+		if id != "" && id != "<nil>" && name != "" && name != "<nil>" && !seen[id] {
+			avatar := strings.TrimSpace(fmt.Sprint(object["profile_image_url"]))
+			if avatar == "<nil>" {
+				avatar = strings.TrimSpace(fmt.Sprint(object["avatar_large"]))
+			}
+			fans := int64(0)
+			if raw, ok := object["followers_count"]; ok {
+				fans, _ = strconv.ParseInt(fmt.Sprint(raw), 10, 64)
+			}
+			description := strings.TrimSpace(fmt.Sprint(object["description"]))
+			if description == "<nil>" {
+				description = ""
+			}
+			seen[id] = true
+			*users = append(*users, WeiboUser{UserID: id, Name: name, Avatar: avatar, Fans: fans, Description: description})
+		}
+		for _, child := range object {
+			collectWeiboUsers(child, users, seen)
+		}
+		return
+	}
+	if list, ok := value.([]any); ok {
+		for _, child := range list {
+			collectWeiboUsers(child, users, seen)
+		}
+	}
 }
 
 func (b *BilibiliStore) weiboSearchHandler(w http.ResponseWriter, r *http.Request) {
@@ -1527,38 +1589,27 @@ func (b *BilibiliStore) weiboSearchHandler(w http.ResponseWriter, r *http.Reques
 		writeAPIError(w, http.StatusPreconditionFailed, "请先连接微博账号")
 		return
 	}
-	endpoint := "https://m.weibo.cn/api/container/getIndex?containerid=" + url.QueryEscape("100103type=3&q="+keyword) + "&page_type=searchall"
-	var payload struct {
-		OK   int `json:"ok"`
-		Data struct {
-			Cards []struct {
-				CardGroup []struct {
-					User struct {
-						ID          json.RawMessage `json:"id"`
-						Name        string          `json:"screen_name"`
-						Avatar      string          `json:"profile_image_url"`
-						Fans        int64           `json:"followers_count"`
-						Description string          `json:"description"`
-					} `json:"user"`
-				} `json:"card_group"`
-			} `json:"cards"`
-		} `json:"data"`
-	}
-	if err := weiboRequest(endpoint, credentials, proxyURL, &payload); err != nil || payload.OK != 1 {
-		writeAPIError(w, http.StatusBadGateway, "微博博主搜索暂时不可用")
-		return
+	endpoints := []string{
+		"https://weibo.com/ajax/side/search?q=" + url.QueryEscape(keyword),
+		"https://m.weibo.cn/api/container/getIndex?containerid=" + url.QueryEscape("100103type=3&q="+keyword) + "&page_type=searchall",
 	}
 	users := make([]WeiboUser, 0)
 	seen := make(map[string]bool)
-	for _, card := range payload.Data.Cards {
-		for _, item := range card.CardGroup {
-			id := jsonScalarString(item.User.ID)
-			if id == "" || strings.TrimSpace(item.User.Name) == "" || seen[id] {
-				continue
-			}
-			seen[id] = true
-			users = append(users, WeiboUser{UserID: id, Name: strings.TrimSpace(item.User.Name), Avatar: item.User.Avatar, Fans: item.User.Fans, Description: item.User.Description})
+	statuses := make([]string, 0, len(endpoints))
+	for _, endpoint := range endpoints {
+		payload, status, err := weiboRawRequest(endpoint, credentials, proxyURL)
+		if err != nil {
+			statuses = append(statuses, strconv.Itoa(status))
+			continue
 		}
+		collectWeiboUsers(payload, &users, seen)
+		if len(users) > 0 {
+			break
+		}
+	}
+	if len(users) == 0 {
+		writeAPIError(w, http.StatusBadGateway, "微博搜索暂时不可用（接口状态："+strings.Join(statuses, "/")+"）。请重新扫码登录或检查代理出口")
+		return
 	}
 	writeJSON(w, users)
 }
