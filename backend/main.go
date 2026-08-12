@@ -943,7 +943,9 @@ func bilibiliRequest(endpoint string, credentials BilibiliCredentials, proxyURL 
 	if response.StatusCode != http.StatusOK {
 		return fmt.Errorf("bilibili returned status %d", response.StatusCode)
 	}
-	return json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(target)
+	decoder := json.NewDecoder(io.LimitReader(response.Body, 2<<20))
+	decoder.UseNumber()
+	return decoder.Decode(target)
 }
 
 func verifyBilibiliCredentials(credentials BilibiliCredentials, proxyURL string) error {
@@ -1288,6 +1290,18 @@ func cleanRemoteText(value string) string {
 	return strings.TrimSpace(html.UnescapeString(htmlTagPattern.ReplaceAllString(value, "")))
 }
 
+func parseRemoteTimestamp(raw json.RawMessage) int64 {
+	value := strings.Trim(strings.TrimSpace(string(raw)), `"`)
+	if value == "" || value == "null" {
+		return 0
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return parsed
+}
+
 func (b *BilibiliStore) findBilibiliUser(name string) (BilibiliUser, error) {
 	b.RLock()
 	credentials, proxyURL := b.config.Credentials, b.config.ProxyURL
@@ -1333,9 +1347,9 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig) ([]Post, error) {
 				Type    string `json:"type"`
 				Modules struct {
 					Author struct {
-						Name  string `json:"name"`
-						Face  string `json:"face"`
-						PubTs int64  `json:"pub_ts"`
+						Name  string          `json:"name"`
+						Face  string          `json:"face"`
+						PubTs json.RawMessage `json:"pub_ts"`
 					} `json:"module_author"`
 					Dynamic struct {
 						Desc *struct {
@@ -1385,8 +1399,9 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig) ([]Post, error) {
 				}
 			}
 		}
-		published := time.Unix(item.Modules.Author.PubTs, 0)
-		if item.Modules.Author.PubTs == 0 {
+		publishedAt := parseRemoteTimestamp(item.Modules.Author.PubTs)
+		published := time.Unix(publishedAt, 0)
+		if publishedAt == 0 {
 			published = time.Now()
 		}
 		name, avatar := item.Modules.Author.Name, normalizeRemoteImage(item.Modules.Author.Face)
@@ -1408,18 +1423,18 @@ func collectWeiboPosts(value any, feed SourceConfig, posts *[]Post, seen map[str
 			mblog = nested
 		}
 		user, hasUser := mblog["user"].(map[string]any)
-		id := strings.TrimSpace(fmt.Sprint(mblog["id"]))
+		id := jsonValueString(mblog["id"])
 		if hasUser && id != "" && id != "<nil>" && !seen[id] {
 			seen[id] = true
-			name := strings.TrimSpace(fmt.Sprint(user["screen_name"]))
-			avatar := normalizeRemoteImage(fmt.Sprint(user["avatar_hd"]))
-			if avatar == "<nil>" || avatar == "" {
-				avatar = normalizeRemoteImage(fmt.Sprint(user["profile_image_url"]))
+			name := jsonValueString(user["screen_name"])
+			avatar := normalizeRemoteImage(jsonValueString(user["avatar_hd"]))
+			if avatar == "" {
+				avatar = normalizeRemoteImage(jsonValueString(user["profile_image_url"]))
 			}
-			if name == "" || name == "<nil>" {
+			if name == "" {
 				name = feed.Name
 			}
-			if avatar == "<nil>" || avatar == "" {
+			if avatar == "" {
 				avatar = feed.Avatar
 			}
 			published, parseErr := time.Parse("Mon Jan 02 15:04:05 -0700 2006", fmt.Sprint(mblog["created_at"]))
@@ -1437,7 +1452,11 @@ func collectWeiboPosts(value any, feed SourceConfig, posts *[]Post, seen map[str
 					}
 				}
 			}
-			*posts = append(*posts, Post{ID: "weibo-status-" + id, Source: SourceWeibo, Author: name, Avatar: avatar, Caption: cleanRemoteText(fmt.Sprint(mblog["text"])), Tags: []string{}, Media: media, Published: published})
+			caption := jsonValueString(mblog["text_raw"])
+			if caption == "" {
+				caption = cleanRemoteText(jsonValueString(mblog["text"]))
+			}
+			*posts = append(*posts, Post{ID: "weibo-status-" + id, Source: SourceWeibo, Author: name, Avatar: avatar, Caption: caption, Tags: []string{}, Media: media, Published: published})
 		}
 		for _, child := range object {
 			collectWeiboPosts(child, feed, posts, seen)
@@ -1459,6 +1478,7 @@ func (b *BilibiliStore) fetchWeiboPosts(feed SourceConfig) ([]Post, error) {
 	}
 	endpoints := []string{
 		"https://weibo.com/ajax/statuses/mymblog?uid=" + url.QueryEscape(userID) + "&page=1&feature=0",
+		"https://weibo.com/ajax/statuses/mymblog?uid=" + url.QueryEscape(userID) + "&page=1&feature=0&profile_ftype=1",
 		"https://m.weibo.cn/api/container/getIndex?type=uid&value=" + url.QueryEscape(userID) + "&containerid=" + url.QueryEscape("107603"+userID),
 	}
 	var lastErr error
@@ -1899,7 +1919,9 @@ func weiboRawRequest(endpoint string, credentials WeiboCredentials, proxyURL str
 		return nil, response.StatusCode, fmt.Errorf("微博接口返回 HTTP %d，请检查登录状态或代理出口", response.StatusCode)
 	}
 	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	if err := decoder.Decode(&payload); err != nil {
 		if bytes.Contains(bytes.ToLower(body), []byte("<html")) || bytes.Contains(bytes.ToLower(body), []byte("<!doctype")) {
 			return nil, response.StatusCode, errors.New("微博返回了网页拦截页，请重新扫码登录或更换代理出口")
 		}
@@ -1922,19 +1944,25 @@ func weiboRequest(endpoint string, credentials WeiboCredentials, proxyURL string
 
 func collectWeiboUsers(value any, users *[]WeiboUser, seen map[string]bool) {
 	if object, ok := value.(map[string]any); ok {
-		id := strings.TrimSpace(fmt.Sprint(object["id"]))
+		if nested, exists := object["user"].(map[string]any); exists {
+			collectWeiboUsers(nested, users, seen)
+		}
+		id := jsonValueString(object["id"])
 		name := strings.TrimSpace(fmt.Sprint(object["screen_name"]))
-		if name == "<nil>" {
-			name = strings.TrimSpace(fmt.Sprint(object["name"]))
+		if name == "<nil>" || name == "" {
+			name = strings.TrimSpace(jsonValueString(object["name"]))
 		}
 		if id != "" && id != "<nil>" && name != "" && name != "<nil>" && !seen[id] {
-			avatar := strings.TrimSpace(fmt.Sprint(object["profile_image_url"]))
-			if avatar == "<nil>" {
-				avatar = strings.TrimSpace(fmt.Sprint(object["avatar_large"]))
+			avatar := normalizeRemoteImage(jsonValueString(object["profile_image_url"]))
+			if avatar == "" {
+				avatar = normalizeRemoteImage(jsonValueString(object["avatar_large"]))
+			}
+			if avatar == "" {
+				avatar = normalizeRemoteImage(jsonValueString(object["avatar_hd"]))
 			}
 			fans := int64(0)
 			if raw, ok := object["followers_count"]; ok {
-				fans, _ = strconv.ParseInt(fmt.Sprint(raw), 10, 64)
+				fans, _ = strconv.ParseInt(jsonValueString(raw), 10, 64)
 			}
 			description := strings.TrimSpace(fmt.Sprint(object["description"]))
 			if description == "<nil>" {
@@ -1979,10 +2007,12 @@ func (b *BilibiliStore) weiboSearchHandler(w http.ResponseWriter, r *http.Reques
 	users := make([]WeiboUser, 0)
 	seen := make(map[string]bool)
 	statuses := make([]string, 0, len(endpoints))
+	lastMessage := ""
 	for _, endpoint := range endpoints {
 		payload, status, err := weiboRawRequest(endpoint, credentials, proxyURL)
 		if err != nil {
 			statuses = append(statuses, strconv.Itoa(status))
+			lastMessage = err.Error()
 			continue
 		}
 		collectWeiboUsers(payload, &users, seen)
@@ -1991,7 +2021,11 @@ func (b *BilibiliStore) weiboSearchHandler(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	if len(users) == 0 {
-		writeAPIError(w, http.StatusBadGateway, "微博搜索暂时不可用（接口状态："+strings.Join(statuses, "/")+"）。请重新扫码登录或检查代理出口")
+		message := "微博搜索暂时不可用（接口状态：" + strings.Join(statuses, "/") + "）。请重新扫码登录或检查代理出口"
+		if lastMessage != "" {
+			message += "；" + lastMessage
+		}
+		writeAPIError(w, http.StatusBadGateway, message)
 		return
 	}
 	writeJSON(w, users)
@@ -2135,6 +2169,25 @@ func (b *BilibiliStore) weiboSubscriptionsHandler(w http.ResponseWriter, r *http
 		return
 	}
 	writeJSON(w, feed)
+}
+
+func jsonValueString(value any) string {
+	if value == nil {
+		return ""
+	}
+	if number, ok := value.(json.Number); ok {
+		return number.String()
+	}
+	text := strings.TrimSpace(fmt.Sprint(value))
+	if text == "<nil>" {
+		return ""
+	}
+	if strings.ContainsAny(text, ".eE") {
+		if number, err := strconv.ParseFloat(text, 64); err == nil {
+			return strconv.FormatFloat(number, 'f', -1, 64)
+		}
+	}
+	return text
 }
 
 func jsonScalarString(raw json.RawMessage) string {

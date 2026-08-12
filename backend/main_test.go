@@ -45,12 +45,24 @@ func TestWeiboJSONPAndCrossDomainURL(t *testing.T) {
 	}
 }
 
+func TestRemoteValueParsing(t *testing.T) {
+	if got := jsonValueString(float64(3546637624412244)); got != "3546637624412244" {
+		t.Fatalf("unexpected float UID: %s", got)
+	}
+	if got := jsonValueString(json.Number("3546637624412244")); got != "3546637624412244" {
+		t.Fatalf("unexpected JSON number UID: %s", got)
+	}
+	if got := parseRemoteTimestamp(json.RawMessage(`"1723456800"`)); got != 1723456800 {
+		t.Fatalf("unexpected string timestamp: %d", got)
+	}
+}
+
 func TestCollectWeiboUsers(t *testing.T) {
 	payload := map[string]any{
 		"data": map[string]any{
 			"cards": []any{
-				map[string]any{"user": map[string]any{"id": "42", "screen_name": "测试博主", "profile_image_url": "https://example.com/avatar.jpg", "followers_count": float64(1234)}},
-				map[string]any{"user": map[string]any{"id": "42", "name": "重复用户"}},
+				map[string]any{"user": map[string]any{"id": float64(3546637624412244), "screen_name": "测试博主", "profile_image_url": "https://example.com/avatar.jpg", "followers_count": float64(1234)}},
+				map[string]any{"user": map[string]any{"id": json.Number("3546637624412244"), "name": "重复用户"}},
 			},
 		},
 	}
@@ -59,7 +71,7 @@ func TestCollectWeiboUsers(t *testing.T) {
 	if len(users) != 1 {
 		t.Fatalf("expected one unique user, got %#v", users)
 	}
-	if users[0].UserID != "42" || users[0].Name != "测试博主" || users[0].Fans != 1234 {
+	if users[0].UserID != "3546637624412244" || users[0].Name != "测试博主" || users[0].Fans != 1234 {
 		t.Fatalf("unexpected parsed user: %#v", users[0])
 	}
 }
