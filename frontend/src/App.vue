@@ -68,16 +68,16 @@ const fallbackPosts = [
 ]
 
 const sourceMeta = {
+  bilibili: { label: '哔哩哔哩', icon: 'bl', image: bilibiliIcon, color: 'blue' },
   weibo: { label: '微博', icon: 'wb', image: weiboIcon, color: 'coral' },
-  pixiv: { label: 'pixiv', icon: 'px', image: pixivIcon, color: 'violet' },
-  bilibili: { label: '哔哩哔哩', icon: 'bl', image: bilibiliIcon, color: 'blue' }
+  pixiv: { label: 'pixiv', icon: 'px', image: pixivIcon, color: 'violet' }
 }
 const filteredPosts = computed(() => activeSource.value === 'all' ? posts.value : posts.value.filter(p => p.source === activeSource.value))
 const sourceCount = computed(() => new Set(posts.value.map(p => p.source)).size)
 const platformCards = computed(() => [
   { key: 'bilibili', label: '哔哩哔哩', short: '哔', ...sourceMeta.bilibili, configured: biliAccount.value.configured, account: biliAccount.value.configured ? `UID ${biliAccount.value.userId}` : '尚未连接账号', path: '/flow/bilibili', description: 'UP 主图文动态与专栏', feeds: feeds.value.filter(feed => feed.source === 'bilibili') },
-  { key: 'pixiv', label: 'Pixiv', short: 'P', ...sourceMeta.pixiv, configured: pixivAccount.value.configured, account: pixivAccount.value.configured ? (pixivAccount.value.userName || `UID ${pixivAccount.value.userId}`) : '尚未连接账号', path: '/flow/pixiv', description: '画师作品与插画媒体', feeds: feeds.value.filter(feed => feed.source === 'pixiv') },
-  { key: 'weibo', label: '微博', short: '微', ...sourceMeta.weibo, configured: weiboAccount.value.configured, account: weiboAccount.value.configured ? (weiboAccount.value.userName || `UID ${weiboAccount.value.userId}`) : '尚未连接账号', path: '/flow/weibo', description: '博主动态与图文媒体', feeds: feeds.value.filter(feed => feed.source === 'weibo') }
+  { key: 'weibo', label: '微博', short: '微', ...sourceMeta.weibo, configured: weiboAccount.value.configured, account: weiboAccount.value.configured ? (weiboAccount.value.userName || `UID ${weiboAccount.value.userId}`) : '尚未连接账号', path: '/flow/weibo', description: '博主动态与图文媒体', feeds: feeds.value.filter(feed => feed.source === 'weibo') },
+  { key: 'pixiv', label: 'Pixiv', short: 'P', ...sourceMeta.pixiv, configured: pixivAccount.value.configured, account: pixivAccount.value.configured ? (pixivAccount.value.userName || `UID ${pixivAccount.value.userId}`) : '尚未连接账号', path: '/flow/pixiv', description: '画师作品与插画媒体', feeds: feeds.value.filter(feed => feed.source === 'pixiv') }
 ])
 
 async function responseError(response, fallback) {
@@ -516,7 +516,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
 <strong>{{ post.author }}</strong>
 <span>{{ relativeTime(post.published) }}</span>
 </div>
-<span :class="['source-pill', sourceMeta[post.source].color]">
+<span :class="['source-pill', 'post-source-pill', sourceMeta[post.source].color]">
 <img class="source-icon" :src="sourceMeta[post.source].image" :alt="`${sourceMeta[post.source].label}图标`">{{ sourceMeta[post.source].label }}</span>
 </div>
 <p class="caption">{{ post.caption }}</p>
@@ -544,7 +544,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
       <p v-if="timelineMessage" class="timeline-message">{{ timelineMessage }}</p>
       <section class="pull-list">
         <article v-for="feed in feeds" :key="feed.id" class="pull-card">
-          <img class="pull-avatar" :src="feed.avatar || (fallbackPosts.find(post => post.source === feed.source)?.avatar) || '/favicon.ico'" :alt="feed.name" @error="$event.target.src = '/favicon.ico'">
+          <img class="pull-avatar" :src="feed.avatar || sourceMeta[feed.source]?.image || '/favicon.ico'" :alt="feed.name" @error="$event.target.src = sourceMeta[feed.source]?.image || '/favicon.ico'">
           <div class="pull-info"><div class="pull-title"><strong>{{ feed.name }}</strong><span :class="['source-pill', sourceMeta[feed.source].color]"><img class="source-icon" :src="sourceMeta[feed.source].image" :alt="sourceMeta[feed.source].label">{{ sourceMeta[feed.source].label }}</span></div><span class="pull-handle">{{ feed.handle }}</span><small>{{ feed.lastSyncMessage || (feed.lastSyncedAt ? `上次拉取：${relativeTime(feed.lastSyncedAt)}` : '尚未拉取') }}</small></div>
           <div class="pull-status"><i :class="['pull-dot', feed.lastSyncStatus]"></i><span>{{ feed.lastSyncStatus === 'success' ? `新增 ${feed.lastSyncCount || 0} 条` : feed.lastSyncStatus === 'failed' ? '拉取失败' : '待拉取' }}</span></div>
           <button class="pull-action" :disabled="sourceActionBusy === `sync:${feed.id}`" @click="syncSource(feed)">{{ sourceActionBusy === `sync:${feed.id}` ? '拉取中…' : '立即拉取' }}</button>
@@ -622,21 +622,21 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
         <section v-if="settingsTab === 'platforms'" class="settings-pane platform-credentials-pane">
           <div class="pane-heading"><div><h3>平台凭证</h3><p>各平台凭证仅由服务端验证，并加密保存在本地数据目录。</p></div><span>3 个平台</span></div>
           <div class="platform-auth-grid">
-            <article class="platform-auth-card pixiv">
-              <header class="platform-auth-head"><img class="source-icon" :src="sourceMeta.pixiv.image" alt="Pixiv图标"><div><h3>Pixiv</h3><span>OAuth refresh_token</span></div><em :class="['connection-dot', { online: pixivAccount.configured }]">{{ pixivAccount.configured ? '已连接' : '未连接' }}</em></header>
-              <p v-if="pixivAccount.configured">当前账号：{{ pixivAccount.userName || pixivAccount.userId }}。重新保存时需填写新 token。</p><p v-else>使用 OAuth refresh_token 连接，不保存账号密码。</p>
-              <form class="settings-form platform-auth-form" @submit.prevent="savePixivAccount"><label>refresh_token</label><input v-model="pixivRefreshToken" type="password" required autocomplete="off"><p class="credential-note">服务端需配置 Pixiv OAuth 客户端环境变量，token 将加密保存。</p><button class="login-button" :disabled="pixivBusy">{{ pixivBusy ? '验证中…' : '验证并保存 Pixiv' }}</button></form><p v-if="pixivError" class="login-error">{{ pixivError }}</p>
+            <article class="platform-auth-card bilibili">
+              <header class="platform-auth-head"><img class="source-icon" :src="sourceMeta.bilibili.image" alt="哔哩哔哩图标"><div><h3>哔哩哔哩</h3><span>手机客户端扫码登录</span></div><em :class="['connection-dot', { online: biliAccount.configured }]">{{ biliAccount.configured ? '已连接' : '未连接' }}</em></header>
+              <p v-if="biliAccount.configured">当前账号：UID {{ biliAccount.userId }}。扫码可切换账号。</p><p v-else>登录凭证会自动获取并加密保存。</p>
+              <div v-if="biliQRImage" class="weibo-qr"><img :src="biliQRImage" alt="哔哩哔哩登录二维码"><span>{{ biliQRStatus }}</span></div><button class="login-button platform-login-button" type="button" @click="startBilibiliQR" :disabled="biliBusy && !biliQR">{{ biliQR ? '刷新二维码' : biliBusy ? '获取中…' : biliAccount.configured ? '扫码切换 B 站账号' : '扫码连接 B 站' }}</button>
+              <details class="manual-credential"><summary>高级：手动导入 Cookie</summary><form class="settings-form bili-credentials" @submit.prevent="saveBilibiliAccount" autocomplete="off"><label>完整 Cookie</label><textarea v-model="biliCredentials.cookie" rows="4" placeholder="仅在扫码不可用时使用"></textarea><label>SESSDATA</label><input v-model="biliCredentials.SESSDATA" type="password"><label>bili_jct</label><input v-model="biliCredentials.bili_jct" type="password"><label>buvid3</label><input v-model="biliCredentials.buvid3" type="password"><label>DedeUserID</label><input v-model="biliCredentials.DedeUserID" inputmode="numeric"><button class="login-button" :disabled="biliBusy">验证并保存手动凭证</button></form></details><p v-if="biliError" class="login-error bili-error">{{ biliError }}</p>
             </article>
             <article class="platform-auth-card weibo">
               <header class="platform-auth-head"><img class="source-icon" :src="sourceMeta.weibo.image" alt="微博图标"><div><h3>微博</h3><span>客户端扫码登录</span></div><em :class="['connection-dot', { online: weiboAccount.configured }]">{{ weiboAccount.configured ? '已连接' : '未连接' }}</em></header>
               <p v-if="weiboAccount.configured">当前账号：{{ weiboAccount.userName || `UID ${weiboAccount.userId}` }}。</p><p v-else>使用微博客户端扫描二维码登录。</p>
               <div v-if="weiboQR" class="weibo-qr"><img :src="weiboQR.image.startsWith('//') ? `https:${weiboQR.image}` : weiboQR.image" alt="微博登录二维码"><span>请在二维码过期前扫码并确认</span></div><button class="login-button platform-login-button" type="button" @click="startWeiboQR" :disabled="weiboBusy && !weiboQR">{{ weiboQR ? '刷新二维码' : weiboBusy ? '获取中…' : weiboAccount.configured ? '扫码切换微博账号' : '扫码连接微博' }}</button><p v-if="weiboError" class="login-error">{{ weiboError }}</p>
             </article>
-            <article class="platform-auth-card bilibili">
-              <header class="platform-auth-head"><img class="source-icon" :src="sourceMeta.bilibili.image" alt="哔哩哔哩图标"><div><h3>哔哩哔哩</h3><span>手机客户端扫码登录</span></div><em :class="['connection-dot', { online: biliAccount.configured }]">{{ biliAccount.configured ? '已连接' : '未连接' }}</em></header>
-              <p v-if="biliAccount.configured">当前账号：UID {{ biliAccount.userId }}。扫码可切换账号。</p><p v-else>登录凭证会自动获取并加密保存。</p>
-              <div v-if="biliQRImage" class="weibo-qr"><img :src="biliQRImage" alt="哔哩哔哩登录二维码"><span>{{ biliQRStatus }}</span></div><button class="login-button platform-login-button" type="button" @click="startBilibiliQR" :disabled="biliBusy && !biliQR">{{ biliQR ? '刷新二维码' : biliBusy ? '获取中…' : biliAccount.configured ? '扫码切换 B 站账号' : '扫码连接 B 站' }}</button>
-              <details class="manual-credential"><summary>高级：手动导入 Cookie</summary><form class="settings-form bili-credentials" @submit.prevent="saveBilibiliAccount" autocomplete="off"><label>完整 Cookie</label><textarea v-model="biliCredentials.cookie" rows="4" placeholder="仅在扫码不可用时使用"></textarea><label>SESSDATA</label><input v-model="biliCredentials.SESSDATA" type="password"><label>bili_jct</label><input v-model="biliCredentials.bili_jct" type="password"><label>buvid3</label><input v-model="biliCredentials.buvid3" type="password"><label>DedeUserID</label><input v-model="biliCredentials.DedeUserID" inputmode="numeric"><button class="login-button" :disabled="biliBusy">验证并保存手动凭证</button></form></details><p v-if="biliError" class="login-error bili-error">{{ biliError }}</p>
+            <article class="platform-auth-card pixiv">
+              <header class="platform-auth-head"><img class="source-icon" :src="sourceMeta.pixiv.image" alt="Pixiv图标"><div><h3>Pixiv</h3><span>OAuth refresh_token</span></div><em :class="['connection-dot', { online: pixivAccount.configured }]">{{ pixivAccount.configured ? '已连接' : '未连接' }}</em></header>
+              <p v-if="pixivAccount.configured">当前账号：{{ pixivAccount.userName || pixivAccount.userId }}。重新保存时需填写新 token。</p><p v-else>使用 OAuth refresh_token 连接，不保存账号密码。</p>
+              <form class="settings-form platform-auth-form" @submit.prevent="savePixivAccount"><label>refresh_token</label><input v-model="pixivRefreshToken" type="password" required autocomplete="off"><p class="credential-note">服务端需配置 Pixiv OAuth 客户端环境变量，token 将加密保存。</p><button class="login-button" :disabled="pixivBusy">{{ pixivBusy ? '验证中…' : '验证并保存 Pixiv' }}</button></form><p v-if="pixivError" class="login-error">{{ pixivError }}</p>
             </article>
           </div>
         </section>

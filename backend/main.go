@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
@@ -138,7 +139,7 @@ type BilibiliStore struct {
 }
 
 type BilibiliUser struct {
-	UserID      int64  `json:"userId"`
+	UserID      string `json:"userId"`
 	Name        string `json:"name"`
 	Avatar      string `json:"avatar"`
 	Fans        int64  `json:"fans"`
@@ -1050,11 +1051,11 @@ func (b *BilibiliStore) searchHandler(w http.ResponseWriter, r *http.Request) {
 		Code int `json:"code"`
 		Data struct {
 			Result []struct {
-				Mid   int64  `json:"mid"`
-				Uname string `json:"uname"`
-				Upic  string `json:"upic"`
-				Fans  int64  `json:"fans"`
-				Usign string `json:"usign"`
+				Mid   json.Number `json:"mid"`
+				Uname string      `json:"uname"`
+				Upic  string      `json:"upic"`
+				Fans  int64       `json:"fans"`
+				Usign string      `json:"usign"`
 			} `json:"result"`
 		} `json:"data"`
 	}
@@ -1071,7 +1072,7 @@ func (b *BilibiliStore) searchHandler(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(avatar, "//") {
 			avatar = "https:" + avatar
 		}
-		users = append(users, BilibiliUser{UserID: result.Mid, Name: plainBilibiliText(result.Uname), Avatar: avatar, Fans: result.Fans, Description: result.Usign})
+		users = append(users, BilibiliUser{UserID: result.Mid.String(), Name: plainBilibiliText(result.Uname), Avatar: avatar, Fans: result.Fans, Description: result.Usign})
 	}
 	writeJSON(w, users)
 }
@@ -1171,20 +1172,25 @@ func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var input struct {
-		UserID      int64  `json:"userId"`
+		UserID      string `json:"userId"`
 		Name        string `json:"name"`
 		Avatar      string `json:"avatar"`
 		IncludePast bool   `json:"includePast"`
 		Schedule    string `json:"schedule"`
 	}
-	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&input) != nil || input.UserID <= 0 || strings.TrimSpace(input.Name) == "" {
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&input) != nil || strings.TrimSpace(input.UserID) == "" || strings.TrimSpace(input.Name) == "" {
 		http.Error(w, "invalid subscription", http.StatusBadRequest)
 		return
 	}
 	if input.Schedule == "" {
 		input.Schedule = "每 6 小时"
 	}
-	feed := SourceConfig{ID: fmt.Sprintf("bili-%d", input.UserID), Source: SourceBilibili, Name: strings.TrimSpace(input.Name), Handle: fmt.Sprintf("UID %d", input.UserID), Avatar: strings.TrimSpace(input.Avatar), Enabled: true, IncludePast: input.IncludePast, Schedule: input.Schedule, ContentTypes: []string{"DRAW", "ARTICLE"}}
+	userID := strings.TrimSpace(input.UserID)
+	if _, err := strconv.ParseUint(userID, 10, 64); err != nil {
+		http.Error(w, "invalid subscription", http.StatusBadRequest)
+		return
+	}
+	feed := SourceConfig{ID: "bili-" + userID, Source: SourceBilibili, Name: strings.TrimSpace(input.Name), Handle: "UID " + userID, Avatar: strings.TrimSpace(input.Avatar), Enabled: true, IncludePast: input.IncludePast, Schedule: input.Schedule, ContentTypes: []string{"DRAW", "ARTICLE"}}
 	var storageErr error
 	feed, storageErr = prepareSourceStorage(feed)
 	if storageErr != nil {
@@ -1282,6 +1288,34 @@ func cleanRemoteText(value string) string {
 	return strings.TrimSpace(html.UnescapeString(htmlTagPattern.ReplaceAllString(value, "")))
 }
 
+func (b *BilibiliStore) findBilibiliUser(name string) (BilibiliUser, error) {
+	b.RLock()
+	credentials, proxyURL := b.config.Credentials, b.config.ProxyURL
+	b.RUnlock()
+	var payload struct {
+		Code int `json:"code"`
+		Data struct {
+			Result []struct {
+				Mid   json.Number `json:"mid"`
+				Uname string      `json:"uname"`
+				Upic  string      `json:"upic"`
+				Fans  int64       `json:"fans"`
+				Usign string      `json:"usign"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+	endpoint := "https://api.bilibili.com/x/web-interface/search/type?search_type=bili_user&page=1&page_size=20&keyword=" + url.QueryEscape(name)
+	if err := bilibiliRequest(endpoint, credentials, proxyURL, &payload); err != nil || payload.Code != 0 {
+		return BilibiliUser{}, errors.New("无法校正 UP 主资料")
+	}
+	for _, result := range payload.Data.Result {
+		if plainBilibiliText(result.Uname) == name {
+			return BilibiliUser{UserID: result.Mid.String(), Name: name, Avatar: normalizeRemoteImage(result.Upic), Fans: result.Fans, Description: result.Usign}, nil
+		}
+	}
+	return BilibiliUser{}, errors.New("无法按昵称找到原 UP 主，请删除后重新订阅")
+}
+
 func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig) ([]Post, error) {
 	userID := strings.TrimSpace(strings.TrimPrefix(feed.ID, "bili-"))
 	b.RLock()
@@ -1367,6 +1401,54 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig) ([]Post, error) {
 	return posts, nil
 }
 
+func collectWeiboPosts(value any, feed SourceConfig, posts *[]Post, seen map[string]bool) {
+	if object, ok := value.(map[string]any); ok {
+		mblog := object
+		if nested, exists := object["mblog"].(map[string]any); exists {
+			mblog = nested
+		}
+		user, hasUser := mblog["user"].(map[string]any)
+		id := strings.TrimSpace(fmt.Sprint(mblog["id"]))
+		if hasUser && id != "" && id != "<nil>" && !seen[id] {
+			seen[id] = true
+			name := strings.TrimSpace(fmt.Sprint(user["screen_name"]))
+			avatar := normalizeRemoteImage(fmt.Sprint(user["avatar_hd"]))
+			if avatar == "<nil>" || avatar == "" {
+				avatar = normalizeRemoteImage(fmt.Sprint(user["profile_image_url"]))
+			}
+			if name == "" || name == "<nil>" {
+				name = feed.Name
+			}
+			if avatar == "<nil>" || avatar == "" {
+				avatar = feed.Avatar
+			}
+			published, parseErr := time.Parse("Mon Jan 02 15:04:05 -0700 2006", fmt.Sprint(mblog["created_at"]))
+			if parseErr != nil {
+				published = time.Now()
+			}
+			media := make([]string, 0)
+			if pictures, ok := mblog["pics"].([]any); ok {
+				for _, rawPicture := range pictures {
+					picture, _ := rawPicture.(map[string]any)
+					large, _ := picture["large"].(map[string]any)
+					image := normalizeRemoteImage(fmt.Sprint(large["url"]))
+					if image != "" && image != "<nil>" {
+						media = append(media, image)
+					}
+				}
+			}
+			*posts = append(*posts, Post{ID: "weibo-status-" + id, Source: SourceWeibo, Author: name, Avatar: avatar, Caption: cleanRemoteText(fmt.Sprint(mblog["text"])), Tags: []string{}, Media: media, Published: published})
+		}
+		for _, child := range object {
+			collectWeiboPosts(child, feed, posts, seen)
+		}
+	} else if list, ok := value.([]any); ok {
+		for _, child := range list {
+			collectWeiboPosts(child, feed, posts, seen)
+		}
+	}
+}
+
 func (b *BilibiliStore) fetchWeiboPosts(feed SourceConfig) ([]Post, error) {
 	userID := strings.TrimSpace(strings.TrimPrefix(feed.ID, "weibo-"))
 	b.RLock()
@@ -1375,54 +1457,39 @@ func (b *BilibiliStore) fetchWeiboPosts(feed SourceConfig) ([]Post, error) {
 	if credentials.Cookie == "" {
 		return nil, errors.New("微博账号未连接")
 	}
-	endpoint := "https://m.weibo.cn/api/container/getIndex?type=uid&value=" + url.QueryEscape(userID) + "&containerid=" + url.QueryEscape("107603"+userID)
-	payload, _, err := weiboRawRequest(endpoint, credentials, proxyURL)
-	if err != nil {
-		return nil, fmt.Errorf("微博请求失败: %w", err)
+	endpoints := []string{
+		"https://weibo.com/ajax/statuses/mymblog?uid=" + url.QueryEscape(userID) + "&page=1&feature=0",
+		"https://m.weibo.cn/api/container/getIndex?type=uid&value=" + url.QueryEscape(userID) + "&containerid=" + url.QueryEscape("107603"+userID),
 	}
-	data, _ := payload["data"].(map[string]any)
-	cards, _ := data["cards"].([]any)
-	posts := make([]Post, 0, len(cards))
-	for _, rawCard := range cards {
-		card, _ := rawCard.(map[string]any)
-		mblog, _ := card["mblog"].(map[string]any)
-		id := strings.TrimSpace(fmt.Sprint(mblog["id"]))
-		if id == "" || id == "<nil>" {
+	var lastErr error
+	for _, endpoint := range endpoints {
+		payload, _, err := weiboRawRequest(endpoint, credentials, proxyURL)
+		if err != nil {
+			lastErr = err
 			continue
 		}
-		user, _ := mblog["user"].(map[string]any)
-		name := strings.TrimSpace(fmt.Sprint(user["screen_name"]))
-		avatar := normalizeRemoteImage(fmt.Sprint(user["avatar_hd"]))
-		if avatar == "<nil>" || avatar == "" {
-			avatar = normalizeRemoteImage(fmt.Sprint(user["profile_image_url"]))
+		posts := make([]Post, 0)
+		collectWeiboPosts(payload, feed, &posts, make(map[string]bool))
+		if len(posts) > 0 {
+			return posts, nil
 		}
-		if name == "" || name == "<nil>" {
-			name = feed.Name
-		}
-		if avatar == "<nil>" || avatar == "" {
-			avatar = feed.Avatar
-		}
-		published, parseErr := time.Parse("Mon Jan 02 15:04:05 -0700 2006", fmt.Sprint(mblog["created_at"]))
-		if parseErr != nil {
-			published = time.Now()
-		}
-		media := make([]string, 0)
-		if pictures, ok := mblog["pics"].([]any); ok {
-			for _, rawPicture := range pictures {
-				picture, _ := rawPicture.(map[string]any)
-				large, _ := picture["large"].(map[string]any)
-				image := normalizeRemoteImage(fmt.Sprint(large["url"]))
-				if image != "" && image != "<nil>" {
-					media = append(media, image)
-				}
-			}
-		}
-		posts = append(posts, Post{ID: "weibo-status-" + id, Source: SourceWeibo, Author: name, Avatar: avatar, Caption: cleanRemoteText(fmt.Sprint(mblog["text"])), Tags: []string{}, Media: media, Published: published})
+		lastErr = errors.New("接口未返回该博主的动态")
 	}
-	return posts, nil
+	return nil, fmt.Errorf("微博拉取失败：%w", lastErr)
 }
 
 func (b *BilibiliStore) syncSource(feed SourceConfig) (SourceConfig, error) {
+	originalID := feed.ID
+	if feed.Source == SourceBilibili {
+		userID := strings.TrimPrefix(feed.ID, "bili-")
+		if _, err := strconv.ParseUint(userID, 10, 64); err != nil || len(userID) > 15 || strings.TrimSpace(feed.Avatar) == "" {
+			if repaired, repairErr := b.findBilibiliUser(feed.Name); repairErr == nil {
+				feed.ID = "bili-" + repaired.UserID
+				feed.Handle = "UID " + repaired.UserID
+				feed.Avatar = repaired.Avatar
+			}
+		}
+	}
 	var posts []Post
 	var err error
 	switch feed.Source {
@@ -1435,6 +1502,14 @@ func (b *BilibiliStore) syncSource(feed SourceConfig) (SourceConfig, error) {
 	}
 	added := 0
 	if err == nil {
+		if len(posts) > 0 {
+			if strings.TrimSpace(posts[0].Author) != "" {
+				feed.Name = posts[0].Author
+			}
+			if strings.TrimSpace(posts[0].Avatar) != "" {
+				feed.Avatar = posts[0].Avatar
+			}
+		}
 		if b.content == nil {
 			err = errors.New("动态存储未初始化")
 		} else {
@@ -1446,8 +1521,14 @@ func (b *BilibiliStore) syncSource(feed SourceConfig) (SourceConfig, error) {
 	lists := []*[]SourceConfig{&b.config.Subscriptions, &b.config.WeiboSubscriptions}
 	for _, list := range lists {
 		for index := range *list {
-			if (*list)[index].ID != feed.ID {
+			if (*list)[index].ID != feed.ID && (*list)[index].ID != originalID {
 				continue
+			}
+			(*list)[index].ID = feed.ID
+			(*list)[index].Name = feed.Name
+			(*list)[index].Handle = feed.Handle
+			if feed.Avatar != "" {
+				(*list)[index].Avatar = feed.Avatar
 			}
 			(*list)[index].LastSyncedAt = now
 			(*list)[index].LastSyncCount = added
@@ -1815,11 +1896,14 @@ func weiboRawRequest(endpoint string, credentials WeiboCredentials, proxyURL str
 		return nil, response.StatusCode, readErr
 	}
 	if response.StatusCode != http.StatusOK {
-		return nil, response.StatusCode, fmt.Errorf("weibo HTTP %d", response.StatusCode)
+		return nil, response.StatusCode, fmt.Errorf("微博接口返回 HTTP %d，请检查登录状态或代理出口", response.StatusCode)
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, response.StatusCode, err
+		if bytes.Contains(bytes.ToLower(body), []byte("<html")) || bytes.Contains(bytes.ToLower(body), []byte("<!doctype")) {
+			return nil, response.StatusCode, errors.New("微博返回了网页拦截页，请重新扫码登录或更换代理出口")
+		}
+		return nil, response.StatusCode, errors.New("微博接口返回格式异常，请重新扫码登录")
 	}
 	return payload, response.StatusCode, nil
 }

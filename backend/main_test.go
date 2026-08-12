@@ -161,6 +161,33 @@ func TestRegularFeedSyncAndDelete(t *testing.T) {
 	}
 }
 
+func TestBilibiliSubscriptionKeepsLargeUserIDAsString(t *testing.T) {
+	oldFile, oldFlowRoot := bilibiliFile, flowRoot
+	tempDir := t.TempDir()
+	bilibiliFile = filepath.Join(tempDir, "platform.enc")
+	flowRoot = filepath.Join(tempDir, "flow")
+	t.Cleanup(func() { bilibiliFile, flowRoot = oldFile, oldFlowRoot })
+	store := &BilibiliStore{key: make([]byte, 32), config: BilibiliConfig{}, bilibiliQR: make(map[string]BilibiliQRSession), bilibiliClients: make(map[string]*http.Client), weiboQR: make(map[string]WeiboQRSession), weiboClients: make(map[string]*http.Client)}
+	request := httptest.NewRequest(http.MethodPost, "/api/bilibili/subscriptions", strings.NewReader(`{"userId":"3546637624412244","name":"测试 UP 主","avatar":"https://example.com/up.jpg"}`))
+	response := httptest.NewRecorder()
+	store.subscriptionsHandler(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("create status=%d body=%s", response.Code, response.Body.String())
+	}
+	if len(store.config.Subscriptions) != 1 || store.config.Subscriptions[0].ID != "bili-3546637624412244" || store.config.Subscriptions[0].Avatar != "https://example.com/up.jpg" {
+		t.Fatalf("large UID lost precision: %#v", store.config.Subscriptions)
+	}
+}
+
+func TestCollectWeiboPosts(t *testing.T) {
+	payload := map[string]any{"data": map[string]any{"list": []any{map[string]any{"id": "987", "text_raw": "测试动态", "text": "<b>测试动态</b>", "created_at": "Mon Aug 12 10:00:00 +0800 2024", "user": map[string]any{"screen_name": "原博主", "avatar_hd": "https://example.com/original.jpg"}}}}}
+	posts := make([]Post, 0)
+	collectWeiboPosts(payload, SourceConfig{Name: "备用名称", Avatar: "fallback"}, &posts, make(map[string]bool))
+	if len(posts) != 1 || posts[0].Author != "原博主" || posts[0].Avatar != "https://example.com/original.jpg" || posts[0].Caption != "测试动态" {
+		t.Fatalf("unexpected parsed posts: %#v", posts)
+	}
+}
+
 func TestBilibiliSubscriptionSyncAndDelete(t *testing.T) {
 	oldFile := bilibiliFile
 	bilibiliFile = filepath.Join(t.TempDir(), "platform.enc")
