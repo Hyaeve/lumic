@@ -136,7 +136,7 @@ func TestRegularFeedSyncAndDelete(t *testing.T) {
 	if syncResponse.Code != http.StatusOK {
 		t.Fatalf("sync status=%d body=%s", syncResponse.Code, syncResponse.Body.String())
 	}
-	if status := decodeTestResponse(t, syncResponse)["status"]; status != "started" {
+	if status := decodeTestResponse(t, syncResponse)["status"]; status != "completed" {
 		t.Fatalf("unexpected sync status: %v", status)
 	}
 	if store.feeds[0].LastSyncedAt.IsZero() {
@@ -181,11 +181,11 @@ func TestBilibiliSubscriptionSyncAndDelete(t *testing.T) {
 	if syncResponse.Code != http.StatusOK {
 		t.Fatalf("sync status=%d body=%s", syncResponse.Code, syncResponse.Body.String())
 	}
-	if status := decodeTestResponse(t, syncResponse)["status"]; status != "started" {
+	if status := decodeTestResponse(t, syncResponse)["status"]; status != "failed" {
 		t.Fatalf("unexpected sync status: %v", status)
 	}
-	if store.config.Subscriptions[0].LastSyncedAt.IsZero() {
-		t.Fatal("sync did not update LastSyncedAt")
+	if store.config.Subscriptions[0].LastSyncedAt.IsZero() || store.config.Subscriptions[0].LastSyncStatus != "failed" {
+		t.Fatalf("sync failure status was not persisted: %#v", store.config.Subscriptions[0])
 	}
 
 	deleteRequest := httptest.NewRequest(http.MethodDelete, "/api/bilibili/subscriptions?id=bili-123", nil)
@@ -226,13 +226,13 @@ func TestWeiboSubscriptionLifecycle(t *testing.T) {
 		weiboClients:    make(map[string]*http.Client),
 	}
 
-	createRequest := httptest.NewRequest(http.MethodPost, "/api/weibo/subscriptions", strings.NewReader(`{"userId":"12345","name":"测试博主","includePast":true,"schedule":"每 6 小时"}`))
+	createRequest := httptest.NewRequest(http.MethodPost, "/api/weibo/subscriptions", strings.NewReader(`{"userId":"12345","name":"测试博主","avatar":"https://example.com/avatar.jpg","includePast":true,"schedule":"每 6 小时"}`))
 	createResponse := httptest.NewRecorder()
 	store.weiboSubscriptionsHandler(createResponse, createRequest)
 	if createResponse.Code != http.StatusOK {
 		t.Fatalf("create status=%d body=%s", createResponse.Code, createResponse.Body.String())
 	}
-	if len(store.config.WeiboSubscriptions) != 1 || store.config.WeiboSubscriptions[0].ID != "weibo-12345" {
+	if len(store.config.WeiboSubscriptions) != 1 || store.config.WeiboSubscriptions[0].ID != "weibo-12345" || store.config.WeiboSubscriptions[0].Avatar != "https://example.com/avatar.jpg" {
 		t.Fatalf("unexpected subscriptions: %#v", store.config.WeiboSubscriptions)
 	}
 	if _, err := os.Stat(store.config.WeiboSubscriptions[0].StoragePath); err != nil {

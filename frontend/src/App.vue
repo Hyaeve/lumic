@@ -242,10 +242,20 @@ async function searchWeibo() {
     weiboResults.value = await response.json()
   } catch (error) { weiboError.value = error.message } finally { weiboBusy.value = false }
 }
+async function runFullSync() {
+  syncing.value = true; timelineMessage.value = ''
+  try {
+    const response = await fetch('/api/sync', { method: 'POST' })
+    const result = await response.json()
+    if (!response.ok && !result.message) throw new Error(await responseError(response, '同步失败'))
+    timelineMessage.value = result.message || '拉取任务已完成'
+    await loadData()
+  } catch (error) { timelineMessage.value = error.message } finally { syncing.value = false }
+}
 async function subscribeWeibo(user) {
   weiboBusy.value = true; weiboError.value = ''
   try {
-    const response = await fetch('/api/weibo/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: user.userId, name: user.name, includePast: weiboIncludePast.value, schedule: '每 6 小时' }) })
+    const response = await fetch('/api/weibo/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: user.userId, name: user.name, avatar: user.avatar, includePast: weiboIncludePast.value, schedule: '每 6 小时' }) })
     if (!response.ok) throw new Error(await responseError(response, response.status === 409 ? '已经订阅该微博博主' : '订阅失败'))
     feeds.value.push(await response.json())
   } catch (error) { weiboError.value = error.message } finally { weiboBusy.value = false }
@@ -253,7 +263,7 @@ async function subscribeWeibo(user) {
 async function subscribeBilibili(user) {
   biliBusy.value = true; biliError.value = ''
   try {
-    const response = await fetch('/api/bilibili/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: user.userId, name: user.name, includePast: biliIncludePast.value, schedule: '每 6 小时' }) })
+    const response = await fetch('/api/bilibili/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: user.userId, name: user.name, avatar: user.avatar, includePast: biliIncludePast.value, schedule: '每 6 小时' }) })
     if (!response.ok) throw new Error(response.status === 409 ? '已经订阅该 UP 主' : '订阅失败')
     feeds.value.push(await response.json())
   } catch (error) { biliError.value = error.message } finally { biliBusy.value = false }
@@ -302,8 +312,9 @@ async function syncSource(feed) {
   const endpoint = sourceOperationEndpoint(feed)
   try {
     const response = await fetch(`${endpoint}?action=sync&id=${encodeURIComponent(feed.id)}`, { method: 'POST' })
-    if (!response.ok) throw new Error(await responseError(response, '无法启动来源拉取'))
-    const result = await response.json(); sourceActionMessage.value = result.message || '拉取任务已加入队列'
+    const result = await response.json()
+    if (!response.ok && result.status !== 'failed') throw new Error(result.error || '无法启动来源拉取')
+    sourceActionMessage.value = result.message || '拉取任务已完成'
     const updated = result.source; const index = feeds.value.findIndex(item => item.id === feed.id)
     if (updated && index >= 0) feeds.value[index] = updated
     if (updated && selectedPlatform.value) {
@@ -420,6 +431,9 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
         <button :class="{ active: activeNav === 'liked' }" @click="activeNav = 'liked'; activeSource = 'weibo'">
 <span>♡</span> 我的点赞 <b>24</b>
 </button>
+        <button :class="{ active: activeNav === 'pulls' }" @click="activeNav = 'pulls'">
+<span>↻</span> 拉取列表 <b>{{ feeds.length }}</b>
+</button>
         <div class="nav-label">来源</div>
         <button v-for="(meta, key) in sourceMeta" :key="key" :class="{ active: activeSource === key }" @click="activeNav = 'source'; activeSource = key">
 <img class="source-icon" :src="meta.image" :alt="`${meta.label}图标`">{{ meta.label }} <b>{{ posts.filter(p => p.source === key).length }}</b>
@@ -439,7 +453,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
       </div>
     </aside>
 
-    <main v-if="!showSettings" class="content">
+    <main v-if="!showSettings && activeNav !== 'pulls'" class="content">
       <header class="topbar">
 <div>
 <p class="eyebrow">SAVED MOMENTS · {{ new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' }) }}</p>
@@ -449,7 +463,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
 </div>
 <div class="header-actions">
 <button class="icon-button" @click="isDark = !isDark" :title="isDark ? '切换日间主题' : '切换夜间主题'">{{ isDark ? '☀' : '☾' }}</button>
-<button class="sync-button" @click="syncNow">
+<button class="sync-button" @click="runFullSync">
 <span :class="{ spin: syncing }">↻</span> {{ syncing ? '同步中' : '立即同步' }}</button>
 </div>
 </header>
@@ -524,6 +538,19 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
 </article>
 <div v-if="!filteredPosts.length" class="empty">还没有这个来源的动态</div>
 </section>
+    </main>
+    <main v-if="!showSettings && activeNav === 'pulls'" class="content pulls-page">
+      <header class="topbar"><div><p class="eyebrow">SOURCE PULLS · {{ feeds.length }} SOURCES</p><h1>拉取列表</h1><p class="subtitle">管理订阅作者，并按来源拉取最新动态。</p></div><div class="header-actions"><button class="sync-button" :disabled="syncing" @click="runFullSync"><span :class="{ spin: syncing }">↻</span>{{ syncing ? '拉取中' : '全部拉取' }}</button></div></header>
+      <p v-if="timelineMessage" class="timeline-message">{{ timelineMessage }}</p>
+      <section class="pull-list">
+        <article v-for="feed in feeds" :key="feed.id" class="pull-card">
+          <img class="pull-avatar" :src="feed.avatar || (fallbackPosts.find(post => post.source === feed.source)?.avatar) || '/favicon.ico'" :alt="feed.name" @error="$event.target.src = '/favicon.ico'">
+          <div class="pull-info"><div class="pull-title"><strong>{{ feed.name }}</strong><span :class="['source-pill', sourceMeta[feed.source].color]"><img class="source-icon" :src="sourceMeta[feed.source].image" :alt="sourceMeta[feed.source].label">{{ sourceMeta[feed.source].label }}</span></div><span class="pull-handle">{{ feed.handle }}</span><small>{{ feed.lastSyncMessage || (feed.lastSyncedAt ? `上次拉取：${relativeTime(feed.lastSyncedAt)}` : '尚未拉取') }}</small></div>
+          <div class="pull-status"><i :class="['pull-dot', feed.lastSyncStatus]"></i><span>{{ feed.lastSyncStatus === 'success' ? `新增 ${feed.lastSyncCount || 0} 条` : feed.lastSyncStatus === 'failed' ? '拉取失败' : '待拉取' }}</span></div>
+          <button class="pull-action" :disabled="sourceActionBusy === `sync:${feed.id}`" @click="syncSource(feed)">{{ sourceActionBusy === `sync:${feed.id}` ? '拉取中…' : '立即拉取' }}</button>
+        </article>
+        <div v-if="!feeds.length" class="empty">还没有订阅作者，请先添加 UP 主或微博博主。</div>
+      </section>
     </main>
     <button v-if="!showSettings" class="add-fab" @click="showAdd = true">＋ <span>添加来源</span>
 </button>
