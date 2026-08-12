@@ -8,7 +8,7 @@ import weiboIcon from '../icon/weibo.png'
 const authenticated = ref(false)
 const loginError = ref('')
 const showSettings = ref(false)
-const settingsTab = ref('network')
+const settingsTab = ref('sources')
 const settingsError = ref('')
 const settingsBusy = ref(false)
 const settingsForm = ref({ username: '', currentPassword: '', newPassword: '' })
@@ -114,7 +114,7 @@ async function syncNow() {
   try { await fetch('/api/sync', { method: 'POST' }) } catch {}
   setTimeout(() => { syncing.value = false }, 900)
 }
-async function openSettings(tab = 'network') {
+async function openSettings(tab = 'sources') {
   settingsTab.value = tab; showSettings.value = true; activeNav.value = 'settings'; settingsError.value = ''; proxyMessage.value = ''; pixivError.value = ''; weiboError.value = ''
   try {
     const [projectResponse, biliResponse, pixivResponse, weiboResponse] = await Promise.all([fetch('/api/project/settings'), fetch('/api/bilibili/account'), fetch('/api/pixiv/account'), fetch('/api/weibo/account')])
@@ -639,17 +639,14 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
     </div>
     <main v-if="showSettings" class="settings-page">
       <div class="settings-page-inner">
-        <button class="settings-back" @click="closeSettingsPage">← 返回动态</button>
-        <p class="eyebrow">LUMIC SETTINGS</p>
-        <h2>设置</h2>
-        <div class="settings-tabs">
-          <button :class="{ active: settingsTab === 'network' }" @click="settingsTab = 'network'; settingsError = ''">网络代理</button>
-          <button :class="{ active: settingsTab === 'platforms' }" @click="settingsTab = 'platforms'; settingsError = ''">平台凭证</button>
+        <nav class="settings-tabs" aria-label="设置分类">
           <button :class="{ active: settingsTab === 'sources' }" @click="settingsTab = 'sources'; settingsError = ''">来源管理</button>
+          <button :class="{ active: settingsTab === 'platforms' }" @click="settingsTab = 'platforms'; settingsError = ''">平台凭证</button>
+          <button :class="{ active: settingsTab === 'network' }" @click="settingsTab = 'network'; settingsError = ''">网络代理</button>
           <button :class="{ active: settingsTab === 'security' }" @click="settingsTab = 'security'; settingsError = ''">登录安全</button>
-        </div>
-        <section v-if="settingsTab === 'network'" class="settings-pane">
-          <h3>项目代理</h3><p>用于 Pixiv、B 站等所有后端外部请求。支持 HTTP、HTTPS、SOCKS5。</p>
+        </nav>
+        <section v-if="settingsTab === 'network'" class="settings-pane compact-settings-pane">
+          <div class="pane-heading"><div><h3>网络代理</h3><p>统一配置后端访问外部平台时使用的 HTTP、HTTPS 或 SOCKS5 代理。</p></div><span>{{ proxyStatus.proxyEnabled ? '已启用' : '未启用' }}</span></div>
           <div v-if="proxyStatus.proxyEnabled" class="setting-status">当前代理：{{ proxyStatus.proxyUrl }}</div>
           <form class="settings-form" @submit.prevent="saveProxy" autocomplete="off"><label>代理地址</label><input v-model="proxyForm.proxyUrl" placeholder="socks5://host.docker.internal:7890"><p class="credential-note">Docker 中的 127.0.0.1 指向容器自身；访问宿主机代理请使用 host.docker.internal。</p><div class="form-actions"><button type="button" class="secondary-button" @click="testProxy" :disabled="settingsBusy">测试连接</button><button class="login-button" :disabled="settingsBusy">保存代理</button><button type="button" class="danger-link" @click="proxyForm.proxyUrl = ''; saveProxy()">关闭代理</button></div></form>
           <p v-if="proxyMessage" class="success-message">{{ proxyMessage }}</p>
@@ -676,7 +673,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
           </div>
         </section>
         <section v-if="settingsTab === 'sources'" class="settings-pane source-platform-pane">
-          <div class="pane-heading"><div><h3>来源管理</h3><p>一个平台一个来源卡片。右键卡片打开详细设置，触屏设备可点击按钮。</p></div><span>3 个平台</span></div>
+          <div class="pane-heading"><div><h3>来源管理</h3><p>集中查看平台连接状态、订阅作者和内容存储位置。</p></div><span>3 个平台</span></div>
           <div class="platform-source-grid">
             <article v-for="platform in platformCards" :key="platform.key" :class="['platform-source-card', platform.key]" @contextmenu.prevent="openPlatformSettings(platform)">
               <div class="platform-card-head"><img class="source-icon" :src="platform.image" :alt="`${platform.label}图标`"><span :class="['connection-dot', { online: platform.configured }]">{{ platform.configured ? '已连接' : '未连接' }}</span></div>
@@ -685,9 +682,8 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
               <button @click="openPlatformSettings(platform)">详细设置 <span>→</span></button>
             </article>
           </div>
-          <p class="source-context-tip">提示：也可以在任意平台卡片上点击鼠标右键。</p>
         </section>
-        <section v-if="settingsTab === 'security'" class="settings-pane"><h3>登录安全</h3><p>修改后请使用新的账号和密码登录。密码至少 8 位。</p><form class="settings-form" @submit.prevent="saveSettings" autocomplete="off"><label>新账号</label><input v-model="settingsForm.username" required minlength="3" autocomplete="off"><label>当前密码</label><input v-model="settingsForm.currentPassword" type="password" required autocomplete="current-password"><label>新密码</label><input v-model="settingsForm.newPassword" type="password" required minlength="8" autocomplete="new-password"><button class="login-button" type="submit" :disabled="settingsBusy">{{ settingsBusy ? '保存中…' : '保存设置' }}</button></form></section>
+        <section v-if="settingsTab === 'security'" class="settings-pane compact-settings-pane"><div class="pane-heading"><div><h3>登录安全</h3><p>更新本地管理账号。保存后请使用新的账号和密码登录。</p></div><span>密码至少 8 位</span></div><form class="settings-form" @submit.prevent="saveSettings" autocomplete="off"><label>新账号</label><input v-model="settingsForm.username" required minlength="3" autocomplete="off"><label>当前密码</label><input v-model="settingsForm.currentPassword" type="password" required autocomplete="current-password"><label>新密码</label><input v-model="settingsForm.newPassword" type="password" required minlength="8" autocomplete="new-password"><button class="login-button" type="submit" :disabled="settingsBusy">{{ settingsBusy ? '保存中…' : '保存设置' }}</button></form></section>
         <p v-if="settingsError" class="login-error settings-page-error">{{ settingsError }}</p>
       </div>
     </main>
