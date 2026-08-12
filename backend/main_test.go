@@ -65,8 +65,24 @@ func TestCollectWeiboUsers(t *testing.T) {
 }
 
 func TestPostDelete(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "content.json")
-	store := &Store{posts: []Post{{ID: "post-1", Source: SourceWeibo, Author: "测试作者"}, {ID: "post-2", Source: SourcePixiv, Author: "保留作者"}}, feeds: []SourceConfig{}, file: path}
+	root := t.TempDir()
+	oldFlowRoot := flowRoot
+	flowRoot = root
+	t.Cleanup(func() { flowRoot = oldFlowRoot })
+	localMedia := filepath.Join(root, "weibo", "post-1.jpg")
+	outsideMedia := filepath.Join(filepath.Dir(root), "must-remain.jpg")
+	if err := os.MkdirAll(filepath.Dir(localMedia), 0755); err != nil {
+		t.Fatalf("create media directory: %v", err)
+	}
+	if err := os.WriteFile(localMedia, []byte("local"), 0600); err != nil {
+		t.Fatalf("create local media: %v", err)
+	}
+	if err := os.WriteFile(outsideMedia, []byte("outside"), 0600); err != nil {
+		t.Fatalf("create outside media: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(outsideMedia) })
+	path := filepath.Join(root, "content.json")
+	store := &Store{posts: []Post{{ID: "post-1", Source: SourceWeibo, Author: "测试作者", Media: []string{"/flow/weibo/post-1.jpg", "https://example.com/image.jpg", outsideMedia}}, {ID: "post-2", Source: SourcePixiv, Author: "保留作者"}}, feeds: []SourceConfig{}, file: path}
 	store.Lock()
 	if err := store.saveLocked(); err != nil {
 		t.Fatalf("seed content store: %v", err)
@@ -81,6 +97,12 @@ func TestPostDelete(t *testing.T) {
 	}
 	if len(store.posts) != 1 || store.posts[0].ID != "post-2" {
 		t.Fatalf("unexpected posts after delete: %#v", store.posts)
+	}
+	if _, err := os.Stat(localMedia); !os.IsNotExist(err) {
+		t.Fatalf("local media was not deleted, stat error=%v", err)
+	}
+	if _, err := os.Stat(outsideMedia); err != nil {
+		t.Fatalf("outside media was unexpectedly removed: %v", err)
 	}
 
 	reloaded, err := loadStoreFile(path)

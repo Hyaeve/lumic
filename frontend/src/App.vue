@@ -1,6 +1,9 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import QRCode from 'qrcode'
+import bilibiliIcon from '../icon/bilibili.png'
+import pixivIcon from '../icon/pixiv.png'
+import weiboIcon from '../icon/weibo.png'
 
 const authenticated = ref(false)
 const loginError = ref('')
@@ -65,16 +68,16 @@ const fallbackPosts = [
 ]
 
 const sourceMeta = {
-  weibo: { label: '微博', icon: 'wb', color: 'coral' },
-  pixiv: { label: 'pixiv', icon: 'px', color: 'violet' },
-  bilibili: { label: '哔哩哔哩', icon: 'bl', color: 'blue' }
+  weibo: { label: '微博', icon: 'wb', image: weiboIcon, color: 'coral' },
+  pixiv: { label: 'pixiv', icon: 'px', image: pixivIcon, color: 'violet' },
+  bilibili: { label: '哔哩哔哩', icon: 'bl', image: bilibiliIcon, color: 'blue' }
 }
 const filteredPosts = computed(() => activeSource.value === 'all' ? posts.value : posts.value.filter(p => p.source === activeSource.value))
 const sourceCount = computed(() => new Set(posts.value.map(p => p.source)).size)
 const platformCards = computed(() => [
-  { key: 'bilibili', label: '哔哩哔哩', short: '哔', icon: 'bl', configured: biliAccount.value.configured, account: biliAccount.value.configured ? `UID ${biliAccount.value.userId}` : '尚未连接账号', path: '/flow/bilibili', description: 'UP 主图文动态与专栏', feeds: feeds.value.filter(feed => feed.source === 'bilibili') },
-  { key: 'pixiv', label: 'Pixiv', short: 'P', icon: 'px', configured: pixivAccount.value.configured, account: pixivAccount.value.configured ? (pixivAccount.value.userName || `UID ${pixivAccount.value.userId}`) : '尚未连接账号', path: '/flow/pixiv', description: '画师作品与插画媒体', feeds: feeds.value.filter(feed => feed.source === 'pixiv') },
-  { key: 'weibo', label: '微博', short: '微', icon: 'wb', configured: weiboAccount.value.configured, account: weiboAccount.value.configured ? (weiboAccount.value.userName || `UID ${weiboAccount.value.userId}`) : '尚未连接账号', path: '/flow/weibo', description: '博主动态与图文媒体', feeds: feeds.value.filter(feed => feed.source === 'weibo') }
+  { key: 'bilibili', label: '哔哩哔哩', short: '哔', ...sourceMeta.bilibili, configured: biliAccount.value.configured, account: biliAccount.value.configured ? `UID ${biliAccount.value.userId}` : '尚未连接账号', path: '/flow/bilibili', description: 'UP 主图文动态与专栏', feeds: feeds.value.filter(feed => feed.source === 'bilibili') },
+  { key: 'pixiv', label: 'Pixiv', short: 'P', ...sourceMeta.pixiv, configured: pixivAccount.value.configured, account: pixivAccount.value.configured ? (pixivAccount.value.userName || `UID ${pixivAccount.value.userId}`) : '尚未连接账号', path: '/flow/pixiv', description: '画师作品与插画媒体', feeds: feeds.value.filter(feed => feed.source === 'pixiv') },
+  { key: 'weibo', label: '微博', short: '微', ...sourceMeta.weibo, configured: weiboAccount.value.configured, account: weiboAccount.value.configured ? (weiboAccount.value.userName || `UID ${weiboAccount.value.userId}`) : '尚未连接账号', path: '/flow/weibo', description: '博主动态与图文媒体', feeds: feeds.value.filter(feed => feed.source === 'weibo') }
 ])
 
 async function responseError(response, fallback) {
@@ -348,7 +351,7 @@ async function deletePost(post) {
   const summary = post.caption?.trim() ? `“${post.caption.trim().slice(0, 36)}${post.caption.trim().length > 36 ? '…' : ''}”` : '这条动态'
   const confirmed = await askConfirm({
     title: '删除动态',
-    message: `确定删除 ${post.author} 的${summary}吗？该操作只移除时间线记录，已下载到 /flow 的媒体文件会保留。`,
+    message: `确定删除 ${post.author} 的${summary}吗？该操作会同时删除时间线记录及已下载到 /flow 的关联媒体文件。`,
     confirmText: '删除动态'
   })
   if (!confirmed) return
@@ -419,7 +422,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
 </button>
         <div class="nav-label">来源</div>
         <button v-for="(meta, key) in sourceMeta" :key="key" :class="{ active: activeSource === key }" @click="activeNav = 'source'; activeSource = key">
-<i :class="['source-icon', meta.icon]">{{ meta.icon === 'wb' ? '微' : meta.icon === 'px' ? 'P' : '哔' }}</i>{{ meta.label }} <b>{{ posts.filter(p => p.source === key).length }}</b>
+<img class="source-icon" :src="meta.image" :alt="`${meta.label}图标`">{{ meta.label }} <b>{{ posts.filter(p => p.source === key).length }}</b>
 </button>
       </nav>
       <div class="sidebar-bottom">
@@ -486,7 +489,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
 <div class="filters">
 <button v-for="(meta, key) in { all: { label: '全部', icon: '✦' }, ...sourceMeta }" :key="key" :class="{ selected: activeSource === key }" @click="activeSource = key">
 <span v-if="key === 'all'">✦</span>
-<i v-else :class="['source-icon', meta.icon]">{{ meta.icon === 'wb' ? '微' : meta.icon === 'px' ? 'P' : '哔' }}</i>{{ meta.label }}</button>
+<img v-else class="source-icon" :src="meta.image" :alt="`${meta.label}图标`">{{ meta.label }}</button>
 <button class="view-button">▦</button>
 </div>
 </div>
@@ -500,7 +503,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
 <span>{{ relativeTime(post.published) }}</span>
 </div>
 <span :class="['source-pill', sourceMeta[post.source].color]">
-<i :class="['source-icon', sourceMeta[post.source].icon]">{{ sourceMeta[post.source].icon === 'wb' ? '微' : sourceMeta[post.source].icon === 'px' ? 'P' : '哔' }}</i>{{ sourceMeta[post.source].label }}</span>
+<img class="source-icon" :src="sourceMeta[post.source].image" :alt="`${sourceMeta[post.source].label}图标`">{{ sourceMeta[post.source].label }}</span>
 </div>
 <p class="caption">{{ post.caption }}</p>
 <div v-if="post.media?.length" class="media-grid">
@@ -532,11 +535,11 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
 <p>连接账号后，Lumic 会帮你把喜欢的内容收进同一条时间线。</p>
 <div class="connect-options">
 <button @click="openWeibo">
-<i class="source-icon wb">微</i>添加微博博主</button>
+<img class="source-icon" :src="sourceMeta.weibo.image" alt="微博图标">添加微博博主</button>
 <button @click="showAdd = false; openSettings('platforms')">
-<i class="source-icon px">P</i>连接 pixiv</button>
+<img class="source-icon" :src="sourceMeta.pixiv.image" alt="pixiv图标">连接 pixiv</button>
 <button @click="openBilibili">
-<i class="source-icon bl">哔</i>连接哔哩哔哩</button>
+<img class="source-icon" :src="sourceMeta.bilibili.image" alt="哔哩哔哩图标">连接哔哩哔哩</button>
 </div>
 </div>
 </div>
@@ -593,17 +596,17 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
           <div class="pane-heading"><div><h3>平台凭证</h3><p>各平台凭证仅由服务端验证，并加密保存在本地数据目录。</p></div><span>3 个平台</span></div>
           <div class="platform-auth-grid">
             <article class="platform-auth-card pixiv">
-              <header class="platform-auth-head"><i class="source-icon px">P</i><div><h3>Pixiv</h3><span>OAuth refresh_token</span></div><em :class="['connection-dot', { online: pixivAccount.configured }]">{{ pixivAccount.configured ? '已连接' : '未连接' }}</em></header>
+              <header class="platform-auth-head"><img class="source-icon" :src="sourceMeta.pixiv.image" alt="Pixiv图标"><div><h3>Pixiv</h3><span>OAuth refresh_token</span></div><em :class="['connection-dot', { online: pixivAccount.configured }]">{{ pixivAccount.configured ? '已连接' : '未连接' }}</em></header>
               <p v-if="pixivAccount.configured">当前账号：{{ pixivAccount.userName || pixivAccount.userId }}。重新保存时需填写新 token。</p><p v-else>使用 OAuth refresh_token 连接，不保存账号密码。</p>
               <form class="settings-form platform-auth-form" @submit.prevent="savePixivAccount"><label>refresh_token</label><input v-model="pixivRefreshToken" type="password" required autocomplete="off"><p class="credential-note">服务端需配置 Pixiv OAuth 客户端环境变量，token 将加密保存。</p><button class="login-button" :disabled="pixivBusy">{{ pixivBusy ? '验证中…' : '验证并保存 Pixiv' }}</button></form><p v-if="pixivError" class="login-error">{{ pixivError }}</p>
             </article>
             <article class="platform-auth-card weibo">
-              <header class="platform-auth-head"><i class="source-icon wb">微</i><div><h3>微博</h3><span>客户端扫码登录</span></div><em :class="['connection-dot', { online: weiboAccount.configured }]">{{ weiboAccount.configured ? '已连接' : '未连接' }}</em></header>
+              <header class="platform-auth-head"><img class="source-icon" :src="sourceMeta.weibo.image" alt="微博图标"><div><h3>微博</h3><span>客户端扫码登录</span></div><em :class="['connection-dot', { online: weiboAccount.configured }]">{{ weiboAccount.configured ? '已连接' : '未连接' }}</em></header>
               <p v-if="weiboAccount.configured">当前账号：{{ weiboAccount.userName || `UID ${weiboAccount.userId}` }}。</p><p v-else>使用微博客户端扫描二维码登录。</p>
               <div v-if="weiboQR" class="weibo-qr"><img :src="weiboQR.image.startsWith('//') ? `https:${weiboQR.image}` : weiboQR.image" alt="微博登录二维码"><span>请在二维码过期前扫码并确认</span></div><button class="login-button platform-login-button" type="button" @click="startWeiboQR" :disabled="weiboBusy && !weiboQR">{{ weiboQR ? '刷新二维码' : weiboBusy ? '获取中…' : weiboAccount.configured ? '扫码切换微博账号' : '扫码连接微博' }}</button><p v-if="weiboError" class="login-error">{{ weiboError }}</p>
             </article>
             <article class="platform-auth-card bilibili">
-              <header class="platform-auth-head"><i class="source-icon bl">哔</i><div><h3>哔哩哔哩</h3><span>手机客户端扫码登录</span></div><em :class="['connection-dot', { online: biliAccount.configured }]">{{ biliAccount.configured ? '已连接' : '未连接' }}</em></header>
+              <header class="platform-auth-head"><img class="source-icon" :src="sourceMeta.bilibili.image" alt="哔哩哔哩图标"><div><h3>哔哩哔哩</h3><span>手机客户端扫码登录</span></div><em :class="['connection-dot', { online: biliAccount.configured }]">{{ biliAccount.configured ? '已连接' : '未连接' }}</em></header>
               <p v-if="biliAccount.configured">当前账号：UID {{ biliAccount.userId }}。扫码可切换账号。</p><p v-else>登录凭证会自动获取并加密保存。</p>
               <div v-if="biliQRImage" class="weibo-qr"><img :src="biliQRImage" alt="哔哩哔哩登录二维码"><span>{{ biliQRStatus }}</span></div><button class="login-button platform-login-button" type="button" @click="startBilibiliQR" :disabled="biliBusy && !biliQR">{{ biliQR ? '刷新二维码' : biliBusy ? '获取中…' : biliAccount.configured ? '扫码切换 B 站账号' : '扫码连接 B 站' }}</button>
               <details class="manual-credential"><summary>高级：手动导入 Cookie</summary><form class="settings-form bili-credentials" @submit.prevent="saveBilibiliAccount" autocomplete="off"><label>完整 Cookie</label><textarea v-model="biliCredentials.cookie" rows="4" placeholder="仅在扫码不可用时使用"></textarea><label>SESSDATA</label><input v-model="biliCredentials.SESSDATA" type="password"><label>bili_jct</label><input v-model="biliCredentials.bili_jct" type="password"><label>buvid3</label><input v-model="biliCredentials.buvid3" type="password"><label>DedeUserID</label><input v-model="biliCredentials.DedeUserID" inputmode="numeric"><button class="login-button" :disabled="biliBusy">验证并保存手动凭证</button></form></details><p v-if="biliError" class="login-error bili-error">{{ biliError }}</p>
@@ -614,7 +617,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
           <div class="pane-heading"><div><h3>来源管理</h3><p>一个平台一个来源卡片。右键卡片打开详细设置，触屏设备可点击按钮。</p></div><span>3 个平台</span></div>
           <div class="platform-source-grid">
             <article v-for="platform in platformCards" :key="platform.key" :class="['platform-source-card', platform.key]" @contextmenu.prevent="openPlatformSettings(platform)">
-              <div class="platform-card-head"><i :class="['source-icon', platform.icon]">{{ platform.short }}</i><span :class="['connection-dot', { online: platform.configured }]">{{ platform.configured ? '已连接' : '未连接' }}</span></div>
+              <div class="platform-card-head"><img class="source-icon" :src="platform.image" :alt="`${platform.label}图标`"><span :class="['connection-dot', { online: platform.configured }]">{{ platform.configured ? '已连接' : '未连接' }}</span></div>
               <h4>{{ platform.label }}</h4><p>{{ platform.description }}</p>
               <dl><div><dt>账号</dt><dd>{{ platform.account }}</dd></div><div><dt>已配置来源</dt><dd>{{ platform.feeds.length }} 个</dd></div><div><dt>内容目录</dt><dd>{{ platform.path }}</dd></div></dl>
               <button @click="openPlatformSettings(platform)">详细设置 <span>→</span></button>
@@ -626,7 +629,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
         <p v-if="settingsError" class="login-error settings-page-error">{{ settingsError }}</p>
       </div>
     </main>
-    <div v-if="selectedPlatform" class="modal-backdrop platform-detail-backdrop" @click.self="selectedPlatform = null"><div class="modal platform-detail-modal"><button class="modal-close" @click="selectedPlatform = null">×</button><div class="platform-detail-title"><i :class="['source-icon', selectedPlatform.icon]">{{ selectedPlatform.short }}</i><div><p class="eyebrow">PLATFORM SOURCE</p><h2>{{ selectedPlatform.label }}</h2></div><span :class="['connection-dot', { online: selectedPlatform.configured }]">{{ selectedPlatform.configured ? '已连接' : '未连接' }}</span></div><div class="platform-detail-summary"><div><span>当前账号</span><strong>{{ selectedPlatform.account }}</strong></div><div><span>内容目录</span><strong>{{ selectedPlatform.path }}</strong></div><div><span>作者来源</span><strong>{{ selectedPlatform.feeds.length }} 个</strong></div></div><div class="platform-detail-actions"><button class="secondary-button" @click="managePlatformCredentials(selectedPlatform.key)">{{ selectedPlatform.configured ? '管理账号凭证' : '连接平台账号' }}</button><button v-if="selectedPlatform.key === 'bilibili' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openBilibili()">添加 UP 主</button><button v-if="selectedPlatform.key === 'weibo' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openWeibo()">添加博主</button></div><p v-if="sourceActionMessage" class="success-message source-action-message">{{ sourceActionMessage }}</p><p v-if="settingsError" class="login-error">{{ settingsError }}</p><div class="configured-source-list"><div class="configured-source-heading"><h3>已配置作者</h3><span>{{ selectedPlatform.feeds.length }} 个</span></div><article v-for="feed in selectedPlatform.feeds" :key="feed.id"><i :class="['source-icon', selectedPlatform.icon]">{{ selectedPlatform.short }}</i><div><strong>{{ feed.name }}</strong><span>{{ feed.handle }} · {{ feed.schedule }}</span><small>{{ feed.storagePath || `${selectedPlatform.path}/${feed.name}` }}</small></div><em :class="{ disabled: !feed.enabled }">{{ feed.enabled ? '同步中' : '已停用' }}</em><div class="source-row-actions"><button @click="syncSource(feed)" :disabled="sourceActionBusy === `sync:${feed.id}`">{{ sourceActionBusy === `sync:${feed.id}` ? '拉取中…' : '立即拉取' }}</button><button @click="openFeedSettings(feed)">设置</button><button class="delete-source-button" @click="deleteSource(feed)" :disabled="sourceActionBusy === `delete:${feed.id}`">{{ sourceActionBusy === `delete:${feed.id}` ? '删除中…' : '删除' }}</button></div></article><div v-if="!selectedPlatform.feeds.length" class="platform-empty"><span>＋</span><strong>还没有作者来源</strong><p>{{ platformEmptyMessage(selectedPlatform.key) }}</p></div></div></div></div>
+    <div v-if="selectedPlatform" class="modal-backdrop platform-detail-backdrop" @click.self="selectedPlatform = null"><div class="modal platform-detail-modal"><button class="modal-close" @click="selectedPlatform = null">×</button><div class="platform-detail-title"><img class="source-icon" :src="selectedPlatform.image" alt="平台图标"><div><p class="eyebrow">PLATFORM SOURCE</p><h2>{{ selectedPlatform.label }}</h2></div><span :class="['connection-dot', { online: selectedPlatform.configured }]">{{ selectedPlatform.configured ? '已连接' : '未连接' }}</span></div><div class="platform-detail-summary"><div><span>当前账号</span><strong>{{ selectedPlatform.account }}</strong></div><div><span>内容目录</span><strong>{{ selectedPlatform.path }}</strong></div><div><span>作者来源</span><strong>{{ selectedPlatform.feeds.length }} 个</strong></div></div><div class="platform-detail-actions"><button class="secondary-button" @click="managePlatformCredentials(selectedPlatform.key)">{{ selectedPlatform.configured ? '管理账号凭证' : '连接平台账号' }}</button><button v-if="selectedPlatform.key === 'bilibili' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openBilibili()">添加 UP 主</button><button v-if="selectedPlatform.key === 'weibo' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openWeibo()">添加博主</button></div><p v-if="sourceActionMessage" class="success-message source-action-message">{{ sourceActionMessage }}</p><p v-if="settingsError" class="login-error">{{ settingsError }}</p><div class="configured-source-list"><div class="configured-source-heading"><h3>已配置作者</h3><span>{{ selectedPlatform.feeds.length }} 个</span></div><article v-for="feed in selectedPlatform.feeds" :key="feed.id"><img class="source-icon" :src="selectedPlatform.image" alt="平台图标"><div><strong>{{ feed.name }}</strong><span>{{ feed.handle }} · {{ feed.schedule }}</span><small>{{ feed.storagePath || `${selectedPlatform.path}/${feed.name}` }}</small></div><em :class="{ disabled: !feed.enabled }">{{ feed.enabled ? '同步中' : '已停用' }}</em><div class="source-row-actions"><button @click="syncSource(feed)" :disabled="sourceActionBusy === `sync:${feed.id}`">{{ sourceActionBusy === `sync:${feed.id}` ? '拉取中…' : '立即拉取' }}</button><button @click="openFeedSettings(feed)">设置</button><button class="delete-source-button" @click="deleteSource(feed)" :disabled="sourceActionBusy === `delete:${feed.id}`">{{ sourceActionBusy === `delete:${feed.id}` ? '删除中…' : '删除' }}</button></div></article><div v-if="!selectedPlatform.feeds.length" class="platform-empty"><span>＋</span><strong>还没有作者来源</strong><p>{{ platformEmptyMessage(selectedPlatform.key) }}</p></div></div></div></div>
     <div v-if="showFeedSettings && selectedFeed" class="modal-backdrop feed-detail-backdrop" @click.self="showFeedSettings = false"><div class="modal feed-settings-modal"><button class="modal-close" @click="showFeedSettings = false">×</button><p class="eyebrow">SOURCE DETAILS</p><h2>{{ selectedFeed.name }}</h2><p>{{ sourceMeta[selectedFeed.source]?.label }} · {{ selectedFeed.handle }}</p><form class="settings-form" @submit.prevent="saveFeedSettings"><label class="switch-row"><span>启用自动同步</span><input v-model="selectedFeed.enabled" type="checkbox"></label><label>执行计划</label><select v-model="selectedFeed.schedule"><option>每 1 小时</option><option>每 6 小时</option><option>每 12 小时</option><option>每天 20:00</option></select><label class="switch-row"><span>首次拉取历史内容</span><input v-model="selectedFeed.includePast" type="checkbox"></label><div v-if="selectedFeed.source === 'bilibili'" class="content-scope"><strong>内容范围</strong><span>图文动态（DRAW）</span><span>专栏（ARTICLE）</span><small>视频及转发视频始终过滤，无法在此开启。</small></div><p v-if="settingsError" class="login-error">{{ settingsError }}</p><button class="login-button" :disabled="settingsBusy">保存来源设置</button></form></div></div>
     <div v-if="confirmDialog.open" class="confirm-dialog-layer" @click.self="closeConfirmDialog(false)">
       <section class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">

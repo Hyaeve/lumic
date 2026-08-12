@@ -608,6 +608,49 @@ func (s *Store) saveLocked() error {
 	return atomicWriteFile(s.file, data, 0600)
 }
 
+func deletePostMedia(media []string) error {
+	root, err := filepath.Abs(flowRoot)
+	if err != nil {
+		return err
+	}
+	for _, raw := range media {
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			continue
+		}
+		parsed, parseErr := url.Parse(value)
+		if parseErr == nil && parsed.Scheme != "" && parsed.Scheme != "file" {
+			continue
+		}
+		candidate := value
+		if parseErr == nil && parsed.Scheme == "file" {
+			candidate = parsed.Path
+		}
+		if strings.HasPrefix(filepath.ToSlash(candidate), "/flow/") {
+			candidate = filepath.Join(flowRoot, strings.TrimPrefix(filepath.ToSlash(candidate), "/flow/"))
+		}
+		absolute, err := filepath.Abs(filepath.FromSlash(candidate))
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(root, absolute)
+		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			continue
+		}
+		if info, err := os.Stat(absolute); err == nil {
+			if info.IsDir() {
+				continue
+			}
+			if err := os.Remove(absolute); err != nil {
+				return err
+			}
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Store) postsHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodDelete {
 		id := strings.TrimSpace(r.URL.Query().Get("id"))
@@ -618,6 +661,11 @@ func (s *Store) postsHandler(w http.ResponseWriter, r *http.Request) {
 		s.Lock()
 		for index, post := range s.posts {
 			if post.ID == id {
+				if err := deletePostMedia(post.Media); err != nil {
+					s.Unlock()
+					writeAPIError(w, http.StatusInternalServerError, "无法删除动态关联媒体文件")
+					return
+				}
 				previous := s.posts
 				s.posts = append(append([]Post(nil), s.posts[:index]...), s.posts[index+1:]...)
 				if err := s.saveLocked(); err != nil {
@@ -627,7 +675,7 @@ func (s *Store) postsHandler(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				s.Unlock()
-				writeJSON(w, map[string]string{"status": "deleted", "message": "动态已永久删除，已下载的媒体文件予以保留"})
+				writeJSON(w, map[string]string{"status": "deleted", "message": "动态及关联媒体文件已永久删除"})
 				return
 			}
 		}
