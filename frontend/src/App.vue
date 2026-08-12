@@ -58,7 +58,8 @@ const posts = ref([])
 const feeds = ref([])
 const postActionBusy = ref('')
 const timelineMessage = ref('')
-const lightbox = ref({ open: false, media: [], index: 0, author: '', scale: 1 })
+const lightbox = ref({ open: false, media: [], index: 0, author: '', scale: 1, x: 0, y: 0, dragging: false })
+let lightboxDrag = null
 
 const fallbackPosts = [
   { id: 'wb-001', source: 'weibo', author: '林间拾光', avatar: 'https://i.pravatar.cc/96?img=47', caption: '把黄昏收藏进今天的相册里。风经过树梢，带来一点夏天的回声。', tags: ['日常', '摄影'], published: new Date(Date.now() - 42 * 60000), liked: true },
@@ -337,20 +338,51 @@ function askConfirm({ title, message, confirmText = '确认', cancelText = '取�
   confirmDialog.value = { open: true, title, message, confirmText, cancelText, tone }
   return new Promise(resolve => { confirmResolver = resolve })
 }
-function openLightbox(post, index) {
-  lightbox.value = { open: true, media: post.media || [], index, author: post.author, scale: 1 }
+function resetLightboxView() {
+  lightbox.value.scale = 1
+  lightbox.value.x = 0
+  lightbox.value.y = 0
+  lightbox.value.dragging = false
+  lightboxDrag = null
 }
-function closeLightbox() { lightbox.value = { open: false, media: [], index: 0, author: '', scale: 1 } }
+function openLightbox(post, index) {
+  lightbox.value = { open: true, media: post.media || [], index, author: post.author, scale: 1, x: 0, y: 0, dragging: false }
+}
+function closeLightbox() {
+  lightbox.value = { open: false, media: [], index: 0, author: '', scale: 1, x: 0, y: 0, dragging: false }
+  lightboxDrag = null
+}
 function moveLightbox(step) {
   const total = lightbox.value.media.length
   if (total > 1) {
     lightbox.value.index = (lightbox.value.index + step + total) % total
-    lightbox.value.scale = 1
+    resetLightboxView()
   }
 }
 function zoomLightbox(event) {
   const step = event.deltaY < 0 ? 0.15 : -0.15
   lightbox.value.scale = Math.min(5, Math.max(0.5, Number((lightbox.value.scale + step).toFixed(2))))
+  if (lightbox.value.scale <= 1) {
+    lightbox.value.x = 0
+    lightbox.value.y = 0
+  }
+}
+function startLightboxDrag(event) {
+  if (lightbox.value.scale <= 1) return
+  event.currentTarget.setPointerCapture(event.pointerId)
+  lightbox.value.dragging = true
+  lightboxDrag = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, imageX: lightbox.value.x, imageY: lightbox.value.y }
+}
+function moveLightboxDrag(event) {
+  if (!lightboxDrag || lightboxDrag.pointerId !== event.pointerId) return
+  lightbox.value.x = lightboxDrag.imageX + event.clientX - lightboxDrag.startX
+  lightbox.value.y = lightboxDrag.imageY + event.clientY - lightboxDrag.startY
+}
+function stopLightboxDrag(event) {
+  if (!lightboxDrag || lightboxDrag.pointerId !== event.pointerId) return
+  if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+  lightbox.value.dragging = false
+  lightboxDrag = null
 }
 function handleGlobalKeydown(event) {
   if (lightbox.value.open) {
@@ -584,7 +616,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
     <div v-if="lightbox.open" class="lightbox-layer" role="dialog" aria-modal="true" :aria-label="`${lightbox.author} 的动态图片`" @click.self="closeLightbox" @wheel.prevent="zoomLightbox">
       <button class="lightbox-close" type="button" title="关闭大图" @click="closeLightbox">×</button>
       <button v-if="lightbox.media.length > 1" class="lightbox-nav lightbox-prev" type="button" title="上一张" @click="moveLightbox(-1)">‹</button>
-      <figure><img :src="lightbox.media[lightbox.index]" :alt="`${lightbox.author} 的动态图片 ${lightbox.index + 1}`" :style="{ transform: `scale(${lightbox.scale})` }"><figcaption>{{ lightbox.media.length > 1 ? `${lightbox.index + 1} / ${lightbox.media.length} · ` : '' }}{{ Math.round(lightbox.scale * 100) }}%</figcaption></figure>
+      <figure><img :src="lightbox.media[lightbox.index]" :alt="`${lightbox.author} 的动态图片 ${lightbox.index + 1}`" :class="{ dragging: lightbox.dragging, pannable: lightbox.scale > 1 }" :style="{ transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) scale(${lightbox.scale})` }" draggable="false" @pointerdown.prevent="startLightboxDrag" @pointermove.prevent="moveLightboxDrag" @pointerup="stopLightboxDrag" @pointercancel="stopLightboxDrag"><figcaption>{{ lightbox.media.length > 1 ? `${lightbox.index + 1} / ${lightbox.media.length} · ` : '' }}{{ Math.round(lightbox.scale * 100) }}%</figcaption></figure>
       <button v-if="lightbox.media.length > 1" class="lightbox-nav lightbox-next" type="button" title="下一张" @click="moveLightbox(1)">›</button>
     </div>
     <button v-if="!showSettings" class="add-fab" @click="showAdd = true">＋ <span>添加来源</span>
