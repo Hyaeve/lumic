@@ -91,7 +91,7 @@ docker compose up -d
 
 反向代理启用 HTTPS 后建议设置 `LUMIC_COOKIE_SECURE=true`；该变量不属于当前 Compose 默认配置，可按部署环境单独添加。服务还发送 CSP、`X-Frame-Options: DENY`、`X-Content-Type-Options: nosniff` 和严格 Referrer Policy 等响应头。
 
-平台账号统一在「设置 → 平台凭证」中管理。B 站默认使用手机客户端扫码登录：后端先访问 B 站主页建立设备会话，再生成二维码并轮询确认状态；登录成功后自动从响应 Cookie 中提取 `SESSDATA`、`bili_jct`、`DedeUserID` 等凭证，并保存 `refresh_token`。手动 Cookie 导入仅作为高级备用方式。Pixiv 使用 OAuth `refresh_token`，服务端还必须通过 `LUMIC_PIXIV_CLIENT_ID` 和 `LUMIC_PIXIV_CLIENT_SECRET` 提供合法 OAuth 应用凭证；可在 Compose 同目录的 `.env` 中配置。微博支持账号密码、移动端扫码和手动 Cookie 三种登录方式。账号密码只用于当次向微博交换会话，不会写入本地配置；若微博要求验证码或二次安全验证，页面会提示改用扫码。成功后服务端仅加密保存会话 Cookie。
+平台账号统一在设置页管理。B 站默认使用手机客户端扫码登录：后端先访问 B 站主页建立设备会话，再生成二维码并轮询确认状态；登录成功后自动从响应 Cookie 中提取并加密保存所需凭证。手动 Cookie 导入仅作为高级备用方式。Pixiv 的 OAuth Client ID、Client Secret 和 `refresh_token` 均在平台凭证卡片中填写并由服务端加密保存。微博支持账号密码、移动端扫码和手动 Cookie 三种登录方式。账号密码只用于当次向微博交换会话，不会写入本地配置；若微博要求验证码或二次安全验证，页面会提示改用扫码。成功后服务端仅加密保存会话 Cookie。
 
 保存前服务会验证平台登录状态。原始 token 与 Cookie 不会返回前端，而是随平台配置通过 AES-GCM 加密保存在 `/data/bilibili.enc`，密钥保存在 `/data/secret.key`。应将整个 `data` 目录视为敏感数据，限制宿主机访问权限并定期备份；不要提交到 Git 仓库。Pixiv 和微博接口策略可能随平台调整，使用时应遵守各平台服务条款，并使用自己有权访问的账号与 OAuth 应用。
 

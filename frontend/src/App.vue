@@ -57,7 +57,7 @@ const biliQRImage = ref('')
 const biliQRStatus = ref('')
 let biliPollTimer = null
 const pixivAccount = ref({ configured: false, userId: '', userName: '' })
-const pixivRefreshToken = ref('')
+const pixivCredentials = ref({ refreshToken: '', clientId: '', clientSecret: '' })
 const pixivBusy = ref(false)
 const pixivError = ref('')
 const weiboAccount = ref({ configured: false, userId: '', userName: '', avatar: '' })
@@ -124,6 +124,14 @@ const platformCards = computed(() => [
   { key: 'twitter', label: '推特', short: '推', ...sourceMeta.twitter, configured: false, account: '采集器尚未配置', path: '/flow/twitter', description: '推文、图片与媒体动态', feeds: feeds.value.filter(feed => feed.source === 'twitter') }
 ])
 const hasWeiboLikesSource = computed(() => feeds.value.some(feed => feed.id?.startsWith('weibo-likes-')))
+const localGreeting = computed(() => {
+  const hour = new Date().getHours()
+  if (hour < 6) return '夜深了'
+  if (hour < 11) return '早上好'
+  if (hour < 14) return '中午好'
+  if (hour < 18) return '下午好'
+  return '晚上好'
+})
 
 async function responseError(response, fallback) {
   try { return (await response.json()).error || fallback } catch { return fallback }
@@ -152,6 +160,10 @@ async function loadData() {
     posts.value = await postResponse.json()
     feeds.value = [...await feedResponse.json(), ...await biliFeedResponse.json(), ...await weiboFeedResponse.json()]
   } catch { posts.value = []; feeds.value = [] }
+}
+function setDarkMode(value) {
+  isDark.value = Boolean(value)
+  localStorage.setItem('lumic-theme', isDark.value ? 'dark' : 'light')
 }
 async function syncNow() {
   syncing.value = true
@@ -246,9 +258,9 @@ async function saveBilibiliAccount() {
 async function savePixivAccount() {
   pixivBusy.value = true; pixivError.value = ''
   try {
-    const response = await fetch('/api/pixiv/account', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refreshToken: pixivRefreshToken.value.trim() }) })
+    const response = await fetch('/api/pixiv/account', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refreshToken: pixivCredentials.value.refreshToken.trim(), clientId: pixivCredentials.value.clientId.trim(), clientSecret: pixivCredentials.value.clientSecret.trim() }) })
     if (!response.ok) throw new Error(await responseError(response, 'Pixiv 凭证验证失败'))
-    pixivAccount.value = await response.json(); pixivRefreshToken.value = ''
+    pixivAccount.value = await response.json(); pixivCredentials.value = { refreshToken: '', clientId: '', clientSecret: '' }
   } catch (error) { pixivError.value = error.message } finally { pixivBusy.value = false }
 }
 function stopWeiboPolling() { if (weiboPollTimer) clearTimeout(weiboPollTimer); weiboPollTimer = null }
@@ -763,7 +775,7 @@ async function checkSession() {
   } catch { authenticated.value = false }
 }
 watch(filteredPosts, resetTimelineWindow)
-onMounted(() => { postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); checkSession(); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', applyRoute); window.addEventListener('scroll', scheduleTimelineWindow, { passive: true }); window.addEventListener('resize', scheduleTimelineWindow) })
+onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); checkSession(); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', applyRoute); window.addEventListener('scroll', scheduleTimelineWindow, { passive: true }); window.addEventListener('resize', scheduleTimelineWindow) })
 onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserver?.disconnect(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', applyRoute); window.removeEventListener('scroll', scheduleTimelineWindow); window.removeEventListener('resize', scheduleTimelineWindow); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
 </script>
 
@@ -775,9 +787,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
 <strong>Lumic</strong>
 <small>拾光</small>
 </div>
-      <p class="eyebrow">A QUIET PLACE FOR YOUR MOMENTS</p>
-      <h1>欢迎回来</h1>
-      <p class="login-subtitle">登录后继续收集你喜欢的动态。</p>
+      <p class="login-project-note">拾起散落在时光里的片刻，珍藏每一次心动。</p>
       <form class="login-form" @submit.prevent="login" autocomplete="off">
         <label for="username">账号</label>
         <input id="username" v-model="credentials.username" type="text" name="username" autocomplete="username" required autofocus>
@@ -814,32 +824,25 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
       </nav>
       <div class="sidebar-bottom">
         <button :class="{ active: activeNav === 'settings' }" @click="openSettings()"><span class="nav-line-symbol">⚙</span> 设置</button>
+        <button class="sidebar-theme-button" type="button" @click="setDarkMode(!isDark)" :title="isDark ? '切换日间主题' : '切换夜间主题'" :aria-label="isDark ? '切换日间主题' : '切换夜间主题'">{{ isDark ? '☀' : '☾' }}</button>
       </div>
     </aside>
 
-    <main v-if="!showSettings && activeNav !== 'pulls'" class="content">
+    <main v-if="!showSettings && activeNav !== 'pulls'" :class="['content', { 'liked-page': activeNav === 'liked' }]">
       <header v-if="authorProfile" class="topbar author-page-header">
         <div class="author-profile-main">
           <button class="author-back-button" type="button" title="返回时间线" aria-label="返回时间线" @click="closeAuthor">←</button>
           <img :src="authorProfile.avatar || sourceMeta[authorProfile.source].image" :alt="authorProfile.name">
           <div><p class="eyebrow">AUTHOR TIMELINE · {{ sourceMeta[authorProfile.source].label }}</p><h1>{{ authorProfile.name }}</h1><p class="subtitle">共 {{ authorProfile.count }} 条已拉取动态</p></div>
         </div>
-        <div class="header-actions"><button class="danger-outline-button" :disabled="postActionBusy !== '' || !authorProfile.count" @click="deleteAuthorPosts(authorProfile.source, authorProfile.name)">删除全部动态</button><button class="sync-button" :disabled="syncing" @click="runFullSync"><span :class="{ spin: syncing }">↻</span>{{ syncing ? '同步中' : '同步动态' }}</button></div>
+        <div class="header-actions"><button class="danger-outline-button" :disabled="postActionBusy !== '' || !authorProfile.count" @click="deleteAuthorPosts(authorProfile.source, authorProfile.name)">删除全部动态</button></div>
       </header>
       <header v-else-if="activeNav !== 'liked'" class="topbar timeline-hero">
-<span class="star-field" aria-hidden="true"></span>
 <div class="timeline-hero-copy">
-<img v-if="activeNav === 'liked' && weiboAccount.avatar" class="liked-account-avatar" :src="weiboAccount.avatar" :alt="weiboAccount.userName || '微博账号头像'">
-<p class="eyebrow">{{ activeNav === 'liked' ? 'LIKED MOMENTS' : 'SAVED MOMENTS' }} · {{ new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' }) }}</p>
-<h1>{{ activeNav === 'liked' ? '我的点赞' : selectedTag ? `#${selectedTag}` : '早上好，拾光者' }} <span>{{ activeNav === 'liked' ? '♡' : selectedTag ? '#' : '☼' }}</span>
+<p class="eyebrow">SAVED MOMENTS · {{ new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' }) }}</p>
+<h1>{{ selectedTag ? `#${selectedTag}` : `${localGreeting}，拾光者` }} <span>{{ selectedTag ? '#' : '☼' }}</span>
 </h1>
-<p class="subtitle">{{ activeNav === 'liked' ? '这里收集了你标记为喜欢的动态。' : selectedTag ? `这里汇总了所有带有 #${selectedTag} 的动态。` : '这里有你关注的世界，和刚刚发生的一切。' }}</p>
-</div>
-<div class="header-actions">
-<button v-if="activeNav === 'liked'" class="secondary-button" :disabled="syncing" @click="syncWeiboLikes">{{ syncing ? '同步中…' : '同步微博点赞' }}</button>
-<button class="icon-button" @click="isDark = !isDark" :title="isDark ? '切换日间主题' : '切换夜间主题'">{{ isDark ? '☀' : '☾' }}</button>
-<button class="sync-button" @click="runFullSync">
-<span :class="{ spin: syncing }">↻</span> {{ syncing ? '同步中' : '立即同步' }}</button>
+<p class="subtitle">{{ selectedTag ? `这里汇总了所有带有 #${selectedTag} 的动态。` : '这里有你关注的世界，和刚刚发生的一切。' }}</p>
 </div>
 </header>
       <section v-if="!authorProfile" class="stats">
@@ -911,10 +914,9 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
 </section>
     </main>
     <main v-if="!showSettings && activeNav === 'pulls'" class="content pulls-page">
-      <div class="compact-page-actions"><button class="sync-button" :disabled="syncing" @click="runFullSync"><span :class="{ spin: syncing }">↻</span>{{ syncing ? '拉取中' : '全部拉取' }}</button></div>
       <p v-if="timelineMessage" class="timeline-message">{{ timelineMessage }}</p>
       <section class="subscription-platforms">
-        <div class="section-heading"><div><h2>平台来源</h2><p>查看账号连接状态与订阅数量。</p></div><span>{{ platformCards.filter(platform => platform.configured).length }} / 4 已连接</span></div>
+        <div class="section-heading"><div><h2>平台来源</h2><p>查看账号连接状态与订阅数量。</p></div><div class="platform-heading-actions"><span>{{ platformCards.filter(platform => platform.configured).length }} / 4 已连接</span><button class="sync-button" :disabled="syncing" @click="runFullSync"><span :class="{ spin: syncing }">↻</span>{{ syncing ? '拉取中' : '全部拉取最新' }}</button></div></div>
         <div class="platform-source-grid">
           <article v-for="platform in platformCards" :key="platform.key" :class="['platform-source-card', platform.key]" @contextmenu.prevent="openPlatformSettings(platform)">
             <div class="platform-card-head"><img class="source-icon" :src="platform.image" :alt="`${platform.label}图标`"><span :class="['connection-dot', { online: platform.configured }]">{{ platform.configured ? '已连接' : '未连接' }}</span></div>
@@ -1015,7 +1017,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
             <article class="platform-auth-card pixiv">
               <header class="platform-auth-head"><img class="source-icon" :src="sourceMeta.pixiv.image" alt="Pixiv图标"><div><h3>Pixiv</h3><span>OAuth refresh_token</span></div><em :class="['connection-dot', { online: pixivAccount.configured }]">{{ pixivAccount.configured ? '已连接' : '未连接' }}</em></header>
               <p v-if="pixivAccount.configured">当前账号：{{ pixivAccount.userName || pixivAccount.userId }}。重新保存时需填写新 token。</p><p v-else>使用 OAuth refresh_token 连接，不保存账号密码。</p>
-              <details class="platform-auth-details"><summary>配置 refresh_token</summary><form class="settings-form platform-auth-form" @submit.prevent="savePixivAccount"><label>refresh_token</label><input v-model="pixivRefreshToken" type="password" required autocomplete="off"><p class="credential-note">服务端需配置 Pixiv OAuth 客户端环境变量，token 将加密保存。</p><button class="login-button" :disabled="pixivBusy">{{ pixivBusy ? '验证中…' : '验证并保存 Pixiv' }}</button></form></details><p v-if="pixivError" class="login-error">{{ pixivError }}</p>
+              <details class="platform-auth-details"><summary>配置 OAuth 凭证</summary><form class="settings-form platform-auth-form" @submit.prevent="savePixivAccount"><label>Client ID</label><input v-model="pixivCredentials.clientId" required autocomplete="off"><label>Client Secret</label><input v-model="pixivCredentials.clientSecret" type="password" required autocomplete="off"><label>refresh_token</label><input v-model="pixivCredentials.refreshToken" type="password" required autocomplete="off"><p class="credential-note">OAuth 应用凭证和 token 均由服务端加密保存。</p><button class="login-button" :disabled="pixivBusy">{{ pixivBusy ? '验证中…' : '验证并保存 Pixiv' }}</button></form></details><p v-if="pixivError" class="login-error">{{ pixivError }}</p>
             </article>
             <article class="platform-auth-card twitter">
               <header class="platform-auth-head"><img class="source-icon" :src="sourceMeta.twitter.image" alt="推特图标"><div><h3>推特</h3><span>账号连接与作者采集</span></div><em class="connection-dot">未开放</em></header>

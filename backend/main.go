@@ -260,6 +260,8 @@ type BilibiliAccount struct {
 
 type PixivCredentials struct {
 	RefreshToken string `json:"refreshToken,omitempty"`
+	ClientID     string `json:"clientId,omitempty"`
+	ClientSecret string `json:"clientSecret,omitempty"`
 	UserID       string `json:"userId,omitempty"`
 	UserName     string `json:"userName,omitempty"`
 }
@@ -2494,13 +2496,19 @@ func (b *BilibiliStore) startScheduler() {
 	}()
 }
 
-func pixivTokenRequest(refreshToken, proxyURL string) (PixivCredentials, error) {
+func pixivTokenRequest(refreshToken, clientID, clientSecret, proxyURL string) (PixivCredentials, error) {
 	if strings.TrimSpace(refreshToken) == "" {
 		return PixivCredentials{}, errors.New("refresh_token 不能为空")
 	}
-	clientID, clientSecret := strings.TrimSpace(os.Getenv("LUMIC_PIXIV_CLIENT_ID")), strings.TrimSpace(os.Getenv("LUMIC_PIXIV_CLIENT_SECRET"))
+	clientID, clientSecret = strings.TrimSpace(clientID), strings.TrimSpace(clientSecret)
+	if clientID == "" {
+		clientID = strings.TrimSpace(os.Getenv("LUMIC_PIXIV_CLIENT_ID"))
+	}
+	if clientSecret == "" {
+		clientSecret = strings.TrimSpace(os.Getenv("LUMIC_PIXIV_CLIENT_SECRET"))
+	}
 	if clientID == "" || clientSecret == "" {
-		return PixivCredentials{}, errors.New("服务端未配置 LUMIC_PIXIV_CLIENT_ID 和 LUMIC_PIXIV_CLIENT_SECRET")
+		return PixivCredentials{}, errors.New("请填写 Pixiv OAuth Client ID 和 Client Secret")
 	}
 	form := url.Values{"client_id": {clientID}, "client_secret": {clientSecret}, "grant_type": {"refresh_token"}, "refresh_token": {refreshToken}}
 	request, err := http.NewRequest(http.MethodPost, "https://oauth.secure.pixiv.net/auth/token", strings.NewReader(form.Encode()))
@@ -2531,7 +2539,7 @@ func pixivTokenRequest(refreshToken, proxyURL string) (PixivCredentials, error) 
 	if response.StatusCode != http.StatusOK || payload.Error != "" {
 		return PixivCredentials{}, errors.New("Pixiv refresh_token 无效或已过期")
 	}
-	return PixivCredentials{RefreshToken: refreshToken, UserID: payload.User.ID, UserName: payload.User.Name}, nil
+	return PixivCredentials{RefreshToken: refreshToken, ClientID: clientID, ClientSecret: clientSecret, UserID: payload.User.ID, UserName: payload.User.Name}, nil
 }
 
 func (b *BilibiliStore) pixivHandler(w http.ResponseWriter, r *http.Request) {
@@ -2549,12 +2557,14 @@ func (b *BilibiliStore) pixivHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	var input struct {
 		RefreshToken string `json:"refreshToken"`
+		ClientID     string `json:"clientId"`
+		ClientSecret string `json:"clientSecret"`
 	}
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&input) != nil {
 		writeAPIError(w, http.StatusBadRequest, "Pixiv 凭证格式无效")
 		return
 	}
-	credentials, err := pixivTokenRequest(strings.TrimSpace(input.RefreshToken), proxyURL)
+	credentials, err := pixivTokenRequest(strings.TrimSpace(input.RefreshToken), input.ClientID, input.ClientSecret, proxyURL)
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
