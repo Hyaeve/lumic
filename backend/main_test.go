@@ -83,6 +83,42 @@ func TestBilibiliRichTextExtractsOpusCaption(t *testing.T) {
 	}
 }
 
+func TestBilibiliRichTextExtractsNestedDrawCaption(t *testing.T) {
+	raw := json.RawMessage(`{"major":{"draw":{"desc":{"rich_text_nodes":[{"text":"图文动态正文"}]}}}}`)
+	if got := bilibiliRichText(raw); got != "图文动态正文" {
+		t.Fatalf("nested draw caption was not extracted: %q", got)
+	}
+}
+
+func TestFilterSourcePosts(t *testing.T) {
+	posts := []Post{
+		{ID: "keep", Caption: "今天分享一张插画", Media: []string{"image.jpg"}},
+		{ID: "blocked", Caption: "插画抽奖活动", Media: []string{"image.jpg"}},
+		{ID: "text", Caption: "插画文字记录"},
+		{ID: "miss", Caption: "普通摄影", Media: []string{"image.jpg"}},
+	}
+	feed := SourceConfig{OnlyWithImages: true, IncludeKeywords: []string{"插画", "绘画"}, ExcludeKeywords: []string{"抽奖"}}
+	filtered := filterSourcePosts(posts, feed)
+	if len(filtered) != 1 || filtered[0].ID != "keep" {
+		t.Fatalf("unexpected filtered posts: %#v", filtered)
+	}
+}
+
+func TestCronScheduleMatchingAndMigration(t *testing.T) {
+	at := time.Date(2026, 8, 13, 6, 0, 0, 0, time.Local)
+	for _, expression := range []string{"0 6 * * *", "0 */6 * * *", "0 6 * * 4"} {
+		if !validCron(expression) || !cronMatches(expression, at) {
+			t.Fatalf("cron should match: %s", expression)
+		}
+	}
+	if cronMatches("30 6 * * *", at) {
+		t.Fatal("cron matched the wrong minute")
+	}
+	if normalizeSchedule("每 6 小时") != "0 */6 * * *" || normalizeSchedule("") != "0 6 * * *" {
+		t.Fatal("legacy schedule migration failed")
+	}
+}
+
 func TestMergePostsUpdatesArchivedMedia(t *testing.T) {
 	store := &Store{posts: []Post{{ID: "post-1", Source: SourceBilibili, Author: "UP", Media: []string{"https://remote/image.jpg"}, Liked: true}}}
 	added, err := store.mergePosts([]Post{{ID: "post-1", Source: SourceBilibili, Author: "UP", Media: []string{"/flow/bilibili/UP/post-1.jpg"}}})
@@ -596,7 +632,7 @@ func TestWeiboSubscriptionLifecycle(t *testing.T) {
 	updateRequest := httptest.NewRequest(http.MethodPut, "/api/weibo/subscriptions", bytes.NewReader(body))
 	updateResponse := httptest.NewRecorder()
 	store.weiboSubscriptionsHandler(updateResponse, updateRequest)
-	if updateResponse.Code != http.StatusOK || store.config.WeiboSubscriptions[0].Enabled || store.config.WeiboSubscriptions[0].Schedule != "每 12 小时" {
+	if updateResponse.Code != http.StatusOK || store.config.WeiboSubscriptions[0].Enabled || store.config.WeiboSubscriptions[0].Schedule != "0 */12 * * *" {
 		t.Fatalf("update failed status=%d subscriptions=%#v", updateResponse.Code, store.config.WeiboSubscriptions)
 	}
 

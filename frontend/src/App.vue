@@ -1,4 +1,4 @@
-<script setup>
+﻿<script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import QRCode from 'qrcode'
 import bilibiliIcon from '../icon/bilibili.png'
@@ -59,7 +59,7 @@ const pixivAccount = ref({ configured: false, userId: '', userName: '' })
 const pixivRefreshToken = ref('')
 const pixivBusy = ref(false)
 const pixivError = ref('')
-const weiboAccount = ref({ configured: false, userId: '', userName: '' })
+const weiboAccount = ref({ configured: false, userId: '', userName: '', avatar: '' })
 const weiboCredentials = ref({ cookie: '', userId: '' })
 const weiboPasswordCredentials = ref({ username: '', password: '' })
 const weiboQR = ref(null)
@@ -260,7 +260,7 @@ async function pollWeiboQR() {
     const response = await fetch(`/api/weibo/qr?id=${encodeURIComponent(weiboQR.value.id)}`)
     if (!response.ok) throw new Error(await responseError(response, '微博扫码状态查询失败'))
     const result = await response.json()
-    if (result.status === 'connected') { weiboAccount.value = { configured: true, userId: result.userId, userName: result.userName }; weiboQR.value = null; weiboBusy.value = false; return }
+    if (result.status === 'connected') { weiboAccount.value = { configured: true, userId: result.userId, userName: result.userName, avatar: result.avatar || '' }; weiboQR.value = null; weiboBusy.value = false; return }
     weiboPollTimer = setTimeout(pollWeiboQR, 2000)
   } catch (error) { weiboError.value = error.message; weiboBusy.value = false; stopWeiboPolling() }
 }
@@ -283,6 +283,8 @@ async function saveWeiboAccount() {
 }
 function parseTagInput(value) { return [...new Set(String(value || '').split(/[#，,；;\s]+/).map(tag => tag.trim()).filter(Boolean))] }
 function formatTagInput(tags) { return (tags || []).map(tag => `#${tag}`).join(' ') }
+function parseKeywordInput(value) { return [...new Set(String(value || '').split(/[，,；;\n\r\t]+/).map(keyword => keyword.trim()).filter(Boolean))] }
+function formatKeywordInput(values) { return (values || []).join('，') }
 async function loginWeiboAccount() {
   weiboBusy.value = true; weiboError.value = ''
   try {
@@ -323,7 +325,7 @@ async function runFullSync() {
 async function subscribeWeibo(user) {
   weiboBusy.value = true; weiboError.value = ''
   try {
-    const response = await fetch('/api/weibo/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: user.userId, name: user.name, avatar: user.avatar, includePast: weiboIncludePast.value, schedule: '每 6 小时', tags: parseTagInput(weiboSubscriptionTags.value) }) })
+    const response = await fetch('/api/weibo/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: user.userId, name: user.name, avatar: user.avatar, includePast: weiboIncludePast.value, schedule: '0 6 * * *', tags: parseTagInput(weiboSubscriptionTags.value) }) })
     if (!response.ok) throw new Error(await responseError(response, response.status === 409 ? '已经订阅该微博博主' : '订阅失败'))
     feeds.value.push(await response.json()); weiboSubscriptionTags.value = ''
   } catch (error) { weiboError.value = error.message } finally { weiboBusy.value = false }
@@ -331,7 +333,7 @@ async function subscribeWeibo(user) {
 async function subscribeBilibili(user) {
   biliBusy.value = true; biliError.value = ''
   try {
-    const response = await fetch('/api/bilibili/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: user.userId, name: user.name, avatar: user.avatar, includePast: biliIncludePast.value, schedule: '每 6 小时', tags: parseTagInput(biliSubscriptionTags.value) }) })
+    const response = await fetch('/api/bilibili/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: user.userId, name: user.name, avatar: user.avatar, includePast: biliIncludePast.value, schedule: '0 6 * * *', tags: parseTagInput(biliSubscriptionTags.value) }) })
     if (!response.ok) throw new Error(response.status === 409 ? '已经订阅该 UP 主' : '订阅失败')
     feeds.value.push(await response.json()); biliSubscriptionTags.value = ''
   } catch (error) { biliError.value = error.message } finally { biliBusy.value = false }
@@ -346,7 +348,7 @@ function managePlatformCredentials(platformKey) {
   if (platformKey === 'weibo' && !weiboAccount.value.configured) startWeiboQR()
 }
 function openFeedSettings(feed) {
-  selectedFeed.value = { ...feed, contentTypes: [...(feed.contentTypes || [])], tags: [...(feed.tags || [])], tagInput: formatTagInput(feed.tags) }
+  selectedFeed.value = { ...feed, contentTypes: [...(feed.contentTypes || [])], tags: [...(feed.tags || [])], tagInput: formatTagInput(feed.tags), includeKeywordInput: formatKeywordInput(feed.includeKeywords), excludeKeywordInput: formatKeywordInput(feed.excludeKeywords) }
   showFeedSettings.value = true
 }
 async function saveFeedSettings() {
@@ -354,6 +356,8 @@ async function saveFeedSettings() {
   settingsBusy.value = true; settingsError.value = ''
   try {
     selectedFeed.value.tags = parseTagInput(selectedFeed.value.tagInput)
+    selectedFeed.value.includeKeywords = parseKeywordInput(selectedFeed.value.includeKeywordInput)
+    selectedFeed.value.excludeKeywords = parseKeywordInput(selectedFeed.value.excludeKeywordInput)
     if ((selectedFeed.value.source === 'bilibili' && selectedFeed.value.id.startsWith('bili-')) || (selectedFeed.value.source === 'weibo' && selectedFeed.value.id.startsWith('weibo-'))) {
       const response = await fetch(sourceOperationEndpoint(selectedFeed.value), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(selectedFeed.value) })
       if (!response.ok) throw new Error(await responseError(response, '来源设置保存失败'))
@@ -689,8 +693,9 @@ async function checkSession() {
     if (!response.ok) throw new Error('unauthorized')
     posts.value = await response.json()
     authenticated.value = true
-    const [feedResponse, biliFeedResponse, weiboFeedResponse] = await Promise.all([fetch('/api/feeds'), fetch('/api/bilibili/subscriptions'), fetch('/api/weibo/subscriptions')])
+    const [feedResponse, biliFeedResponse, weiboFeedResponse, weiboAccountResponse] = await Promise.all([fetch('/api/feeds'), fetch('/api/bilibili/subscriptions'), fetch('/api/weibo/subscriptions'), fetch('/api/weibo/account')])
     if (feedResponse.ok && biliFeedResponse.ok && weiboFeedResponse.ok) feeds.value = [...await feedResponse.json(), ...await biliFeedResponse.json(), ...await weiboFeedResponse.json()]
+    if (weiboAccountResponse.ok) weiboAccount.value = await weiboAccountResponse.json()
   } catch { authenticated.value = false }
 }
 watch(filteredPosts, resetTimelineWindow)
@@ -759,6 +764,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
       </header>
       <header v-else class="topbar">
 <div>
+<img v-if="activeNav === 'liked' && weiboAccount.avatar" class="liked-account-avatar" :src="weiboAccount.avatar" :alt="weiboAccount.userName || '微博账号头像'">
 <p class="eyebrow">{{ activeNav === 'liked' ? 'LIKED MOMENTS' : 'SAVED MOMENTS' }} · {{ new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' }) }}</p>
 <h1>{{ activeNav === 'liked' ? '我的点赞' : selectedTag ? `#${selectedTag}` : '早上好，拾光者' }} <span>{{ activeNav === 'liked' ? '♡' : selectedTag ? '#' : '☼' }}</span>
 </h1>
@@ -1000,7 +1006,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
         </div>
       </div>
     </div>
-    <div v-if="showFeedSettings && selectedFeed" class="modal-backdrop feed-detail-backdrop" @click.self="showFeedSettings = false"><div class="modal feed-settings-modal"><button class="modal-close" @click="showFeedSettings = false">×</button><p class="eyebrow">SOURCE DETAILS</p><h2>{{ selectedFeed.name }}</h2><p>{{ sourceMeta[selectedFeed.source]?.label }} · {{ selectedFeed.handle }}</p><form class="settings-form" @submit.prevent="saveFeedSettings"><label class="switch-row"><span>启用自动同步</span><input v-model="selectedFeed.enabled" type="checkbox"></label><label>执行计划</label><select v-model="selectedFeed.schedule"><option>每 1 小时</option><option>每 6 小时</option><option>每 12 小时</option><option>每天 20:00</option></select><label>作者标签</label><input v-model="selectedFeed.tagInput" placeholder="#标签1 #标签2" maxlength="120"><p class="credential-note">保存后会同步更新此作者已经拉取的全部动态。</p><label class="switch-row"><span>首次拉取历史内容</span><input v-model="selectedFeed.includePast" type="checkbox"></label><div v-if="selectedFeed.source === 'bilibili'" class="content-scope"><strong>内容范围</strong><span>图文动态（DRAW）</span><span>专栏（ARTICLE）</span><small>视频及转发视频始终过滤，无法在此开启。</small></div><p v-if="settingsError" class="login-error">{{ settingsError }}</p><button class="login-button" :disabled="settingsBusy">保存来源设置</button></form></div></div>
+    <div v-if="showFeedSettings && selectedFeed" class="modal-backdrop feed-detail-backdrop" @click.self="showFeedSettings = false"><div class="modal feed-settings-modal"><button class="modal-close" @click="showFeedSettings = false">×</button><p class="eyebrow">SOURCE DETAILS</p><h2>{{ selectedFeed.name }}</h2><p>{{ sourceMeta[selectedFeed.source]?.label }} · {{ selectedFeed.handle }}</p><form class="settings-form" @submit.prevent="saveFeedSettings"><label class="switch-row"><span>启用自动同步</span><input v-model="selectedFeed.enabled" type="checkbox"></label><label>Cron 执行计划</label><input v-model="selectedFeed.schedule" required placeholder="0 6 * * *" maxlength="80"><p class="credential-note">五段式 Cron：分钟 小时 日期 月份 星期。默认 0 6 * * *，即每天 06:00。</p><label>作者标签</label><input v-model="selectedFeed.tagInput" placeholder="#标签1 #标签2" maxlength="120"><p class="credential-note">保存后会同步更新此作者已经拉取的全部动态。</p><fieldset class="source-filter-settings"><legend>动态过滤</legend><label class="switch-row"><span>只拉取包含图片的动态</span><input v-model="selectedFeed.onlyWithImages" type="checkbox"></label><label>必须包含关键词</label><input v-model="selectedFeed.includeKeywordInput" placeholder="关键词1，关键词2" maxlength="240"><small>命中任意一个关键词即可保留；留空表示不限制。</small><label>排除关键词</label><input v-model="selectedFeed.excludeKeywordInput" placeholder="广告，抽奖" maxlength="240"><small>命中任意排除关键词时不会拉取，排除规则优先。</small></fieldset><label class="switch-row"><span>首次拉取历史内容</span><input v-model="selectedFeed.includePast" type="checkbox"></label><div v-if="selectedFeed.source === 'bilibili'" class="content-scope"><strong>内容范围</strong><span>图文动态（DRAW）</span><span>专栏（ARTICLE）</span><small>视频及转发视频始终过滤，无法在此开启。</small></div><p v-if="settingsError" class="login-error">{{ settingsError }}</p><button class="login-button" :disabled="settingsBusy">保存来源设置</button></form></div></div>
     <div v-if="confirmDialog.open" class="confirm-dialog-layer" @click.self="closeConfirmDialog(false)">
       <section class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
         <div :class="['confirm-dialog-icon', confirmDialog.tone]">!</div>

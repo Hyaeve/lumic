@@ -67,6 +67,9 @@ type SourceConfig struct {
 	Schedule        string    `json:"schedule"`
 	ContentTypes    []string  `json:"contentTypes,omitempty"`
 	Tags            []string  `json:"tags,omitempty"`
+	OnlyWithImages  bool      `json:"onlyWithImages,omitempty"`
+	IncludeKeywords []string  `json:"includeKeywords,omitempty"`
+	ExcludeKeywords []string  `json:"excludeKeywords,omitempty"`
 	LastSyncedAt    time.Time `json:"lastSyncedAt"`
 	LastSyncStatus  string    `json:"lastSyncStatus,omitempty"`
 	LastSyncMessage string    `json:"lastSyncMessage,omitempty"`
@@ -89,6 +92,153 @@ func normalizeTags(tags []string) []string {
 		}
 	}
 	return result
+}
+
+func normalizeKeywords(values []string) []string {
+	result, seen := make([]string, 0), make(map[string]bool)
+	for _, raw := range values {
+		for _, value := range strings.FieldsFunc(raw, func(r rune) bool {
+			return r == ',' || r == '，' || r == ';' || r == '；' || r == '\n' || r == '\r' || r == '\t'
+		}) {
+			value = strings.TrimSpace(value)
+			key := strings.ToLower(value)
+			if value != "" && !seen[key] {
+				seen[key] = true
+				result = append(result, value)
+			}
+		}
+	}
+	return result
+}
+
+func filterSourcePosts(posts []Post, feed SourceConfig) []Post {
+	include, exclude := normalizeKeywords(feed.IncludeKeywords), normalizeKeywords(feed.ExcludeKeywords)
+	filtered := make([]Post, 0, len(posts))
+	for _, post := range posts {
+		if feed.OnlyWithImages && len(post.Media) == 0 {
+			continue
+		}
+		caption := strings.ToLower(post.Caption)
+		blocked := false
+		for _, keyword := range exclude {
+			if strings.Contains(caption, strings.ToLower(keyword)) {
+				blocked = true
+				break
+			}
+		}
+		if blocked {
+			continue
+		}
+		if len(include) > 0 {
+			matched := false
+			for _, keyword := range include {
+				if strings.Contains(caption, strings.ToLower(keyword)) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+		filtered = append(filtered, post)
+	}
+	return filtered
+}
+
+func cronFieldMatches(field string, value, min, max int) bool {
+	for _, part := range strings.Split(field, ",") {
+		part = strings.TrimSpace(part)
+		step := 1
+		if pieces := strings.Split(part, "/"); len(pieces) == 2 {
+			parsed, err := strconv.Atoi(pieces[1])
+			if err != nil || parsed < 1 {
+				return false
+			}
+			step = parsed
+			part = pieces[0]
+		}
+		start, end := min, max
+		if part != "*" {
+			if strings.Contains(part, "-") {
+				pieces := strings.Split(part, "-")
+				if len(pieces) != 2 {
+					return false
+				}
+				var err error
+				start, err = strconv.Atoi(pieces[0])
+				if err != nil {
+					return false
+				}
+				end, err = strconv.Atoi(pieces[1])
+				if err != nil {
+					return false
+				}
+			} else {
+				parsed, err := strconv.Atoi(part)
+				if err != nil {
+					return false
+				}
+				start, end = parsed, parsed
+			}
+		}
+		if start < min || end > max || start > end {
+			return false
+		}
+		if value >= start && value <= end && (value-start)%step == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func cronMatches(expression string, at time.Time) bool {
+	fields := strings.Fields(expression)
+	if len(fields) != 5 {
+		return false
+	}
+	return cronFieldMatches(fields[0], at.Minute(), 0, 59) && cronFieldMatches(fields[1], at.Hour(), 0, 23) && cronFieldMatches(fields[2], at.Day(), 1, 31) && cronFieldMatches(fields[3], int(at.Month()), 1, 12) && cronFieldMatches(fields[4], int(at.Weekday()), 0, 6)
+}
+
+func normalizeSchedule(value string) string {
+	switch strings.TrimSpace(value) {
+	case "每 1 小时":
+		return "0 * * * *"
+	case "每 6 小时":
+		return "0 */6 * * *"
+	case "每 12 小时":
+		return "0 */12 * * *"
+	case "每天 20:00":
+		return "0 20 * * *"
+	case "每天 09:00":
+		return "0 9 * * *"
+	default:
+		if validCron(value) {
+			return strings.Join(strings.Fields(value), " ")
+		}
+		return "0 6 * * *"
+	}
+}
+
+func validCron(expression string) bool {
+	fields := strings.Fields(expression)
+	if len(fields) != 5 {
+		return false
+	}
+	ranges := [][2]int{{0, 59}, {0, 23}, {1, 31}, {1, 12}, {0, 6}}
+	for index, field := range fields {
+		valid := false
+		for value := ranges[index][0]; value <= ranges[index][1]; value++ {
+			if cronFieldMatches(field, value, ranges[index][0], ranges[index][1]) {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			return false
+		}
+	}
+	return true
 }
 
 type BilibiliCredentials struct {
@@ -117,6 +267,7 @@ type WeiboCredentials struct {
 	Cookie   string `json:"cookie,omitempty"`
 	UserID   string `json:"userId,omitempty"`
 	UserName string `json:"userName,omitempty"`
+	Avatar   string `json:"avatar,omitempty"`
 }
 
 type BilibiliQRSession struct {
@@ -387,13 +538,17 @@ func prepareSourceStorage(feed SourceConfig) (SourceConfig, error) {
 		return feed, err
 	}
 	metadata, err := json.MarshalIndent(struct {
-		Source       Source   `json:"source"`
-		ID           string   `json:"id"`
-		Name         string   `json:"name"`
-		Handle       string   `json:"handle"`
-		Avatar       string   `json:"avatar,omitempty"`
-		ContentTypes []string `json:"contentTypes,omitempty"`
-	}{feed.Source, feed.ID, feed.Name, feed.Handle, feed.Avatar, feed.ContentTypes}, "", "  ")
+		Source          Source   `json:"source"`
+		ID              string   `json:"id"`
+		Name            string   `json:"name"`
+		Handle          string   `json:"handle"`
+		Avatar          string   `json:"avatar,omitempty"`
+		ContentTypes    []string `json:"contentTypes,omitempty"`
+		Tags            []string `json:"tags,omitempty"`
+		OnlyWithImages  bool     `json:"onlyWithImages,omitempty"`
+		IncludeKeywords []string `json:"includeKeywords,omitempty"`
+		ExcludeKeywords []string `json:"excludeKeywords,omitempty"`
+	}{feed.Source, feed.ID, feed.Name, feed.Handle, feed.Avatar, feed.ContentTypes, feed.Tags, feed.OnlyWithImages, feed.IncludeKeywords, feed.ExcludeKeywords}, "", "  ")
 	if err != nil {
 		return feed, err
 	}
@@ -1307,9 +1462,9 @@ func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Requ
 			writeAPIError(w, http.StatusBadRequest, "来源设置无效")
 			return
 		}
-		allowedSchedules := map[string]bool{"每 1 小时": true, "每 6 小时": true, "每 12 小时": true, "每天 20:00": true}
-		if !allowedSchedules[input.Schedule] {
-			writeAPIError(w, http.StatusBadRequest, "执行计划无效")
+		input.Schedule = normalizeSchedule(input.Schedule)
+		if !validCron(input.Schedule) {
+			writeAPIError(w, http.StatusBadRequest, "Cron 表达式无效，请使用五段式格式")
 			return
 		}
 		b.Lock()
@@ -1321,6 +1476,9 @@ func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Requ
 				b.config.Subscriptions[index].Schedule = input.Schedule
 				b.config.Subscriptions[index].ContentTypes = []string{"DRAW", "ARTICLE"}
 				b.config.Subscriptions[index].Tags = normalizeTags(input.Tags)
+				b.config.Subscriptions[index].OnlyWithImages = input.OnlyWithImages
+				b.config.Subscriptions[index].IncludeKeywords = normalizeKeywords(input.IncludeKeywords)
+				b.config.Subscriptions[index].ExcludeKeywords = normalizeKeywords(input.ExcludeKeywords)
 				input = b.config.Subscriptions[index]
 				found = true
 				break
@@ -1358,7 +1516,7 @@ func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if input.Schedule == "" {
-		input.Schedule = "每 6 小时"
+		input.Schedule = "0 6 * * *"
 	}
 	userID := strings.TrimSpace(input.UserID)
 	if _, err := strconv.ParseUint(userID, 10, 64); err != nil {
@@ -1517,12 +1675,18 @@ func collectBilibiliRichText(value any, parts *[]string) {
 		if text, ok := typed["text"].(string); ok {
 			collectBilibiliRichText(text, parts)
 		}
-		for _, key := range []string{"rich_text_nodes", "nodes", "paragraphs", "content", "summary"} {
+		for _, key := range []string{"rich_text_nodes", "nodes", "paragraphs", "content", "summary", "desc", "title", "text_content", "opus", "draw", "article", "major"} {
 			if nested, exists := typed[key]; exists {
 				collectBilibiliRichText(nested, parts)
 			}
 		}
 	}
+}
+
+func bilibiliObjectText(value any) string {
+	parts := make([]string, 0)
+	collectBilibiliRichText(value, &parts)
+	return combineRemoteText(parts...)
 }
 
 func bilibiliRichText(raw json.RawMessage) string {
@@ -1787,6 +1951,12 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 					captionParts = append(captionParts, major.Opus.Title, bilibiliRichText(major.Opus.Summary), bilibiliRichText(major.Opus.Content))
 				}
 			}
+			if raw, err := json.Marshal(item.Modules.Dynamic); err == nil {
+				var dynamicValue any
+				if json.Unmarshal(raw, &dynamicValue) == nil {
+					captionParts = append(captionParts, bilibiliObjectText(dynamicValue))
+				}
+			}
 			caption := combineRemoteText(captionParts...)
 			publishedAt := parseRemoteTimestamp(item.Modules.Author.PubTs)
 			published := time.Unix(publishedAt, 0)
@@ -1947,10 +2117,13 @@ func (b *BilibiliStore) fetchWeiboLikedPosts() ([]Post, error) {
 	if credentials.Cookie == "" || credentials.UserID == "" {
 		return nil, errors.New("微博账号未连接")
 	}
-	feed := SourceConfig{ID: "weibo-liked-" + credentials.UserID, Source: SourceWeibo, Name: credentials.UserName, Handle: "我的点赞"}
+	feed := SourceConfig{ID: "weibo-liked-" + credentials.UserID, Source: SourceWeibo, Name: credentials.UserName, Handle: "我的点赞", Avatar: credentials.Avatar}
 	endpoints := []func(int) string{
 		func(page int) string {
-			return fmt.Sprintf("https://weibo.com/ajax/statuses/likelist?uid=%s&page=%d", url.QueryEscape(credentials.UserID), page)
+			return fmt.Sprintf("https://weibo.com/ajax/statuses/likelist?uid=%s&page=%d&relate=fans", url.QueryEscape(credentials.UserID), page)
+		},
+		func(page int) string {
+			return fmt.Sprintf("https://weibo.com/ajax/profile/likelist?uid=%s&page=%d", url.QueryEscape(credentials.UserID), page)
 		},
 		func(page int) string {
 			return fmt.Sprintf("https://m.weibo.cn/api/container/getIndex?containerid=%s&page=%d", url.QueryEscape("230869"+credentials.UserID), page)
@@ -2059,6 +2232,7 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 		if !full {
 			posts = postsAfter(posts, feed.LastSyncedAt)
 		}
+		posts = filterSourcePosts(posts, feed)
 		if len(posts) > 0 {
 			if strings.TrimSpace(posts[0].Author) != "" {
 				feed.Name = posts[0].Author
@@ -2130,6 +2304,31 @@ func (b *BilibiliStore) syncHandler(w http.ResponseWriter, r *http.Request) {
 		results = append(results, updated)
 	}
 	writeJSON(w, map[string]any{"status": "completed", "message": fmt.Sprintf("已完成 %d 个来源的拉取", len(results)), "sources": results})
+}
+
+func (b *BilibiliStore) runScheduledSync(at time.Time) {
+	b.RLock()
+	feeds := append(append([]SourceConfig{}, b.config.Subscriptions...), b.config.WeiboSubscriptions...)
+	b.RUnlock()
+	for _, feed := range feeds {
+		if !feed.Enabled || !cronMatches(normalizeSchedule(feed.Schedule), at) {
+			continue
+		}
+		if !feed.LastSyncedAt.IsZero() && feed.LastSyncedAt.Year() == at.Year() && feed.LastSyncedAt.YearDay() == at.YearDay() && feed.LastSyncedAt.Hour() == at.Hour() && feed.LastSyncedAt.Minute() == at.Minute() {
+			continue
+		}
+		_, _ = b.syncSource(feed, false)
+	}
+}
+
+func (b *BilibiliStore) startScheduler() {
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for at := range ticker.C {
+			b.runScheduledSync(at)
+		}
+	}()
 }
 
 func pixivTokenRequest(refreshToken, proxyURL string) (PixivCredentials, error) {
@@ -2923,9 +3122,9 @@ func (b *BilibiliStore) weiboSubscriptionsHandler(w http.ResponseWriter, r *http
 			writeAPIError(w, http.StatusBadRequest, "来源设置无效")
 			return
 		}
-		allowedSchedules := map[string]bool{"每 1 小时": true, "每 6 小时": true, "每 12 小时": true, "每天 20:00": true}
-		if !allowedSchedules[input.Schedule] {
-			writeAPIError(w, http.StatusBadRequest, "执行计划无效")
+		input.Schedule = normalizeSchedule(input.Schedule)
+		if !validCron(input.Schedule) {
+			writeAPIError(w, http.StatusBadRequest, "Cron 表达式无效，请使用五段式格式")
 			return
 		}
 		b.Lock()
@@ -2936,6 +3135,9 @@ func (b *BilibiliStore) weiboSubscriptionsHandler(w http.ResponseWriter, r *http
 				b.config.WeiboSubscriptions[index].IncludePast = input.IncludePast
 				b.config.WeiboSubscriptions[index].Schedule = input.Schedule
 				b.config.WeiboSubscriptions[index].Tags = normalizeTags(input.Tags)
+				b.config.WeiboSubscriptions[index].OnlyWithImages = input.OnlyWithImages
+				b.config.WeiboSubscriptions[index].IncludeKeywords = normalizeKeywords(input.IncludeKeywords)
+				b.config.WeiboSubscriptions[index].ExcludeKeywords = normalizeKeywords(input.ExcludeKeywords)
 				input = b.config.WeiboSubscriptions[index]
 				found = true
 				break
@@ -2980,7 +3182,7 @@ func (b *BilibiliStore) weiboSubscriptionsHandler(w http.ResponseWriter, r *http
 		return
 	}
 	if input.Schedule == "" {
-		input.Schedule = "每 6 小时"
+		input.Schedule = "0 6 * * *"
 	}
 	userID := strings.TrimSpace(input.UserID)
 	if strings.TrimSpace(input.Avatar) == "" {
@@ -3098,6 +3300,7 @@ func validateWeiboCredentials(cookie, userID, proxyURL string) (WeiboCredentials
 		return WeiboCredentials{}, fmt.Errorf("微博 Cookie 验证失败：%w", err)
 	}
 	credentials.UserName = user.Name
+	credentials.Avatar = user.Avatar
 	return credentials, nil
 }
 
@@ -3106,7 +3309,7 @@ func (b *BilibiliStore) weiboAccountHandler(w http.ResponseWriter, r *http.Reque
 	current, proxyURL := b.config.Weibo, b.config.ProxyURL
 	b.RUnlock()
 	if r.Method == http.MethodGet {
-		writeJSON(w, map[string]any{"configured": current.Cookie != "", "userId": current.UserID, "userName": current.UserName})
+		writeJSON(w, map[string]any{"configured": current.Cookie != "", "userId": current.UserID, "userName": current.UserName, "avatar": current.Avatar})
 		return
 	}
 	if r.Method != http.MethodPut {
@@ -3157,7 +3360,7 @@ func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 		if id == "" {
 			account := b.config.Weibo
 			b.RUnlock()
-			writeJSON(w, map[string]any{"configured": account.UserID != "", "userId": account.UserID, "userName": account.UserName})
+			writeJSON(w, map[string]any{"configured": account.UserID != "", "userId": account.UserID, "userName": account.UserName, "avatar": account.Avatar})
 			return
 		}
 		session, ok := b.weiboQR[id]
@@ -3330,7 +3533,7 @@ func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusInternalServerError, "无法保存微博登录状态")
 			return
 		}
-		writeJSON(w, map[string]any{"status": "connected", "userId": credentials.UserID, "userName": credentials.UserName})
+		writeJSON(w, map[string]any{"status": "connected", "userId": credentials.UserID, "userName": credentials.UserName, "avatar": credentials.Avatar})
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -3436,6 +3639,7 @@ func main() {
 	if err := bilibili.save(); err != nil {
 		log.Fatal("unable to persist source storage paths: ", err)
 	}
+	bilibili.startScheduler()
 	sessions := &SessionStore{tokens: make(map[string]time.Time)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/login", loginHandler(sessions, auth))
