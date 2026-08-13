@@ -117,12 +117,12 @@ button { border: 0; font: inherit; cursor: pointer; color: inherit; }
 .content:has(.timeline-hero) .stats { margin-top: 34px; }
 .content:has(.timeline-hero) .section-heading { margin-top: 34px; margin-bottom: 18px; }
 .pulls-page .subscription-platforms { margin-top: 0; }
-.content.pulls-page { padding-top: 12px; }
+.content.pulls-page { padding-top: 8px; }
 .pulls-page .platform-source-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .pulls-page .platform-source-card { min-height: 250px; padding: 18px; border-radius: 8px; box-shadow: none; }
 .pulls-page .platform-source-card::before { display: none; }
 .pulls-page .platform-source-card h4 { margin-top: 16px; font-size: 17px; }
-.pulls-page .section-heading { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 14px; }
+.pulls-page .section-heading { display: flex; align-items: flex-end; justify-content: space-between; margin: 0 0 14px; }
 .pulls-page .section-heading h2 { margin: 0; color: var(--ink); font-size: 17px; }
 .pulls-page .section-heading p { margin: 5px 0 0; color: var(--muted); font-size: 11px; }
 .pulls-page .section-heading > span { color: var(--muted); font-size: 10px; }
