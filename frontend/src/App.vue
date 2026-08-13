@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import QRCode from 'qrcode'
 import bilibiliIcon from '../icon/bilibili.png'
 import bilibiliLineIcon from '../icon/bilibili-1.png'
@@ -69,6 +69,14 @@ const feeds = ref([])
 const postActionBusy = ref('')
 const timelineMessage = ref('')
 const mediaShapes = ref({})
+const timelineStart = ref(0)
+const timelineEnd = ref(15)
+const timelineHeights = ref({})
+const feedListElement = ref(null)
+const estimatedPostHeight = 560
+const timelineOverscan = 5
+let timelineFrame = 0
+let postResizeObserver = null
 const lightbox = ref({ open: false, media: [], index: 0, author: '', scale: 1, x: 0, y: 0, dragging: false })
 let lightboxDrag = null
 
@@ -86,6 +94,8 @@ const sourceMeta = {
   pixiv: { label: 'Pixiv', icon: 'px', image: pixivIcon, lineImage: pixivLineIcon, color: 'violet' },
   twitter: { label: '推特', icon: 'tw', image: twitterIcon, lineImage: twitterLineIcon, color: 'twitter' }
 }
+const validSources = new Set(Object.keys(sourceMeta))
+const validSettingsTabs = new Set(['sources', 'platforms', 'network', 'security'])
 const likedCount = computed(() => posts.value.filter(post => post.liked).length)
 const filteredPosts = computed(() => {
   const timeline = activeNav.value === 'liked' ? posts.value.filter(post => post.liked) : posts.value
@@ -93,6 +103,9 @@ const filteredPosts = computed(() => {
   if (!selectedAuthor.value) return sourceTimeline
   return sourceTimeline.filter(post => post.source === selectedAuthor.value.source && post.author === selectedAuthor.value.name)
 })
+const visiblePosts = computed(() => filteredPosts.value.slice(timelineStart.value, timelineEnd.value))
+const timelineTopSpace = computed(() => filteredPosts.value.slice(0, timelineStart.value).reduce((height, post) => height + (timelineHeights.value[post.id] || estimatedPostHeight) + 15, 0))
+const timelineBottomSpace = computed(() => filteredPosts.value.slice(timelineEnd.value).reduce((height, post) => height + (timelineHeights.value[post.id] || estimatedPostHeight) + 15, 0))
 const authorProfile = computed(() => {
   if (!selectedAuthor.value) return null
   const authorPosts = posts.value.filter(post => post.source === selectedAuthor.value.source && post.author === selectedAuthor.value.name)
@@ -140,8 +153,9 @@ async function syncNow() {
   try { await fetch('/api/sync', { method: 'POST' }) } catch {}
   setTimeout(() => { syncing.value = false }, 900)
 }
-async function openSettings(tab = 'sources') {
+async function openSettings(tab = 'sources', updateHistory = true) {
   settingsTab.value = tab; showSettings.value = true; activeNav.value = 'settings'; settingsError.value = ''; proxyMessage.value = ''; pixivError.value = ''; weiboError.value = ''
+  if (updateHistory) updateRoute(`/settings/${tab}`)
   try {
     const [projectResponse, biliResponse, pixivResponse, weiboResponse] = await Promise.all([fetch('/api/project/settings'), fetch('/api/bilibili/account'), fetch('/api/pixiv/account'), fetch('/api/weibo/account')])
     if (projectResponse.ok) proxyStatus.value = await projectResponse.json()
@@ -318,8 +332,7 @@ function openPlatformSettings(platform) {
 }
 function managePlatformCredentials(platformKey) {
   selectedPlatform.value = null
-  settingsTab.value = 'platforms'
-  settingsError.value = ''
+  selectSettingsTab('platforms')
   if (platformKey === 'bilibili' && !biliAccount.value.configured) startBilibiliQR()
   if (platformKey === 'weibo' && !weiboAccount.value.configured) startWeiboQR()
 }
@@ -506,6 +519,48 @@ function navigateTo(nav, source = activeSource.value) {
   activeNav.value = nav
   activeSource.value = source
   selectedAuthor.value = null
+  const path = nav === 'source' ? `/source/${source}` : nav === 'liked' ? '/liked' : nav === 'pulls' ? '/pulls' : '/'
+  updateRoute(path)
+}
+function measurePostElement(post, element) {
+  const height = Math.ceil(element.getBoundingClientRect().height)
+  if (height > 0 && timelineHeights.value[post.id] !== height) timelineHeights.value[post.id] = height
+}
+function setPostCard(post, element) {
+  if (!element) return
+  element.dataset.postId = post.id
+  measurePostElement(post, element)
+  postResizeObserver?.observe(element)
+}
+function updateTimelineWindow() {
+  timelineFrame = 0
+  if (!filteredPosts.value.length || showSettings.value || activeNav.value === 'pulls') return
+  const listTop = feedListElement.value?.getBoundingClientRect().top + window.scrollY || 0
+  const viewportTop = Math.max(0, window.scrollY - listTop)
+  const viewportBottom = viewportTop + window.innerHeight
+  let offset = 0
+  let first = 0
+  let last = filteredPosts.value.length
+  for (let index = 0; index < filteredPosts.value.length; index++) {
+    const height = (timelineHeights.value[filteredPosts.value[index].id] || estimatedPostHeight) + 15
+    if (offset + height >= viewportTop) { first = index; break }
+    offset += height
+  }
+  let visibleOffset = offset
+  for (let index = first; index < filteredPosts.value.length; index++) {
+    visibleOffset += (timelineHeights.value[filteredPosts.value[index].id] || estimatedPostHeight) + 15
+    if (visibleOffset >= viewportBottom) { last = index + 1; break }
+  }
+  timelineStart.value = Math.max(0, first - timelineOverscan)
+  timelineEnd.value = Math.min(filteredPosts.value.length, last + timelineOverscan)
+}
+function scheduleTimelineWindow() {
+  if (!timelineFrame) timelineFrame = window.requestAnimationFrame(updateTimelineWindow)
+}
+function resetTimelineWindow() {
+  timelineStart.value = 0
+  timelineEnd.value = Math.min(filteredPosts.value.length, 15)
+  nextTick(scheduleTimelineWindow)
 }
 function openAuthor(post) {
   authorReturnState.value = { nav: activeNav.value, source: activeSource.value }
@@ -513,11 +568,50 @@ function openAuthor(post) {
   activeNav.value = 'author'
   activeSource.value = post.source
   selectedAuthor.value = { name: post.author, source: post.source, avatar: post.avatar }
+  updateRoute(`/author/${post.source}/${encodeURIComponent(post.author)}`)
 }
 function closeAuthor() {
   navigateTo(authorReturnState.value.nav, authorReturnState.value.source)
 }
 function closeSettingsPage() { navigateTo(activeSource.value === 'all' ? 'all' : 'source') }
+function updateRoute(path, replace = false) {
+  if (window.location.pathname === path) return
+  window.history[replace ? 'replaceState' : 'pushState']({}, '', path)
+}
+function applyRoute() {
+  const segments = window.location.pathname.split('/').filter(Boolean).map(segment => decodeURIComponent(segment))
+  showSettings.value = false
+  selectedAuthor.value = null
+  if (segments[0] === 'source' && validSources.has(segments[1])) {
+    activeNav.value = 'source'; activeSource.value = segments[1]
+    return
+  }
+  if (segments[0] === 'liked') {
+    activeNav.value = 'liked'; activeSource.value = 'all'
+    return
+  }
+  if (segments[0] === 'pulls') {
+    activeNav.value = 'pulls'; activeSource.value = 'all'
+    return
+  }
+  if (segments[0] === 'settings') {
+    const tab = validSettingsTabs.has(segments[1]) ? segments[1] : 'sources'
+    activeNav.value = 'settings'; showSettings.value = true; settingsTab.value = tab
+    openSettings(tab, false)
+    return
+  }
+  if (segments[0] === 'author' && validSources.has(segments[1]) && segments[2]) {
+    activeNav.value = 'author'; activeSource.value = segments[1]; selectedAuthor.value = { source: segments[1], name: segments.slice(2).join('/'), avatar: '' }
+    return
+  }
+  activeNav.value = 'all'; activeSource.value = 'all'
+  if (segments.length) updateRoute('/', true)
+}
+function selectSettingsTab(tab) {
+  settingsTab.value = tab
+  settingsError.value = ''
+  updateRoute(`/settings/${tab}`)
+}
 function formatFans(count) { return count >= 10000 ? `${(count / 10000).toFixed(1)}万` : count }
 function platformEmptyMessage(platformKey) {
   if (platformKey === 'bilibili') return '点击“添加 UP 主”开始订阅图文与专栏。'
@@ -535,8 +629,9 @@ async function checkSession() {
     if (feedResponse.ok && biliFeedResponse.ok && weiboFeedResponse.ok) feeds.value = [...await feedResponse.json(), ...await biliFeedResponse.json(), ...await weiboFeedResponse.json()]
   } catch { authenticated.value = false }
 }
-onMounted(() => { checkSession(); window.addEventListener('keydown', handleGlobalKeydown) })
-onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEventListener('keydown', handleGlobalKeydown); if (confirmResolver) closeConfirmDialog(false) })
+watch(filteredPosts, resetTimelineWindow)
+onMounted(() => { postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); checkSession(); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', applyRoute); window.addEventListener('scroll', scheduleTimelineWindow, { passive: true }); window.addEventListener('resize', scheduleTimelineWindow) })
+onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserver?.disconnect(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', applyRoute); window.removeEventListener('scroll', scheduleTimelineWindow); window.removeEventListener('resize', scheduleTimelineWindow); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
 </script>
 
 <template>
@@ -652,8 +747,9 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
 </div>
 </div>
       <p v-if="timelineMessage" class="timeline-message">{{ timelineMessage }}</p>
-      <section class="feed-list">
-<article v-for="post in filteredPosts" :key="post.id" class="post-card">
+      <section ref="feedListElement" class="feed-list">
+<div v-if="timelineTopSpace" class="timeline-spacer" :style="{ height: `${timelineTopSpace}px` }" aria-hidden="true"></div>
+<article v-for="post in visiblePosts" :key="post.id" :ref="element => setPostCard(post, element)" class="post-card" :data-post-id="post.id">
 <div class="post-head">
 <button class="post-author-avatar" type="button" :title="`查看 ${post.author} 的动态`" @click="openAuthor(post)"><img :src="post.avatar" :alt="post.author"></button>
 <div class="author">
@@ -665,7 +761,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
 </div>
 <p v-if="post.caption" class="caption">{{ post.caption }}</p>
 <div v-if="post.media?.length" :class="['media-grid', `media-count-${Math.min(post.media.length, 4)}`]">
-<button v-for="(media, mediaIndex) in post.media" :key="media" :class="['media-frame', mediaShape(post, mediaIndex)]" type="button" :aria-label="`查看 ${post.author} 的第 ${mediaIndex + 1} 张图片`" @click="openLightbox(post, mediaIndex)"><img :src="media" alt="" @load="setMediaShape(post, mediaIndex, $event)"></button>
+<button v-for="(media, mediaIndex) in post.media" :key="media" :class="['media-frame', mediaShape(post, mediaIndex)]" type="button" :aria-label="`查看 ${post.author} 的第 ${mediaIndex + 1} 张图片`" @click="openLightbox(post, mediaIndex)"><img :src="media" alt="" loading="lazy" decoding="async" @load="setMediaShape(post, mediaIndex, $event); scheduleTimelineWindow()"></button>
 </div>
 <div class="tag-row">
 <span v-for="tag in post.tags" :key="tag"># {{ tag }}</span>
@@ -679,6 +775,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
 </div>
 </div>
 </article>
+<div v-if="timelineBottomSpace" class="timeline-spacer" :style="{ height: `${timelineBottomSpace}px` }" aria-hidden="true"></div>
 <div v-if="!filteredPosts.length" class="empty">{{ authorProfile ? '还没有拉取到这个作者的动态' : activeNav === 'liked' ? '还没有点赞的动态' : '还没有这个来源的动态' }}</div>
 </section>
     </main>
@@ -756,10 +853,10 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
     <main v-if="showSettings" class="settings-page">
       <div class="settings-page-inner">
         <nav class="settings-tabs" aria-label="设置分类">
-          <button :class="{ active: settingsTab === 'sources' }" @click="settingsTab = 'sources'; settingsError = ''">来源管理</button>
-          <button :class="{ active: settingsTab === 'platforms' }" @click="settingsTab = 'platforms'; settingsError = ''">平台凭证</button>
-          <button :class="{ active: settingsTab === 'network' }" @click="settingsTab = 'network'; settingsError = ''">网络代理</button>
-          <button :class="{ active: settingsTab === 'security' }" @click="settingsTab = 'security'; settingsError = ''">登录安全</button>
+          <button :class="{ active: settingsTab === 'sources' }" @click="selectSettingsTab('sources')">来源管理</button>
+          <button :class="{ active: settingsTab === 'platforms' }" @click="selectSettingsTab('platforms')">平台凭证</button>
+          <button :class="{ active: settingsTab === 'network' }" @click="selectSettingsTab('network')">网络代理</button>
+          <button :class="{ active: settingsTab === 'security' }" @click="selectSettingsTab('security')">登录安全</button>
         </nav>
         <section v-if="settingsTab === 'network'" class="settings-pane compact-settings-pane">
           <div class="pane-heading"><div><h3>网络代理</h3><p>统一配置后端访问外部平台时使用的 HTTP、HTTPS 或 SOCKS5 代理。</p></div><span>{{ proxyStatus.proxyEnabled ? '已启用' : '未启用' }}</span></div>

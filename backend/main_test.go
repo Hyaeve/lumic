@@ -111,6 +111,40 @@ func TestPostsAfterUsesStrictIncrementalBoundary(t *testing.T) {
 	}
 }
 
+func TestServeFrontendFallsBackForRoutesButNotMissingAssets(t *testing.T) {
+	oldWorkingDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "public", "assets"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "public", "index.html"), []byte("spa-index"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "public", "assets", "app.js"), []byte("app-code"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWorkingDirectory) })
+
+	for _, route := range []string{"/liked", "/source/bilibili", "/settings/platforms", "/author/bilibili/%E6%B5%8B%E8%AF%95"} {
+		response := httptest.NewRecorder()
+		serveFrontend(response, httptest.NewRequest(http.MethodGet, route, nil))
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "spa-index") {
+			t.Fatalf("route %s did not receive SPA index: status=%d body=%q", route, response.Code, response.Body.String())
+		}
+	}
+	assetResponse := httptest.NewRecorder()
+	serveFrontend(assetResponse, httptest.NewRequest(http.MethodGet, "/assets/missing.js", nil))
+	if assetResponse.Code != http.StatusNotFound {
+		t.Fatalf("missing asset status=%d", assetResponse.Code)
+	}
+}
+
 func TestLoginWeiboWithPasswordExchangesSession(t *testing.T) {
 	privateKey, err := rsa.GenerateKey(rand.Reader, 1024)
 	if err != nil {

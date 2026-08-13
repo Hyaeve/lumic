@@ -143,6 +143,7 @@ body, button, input, textarea, select { font-size: 14px; }
 .author-profile-main h1 { margin-top: 3px; }
 .author-back-button { display: grid; place-items: center; width: 38px; height: 38px; flex: none; color: #5f7568; background: var(--card); border: 1px solid var(--line); border-radius: 7px; font-size: 21px; }
 .author-back-button:hover { color: #426e56; background: #edf4ee; }
+.timeline-spacer { width: 100%; pointer-events: none; }
 @media (max-width: 760px) {
   .author-page-header { align-items: flex-start; }
   .author-profile-main { gap: 11px; }

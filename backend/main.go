@@ -3228,6 +3228,23 @@ func writeJSON(w http.ResponseWriter, value any) {
 	json.NewEncoder(w).Encode(value)
 }
 
+func serveFrontend(w http.ResponseWriter, r *http.Request) {
+	requested := filepath.Clean(filepath.Join("public", filepath.FromSlash(strings.TrimPrefix(r.URL.Path, "/"))))
+	publicRoot, rootErr := filepath.Abs("public")
+	requestedPath, pathErr := filepath.Abs(requested)
+	if rootErr == nil && pathErr == nil && (requestedPath == publicRoot || strings.HasPrefix(requestedPath, publicRoot+string(os.PathSeparator))) {
+		if info, err := os.Stat(requestedPath); err == nil && !info.IsDir() {
+			http.ServeFile(w, r, requestedPath)
+			return
+		}
+	}
+	if path.Ext(r.URL.Path) != "" {
+		http.NotFound(w, r)
+		return
+	}
+	http.ServeFile(w, r, filepath.Join("public", "index.html"))
+}
+
 func main() {
 	if err := initializeFlowStorage(); err != nil {
 		log.Fatal("unable to initialize flow storage: ", err)
@@ -3283,11 +3300,7 @@ func main() {
 			http.StripPrefix("/flow/", http.FileServer(http.Dir(flowRoot))).ServeHTTP(w, r)
 			return
 		}
-		if r.URL.Path == "/" || r.URL.Path == "" {
-			http.ServeFile(w, r, "public/index.html")
-			return
-		}
-		http.ServeFile(w, r, "public"+r.URL.Path)
+		serveFrontend(w, r)
 	})
 	log.Println("Lumic API listening on :5500")
 	log.Fatal(http.ListenAndServe(":5500", handler))
