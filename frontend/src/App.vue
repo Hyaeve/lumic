@@ -161,11 +161,31 @@ async function login() {
 }
 async function loadData() {
   try {
-    const [postResponse, feedResponse, biliFeedResponse, weiboFeedResponse] = await Promise.all([fetch('/api/posts'), fetch('/api/feeds'), fetch('/api/bilibili/subscriptions'), fetch('/api/weibo/subscriptions')])
-    if (!postResponse.ok || !feedResponse.ok || !biliFeedResponse.ok || !weiboFeedResponse.ok) throw new Error('api unavailable')
+    const postResponse = await fetch('/api/posts', { cache: 'no-store' })
+    if (!postResponse.ok) throw new Error('api unavailable')
     posts.value = await postResponse.json()
-    feeds.value = [...await feedResponse.json(), ...await biliFeedResponse.json(), ...await weiboFeedResponse.json()]
-  } catch { posts.value = []; feeds.value = [] }
+  } catch { posts.value = [] }
+  await loadFeeds()
+}
+async function loadFeeds(fallbackFeed = null) {
+  const endpoints = ['/api/feeds', '/api/bilibili/subscriptions', '/api/weibo/subscriptions']
+  const responses = await Promise.allSettled(endpoints.map(endpoint => fetch(endpoint, { cache: 'no-store' })))
+  const loaded = []
+  for (const result of responses) {
+    if (result.status !== 'fulfilled' || !result.value.ok) continue
+    try {
+      const items = await result.value.json()
+      if (Array.isArray(items)) loaded.push(...items)
+    } catch {}
+  }
+  if (fallbackFeed) loaded.push(fallbackFeed)
+  if (!loaded.length && responses.every(result => result.status === 'rejected' || !result.value.ok)) return false
+  const unique = new Map()
+  for (const feed of loaded) {
+    if (feed?.id) unique.set(feed.id, feed)
+  }
+  feeds.value = [...unique.values()]
+  return true
 }
 function setDarkMode(value) {
   isDark.value = Boolean(value)
@@ -404,7 +424,10 @@ async function subscribeWeibo(user) {
   try {
     const response = await fetch('/api/weibo/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: user.userId, name: user.name, avatar: user.avatar, includePast: weiboIncludePast.value, schedule: '0 6 * * *', tags: parseTagInput(weiboSubscriptionTags.value) }) })
     if (!response.ok) throw new Error(await responseError(response, response.status === 409 ? '已经订阅该微博博主' : '订阅失败'))
-    feeds.value.push(await response.json()); weiboSubscriptionTags.value = ''
+    const saved = await response.json()
+    await loadFeeds(saved)
+    weiboSubscriptionTags.value = ''; showWeibo.value = false
+    navigateTo('pulls')
   } catch (error) { weiboError.value = error.message } finally { weiboBusy.value = false }
 }
 async function subscribeBilibili(user) {
@@ -412,7 +435,10 @@ async function subscribeBilibili(user) {
   try {
     const response = await fetch('/api/bilibili/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: user.userId, name: user.name, avatar: user.avatar, includePast: biliIncludePast.value, schedule: '0 6 * * *', tags: parseTagInput(biliSubscriptionTags.value) }) })
     if (!response.ok) throw new Error(response.status === 409 ? '已经订阅该 UP 主' : '订阅失败')
-    feeds.value.push(await response.json()); biliSubscriptionTags.value = ''
+    const saved = await response.json()
+    await loadFeeds(saved)
+    biliSubscriptionTags.value = ''; showBilibili.value = false
+    navigateTo('pulls')
   } catch (error) { biliError.value = error.message } finally { biliBusy.value = false }
 }
 function openPlatformSettings(platform) {
