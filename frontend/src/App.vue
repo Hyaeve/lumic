@@ -31,6 +31,7 @@ const loginBusy = ref(false)
 const credentials = ref({ username: '', password: '' })
 const activeNav = ref('all')
 const activeSource = ref('all')
+const sourcesExpanded = ref(true)
 const isDark = ref(false)
 const showAdd = ref(false)
 const showBilibili = ref(false)
@@ -55,6 +56,7 @@ const pixivBusy = ref(false)
 const pixivError = ref('')
 const weiboAccount = ref({ configured: false, userId: '', userName: '' })
 const weiboCredentials = ref({ cookie: '', userId: '' })
+const weiboPasswordCredentials = ref({ username: '', password: '' })
 const weiboQR = ref(null)
 const weiboBusy = ref(false)
 const weiboError = ref('')
@@ -246,6 +248,15 @@ async function saveWeiboAccount() {
     if (!response.ok) throw new Error(await responseError(response, '微博 Cookie 验证失败'))
     weiboAccount.value = await response.json()
     weiboCredentials.value = { cookie: '', userId: '' }
+  } catch (error) { weiboError.value = error.message } finally { weiboBusy.value = false }
+}
+async function loginWeiboAccount() {
+  weiboBusy.value = true; weiboError.value = ''
+  try {
+    const response = await fetch('/api/weibo/account', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: weiboPasswordCredentials.value.username.trim(), password: weiboPasswordCredentials.value.password }) })
+    if (!response.ok) throw new Error(await responseError(response, '微博账号登录失败'))
+    weiboAccount.value = await response.json()
+    weiboPasswordCredentials.value = { username: '', password: '' }
   } catch (error) { weiboError.value = error.message } finally { weiboBusy.value = false }
 }
 async function searchBilibili() {
@@ -536,30 +547,24 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
 <small>拾光</small>
 </div>
       <nav class="main-nav">
-        <button :class="{ active: activeNav === 'all' }" @click="navigateTo('all', 'all')">
-<span class="nav-line-symbol">⌂</span> 全部动态 <b>{{ posts.length }}</b>
-</button>
-        <button v-for="(meta, key) in sourceMeta" :key="key" :class="{ active: activeNav === 'source' && activeSource === key }" @click="navigateTo('source', key)">
-<img class="sidebar-source-icon" :src="meta.lineImage" :alt="`${meta.label}线条图标`">{{ meta.label }} <b>{{ posts.filter(p => p.source === key).length }}</b>
-</button>
+        <div class="source-nav-group">
+          <div class="source-nav-heading">
+            <button class="source-nav-main" :class="{ active: activeNav === 'all' }" @click="navigateTo('all', 'all')"><span class="nav-line-symbol">⌂</span> 全部动态 <b>{{ posts.length }}</b></button>
+            <button class="source-nav-toggle" type="button" :title="sourcesExpanded ? '收起平台来源' : '展开平台来源'" :aria-expanded="sourcesExpanded" @click="sourcesExpanded = !sourcesExpanded"><span :class="{ collapsed: !sourcesExpanded }">⌄</span></button>
+          </div>
+          <div v-show="sourcesExpanded" class="source-nav-children">
+            <button v-for="(meta, key) in sourceMeta" :key="key" :class="{ active: activeNav === 'source' && activeSource === key }" @click="navigateTo('source', key)"><img class="sidebar-source-icon" :src="meta.lineImage" :alt="`${meta.label}线条图标`">{{ meta.label }} <b>{{ posts.filter(p => p.source === key).length }}</b></button>
+          </div>
+        </div>
         <button :class="{ active: activeNav === 'liked' }" @click="navigateTo('liked', 'all')">
 <span class="nav-line-symbol">♡</span> 我的点赞 <b>{{ likedCount }}</b>
 </button>
         <button :class="{ active: activeNav === 'pulls' }" @click="navigateTo('pulls')">
 <span class="nav-line-symbol">↻</span> 拉取列表 <b>{{ feeds.length }}</b>
 </button>
-        <button :class="{ active: activeNav === 'settings' }" @click="openSettings()">
-<span class="nav-line-symbol">⚙</span> 设置</button>
       </nav>
       <div class="sidebar-bottom">
-        <div class="profile">
-<div class="profile-avatar">拾</div>
-<div>
-<strong>我的空间</strong>
-<small>本地收藏</small>
-</div>
-<span>⋮</span>
-</div>
+        <button :class="{ active: activeNav === 'settings' }" @click="openSettings()"><span class="nav-line-symbol">⚙</span> 设置</button>
       </div>
     </aside>
 
@@ -743,8 +748,9 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
               <details class="manual-credential"><summary>高级：手动导入 Cookie</summary><form class="settings-form bili-credentials" @submit.prevent="saveBilibiliAccount" autocomplete="off"><label>完整 Cookie</label><textarea v-model="biliCredentials.cookie" rows="4" placeholder="仅在扫码不可用时使用"></textarea><label>SESSDATA</label><input v-model="biliCredentials.SESSDATA" type="password"><label>bili_jct</label><input v-model="biliCredentials.bili_jct" type="password"><label>buvid3</label><input v-model="biliCredentials.buvid3" type="password"><label>DedeUserID</label><input v-model="biliCredentials.DedeUserID" inputmode="numeric"><button class="login-button" :disabled="biliBusy">验证并保存手动凭证</button></form></details><p v-if="biliError" class="login-error bili-error">{{ biliError }}</p>
             </article>
             <article class="platform-auth-card weibo">
-              <header class="platform-auth-head"><img class="source-icon" :src="sourceMeta.weibo.image" alt="微博图标"><div><h3>微博</h3><span>扫码或 Cookie 登录</span></div><em :class="['connection-dot', { online: weiboAccount.configured }]">{{ weiboAccount.configured ? '已连接' : '未连接' }}</em></header>
-              <p v-if="weiboAccount.configured">当前账号：{{ weiboAccount.userName || `UID ${weiboAccount.userId}` }}。</p><p v-else>优先使用微博客户端扫码，也可导入浏览器登录 Cookie。微博网页登录包含动态验证码和风控校验，暂不保存账号密码。</p>
+              <header class="platform-auth-head"><img class="source-icon" :src="sourceMeta.weibo.image" alt="微博图标"><div><h3>微博</h3><span>账号密码、扫码或 Cookie 登录</span></div><em :class="['connection-dot', { online: weiboAccount.configured }]">{{ weiboAccount.configured ? '已连接' : '未连接' }}</em></header>
+              <p v-if="weiboAccount.configured">当前账号：{{ weiboAccount.userName || `UID ${weiboAccount.userId}` }}。</p><p v-else>可直接使用微博账号密码建立会话。密码仅用于本次登录请求，不会写入本地配置；触发验证码或安全验证时请改用扫码。</p>
+              <form class="settings-form platform-auth-form weibo-password-form" @submit.prevent="loginWeiboAccount" autocomplete="off"><label>微博账号</label><input v-model="weiboPasswordCredentials.username" type="text" autocomplete="username" required placeholder="手机号、邮箱或微博账号"><label>微博密码</label><input v-model="weiboPasswordCredentials.password" type="password" autocomplete="current-password" required><button class="login-button" :disabled="weiboBusy">{{ weiboBusy ? '登录中…' : '账号密码登录' }}</button></form>
               <div v-if="weiboQR" class="weibo-qr"><img :src="weiboQR.image.startsWith('//') ? `https:${weiboQR.image}` : weiboQR.image" alt="微博登录二维码"><span>请在二维码过期前扫码并确认</span></div><button class="login-button platform-login-button" type="button" @click="startWeiboQR" :disabled="weiboBusy && !weiboQR">{{ weiboQR ? '刷新二维码' : weiboBusy ? '获取中…' : weiboAccount.configured ? '扫码切换微博账号' : '扫码连接微博' }}</button><details class="manual-credential"><summary>高级：手动导入 Cookie</summary><form class="settings-form bili-credentials" @submit.prevent="saveWeiboAccount" autocomplete="off"><label>微博 UID</label><input v-model="weiboCredentials.userId" inputmode="numeric" required placeholder="个人主页地址中的数字 UID"><label>完整 Cookie</label><textarea v-model="weiboCredentials.cookie" rows="4" required placeholder="可粘贴浏览器请求头中的 Cookie: 完整内容"></textarea><p class="credential-note">请使用已成功打开微博的同一网络出口获取 Cookie；保存前会验证账号资料，不会回显原始 Cookie。</p><button class="login-button" :disabled="weiboBusy">{{ weiboBusy ? '验证中…' : '验证并保存 Cookie' }}</button></form></details><p v-if="weiboError" class="login-error">{{ weiboError }}</p>
             </article>
             <article class="platform-auth-card pixiv">

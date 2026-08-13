@@ -77,6 +77,51 @@ func TestPostsAfterUsesStrictIncrementalBoundary(t *testing.T) {
 	}
 }
 
+func TestLoginWeiboWithPasswordExchangesSession(t *testing.T) {
+	oldEndpoint := weiboLoginEndpoint
+	oldValidator := validateWeiboLoginSession
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("unexpected method: %s", r.Method)
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		if r.Form.Get("username") != "account" || r.Form.Get("password") != "secret" {
+			t.Fatalf("credentials were not forwarded correctly: %#v", r.Form)
+		}
+		http.SetCookie(w, &http.Cookie{Name: "SUB", Value: "session", Path: "/"})
+		writeJSON(w, map[string]any{"retcode": 20000000, "data": map[string]any{"uid": "42"}})
+	}))
+	defer server.Close()
+	weiboLoginEndpoint = server.URL
+	validateWeiboLoginSession = func(cookie, userID, proxyURL string) (WeiboCredentials, error) {
+		if !strings.Contains(cookie, "SUB=session") || userID != "42" {
+			t.Fatalf("unexpected session: cookie=%q userID=%q", cookie, userID)
+		}
+		return WeiboCredentials{Cookie: cookie, UserID: userID, UserName: "测试账号"}, nil
+	}
+	t.Cleanup(func() { weiboLoginEndpoint = oldEndpoint; validateWeiboLoginSession = oldValidator })
+
+	credentials, err := loginWeiboWithPassword("account", "secret", "")
+	if err != nil {
+		t.Fatalf("login failed: %v", err)
+	}
+	if credentials.UserID != "42" || credentials.UserName != "测试账号" {
+		t.Fatalf("unexpected credentials: %#v", credentials)
+	}
+}
+
+func TestWeiboAccountHandlerRequiresCompletePasswordLogin(t *testing.T) {
+	store := &BilibiliStore{config: BilibiliConfig{}, key: make([]byte, 32)}
+	request := httptest.NewRequest(http.MethodPut, "/api/weibo/account", strings.NewReader(`{"username":"account"}`))
+	response := httptest.NewRecorder()
+	store.weiboAccountHandler(response, request)
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "账号和密码均不能为空") {
+		t.Fatalf("unexpected response: status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestPostsHandlerPersistsLikedState(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "content.json")
 	store := &Store{posts: []Post{{ID: "post-1", Author: "作者"}}, feeds: []SourceConfig{}, file: path}

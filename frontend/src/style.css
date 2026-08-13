@@ -115,3 +115,18 @@ body, button, input, textarea, select { font-size: 14px; }
   .media-grid .media-frame.portrait { width: auto; max-width: 100%; }
   .media-grid .media-frame img { max-height: 72vh; }
 }
+
+/* Collapsible source navigation and bottom settings */
+.source-nav-group { display: grid; gap: 4px; }
+.source-nav-heading { position: relative; display: flex; align-items: center; }
+.main-nav .source-nav-main { padding-right: 47px; }
+.main-nav .source-nav-toggle { position: absolute; right: 8px; width: 34px; min-height: 34px; padding: 0; justify-content: center; border-radius: 6px; }
+.source-nav-toggle span { display: block; width: auto!important; font-size: 20px!important; line-height: 1; transition: transform .16s ease; }
+.source-nav-toggle span.collapsed { transform: rotate(-90deg); }
+.source-nav-children { display: grid; gap: 3px; padding-left: 18px; }
+.main-nav .source-nav-children button { min-height: 43px; padding-top: 9px; padding-bottom: 9px; font-size: 14px; }
+.source-nav-children .sidebar-source-icon { width: 21px; height: 21px; }
+.sidebar-bottom { padding-top: 15px; border-top: 1px solid var(--line); }
+.sidebar-bottom > button { min-height: 48px; }
+.weibo-password-form { margin-bottom: 13px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.weibo-password-form .login-button { margin-top: 3px; }

@@ -2189,6 +2189,122 @@ func weiboClient(proxyURL string) (*http.Client, error) {
 	return client, nil
 }
 
+var weiboLoginEndpoint = "https://passport.weibo.cn/sso/login"
+var validateWeiboLoginSession = validateWeiboCredentials
+
+func collectWeiboClientCookies(client *http.Client, extraURLs ...*url.URL) string {
+	parts, seen := []string{}, map[string]bool{}
+	cookieURLs := make([]*url.URL, 0, len(extraURLs)+6)
+	cookieURLs = append(cookieURLs, extraURLs...)
+	for _, rawURL := range []string{"https://weibo.com/", "https://www.weibo.com/", "https://m.weibo.cn/", "https://passport.weibo.cn/", "https://login.sina.com.cn/", "https://passport.weibo.com/"} {
+		cookieURL, err := url.Parse(rawURL)
+		if err != nil {
+			continue
+		}
+		cookieURLs = append(cookieURLs, cookieURL)
+	}
+	for _, cookieURL := range cookieURLs {
+		if cookieURL == nil {
+			continue
+		}
+		for _, cookie := range client.Jar.Cookies(cookieURL) {
+			key := strings.ToLower(cookie.Name)
+			if cookie.Name == "" || seen[key] {
+				continue
+			}
+			seen[key] = true
+			parts = append(parts, cookie.Name+"="+cookie.Value)
+		}
+	}
+	return normalizeWeiboCookie(strings.Join(parts, "; "))
+}
+
+func loginWeiboWithPassword(username, password, proxyURL string) (WeiboCredentials, error) {
+	username, password = strings.TrimSpace(username), strings.TrimSpace(password)
+	if username == "" || password == "" {
+		return WeiboCredentials{}, errors.New("微博账号和密码均不能为空")
+	}
+	client, err := weiboClient(proxyURL)
+	if err != nil {
+		return WeiboCredentials{}, err
+	}
+	values := url.Values{
+		"username":     {username},
+		"password":     {password},
+		"savestate":    {"1"},
+		"r":            {"https://m.weibo.cn/"},
+		"ec":           {"0"},
+		"pagerefer":    {"https://m.weibo.cn/"},
+		"entry":        {"mweibo"},
+		"wentry":       {""},
+		"loginfrom":    {""},
+		"client_id":    {""},
+		"code":         {""},
+		"qq":           {""},
+		"mainpageflag": {"1"},
+		"hff":          {""},
+		"hfp":          {""},
+	}
+	request, err := http.NewRequest(http.MethodPost, weiboLoginEndpoint, strings.NewReader(values.Encode()))
+	if err != nil {
+		return WeiboCredentials{}, err
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Accept", "application/json, text/plain, */*")
+	request.Header.Set("Referer", "https://m.weibo.cn/")
+	request.Header.Set("Origin", "https://m.weibo.cn")
+	request.Header.Set("User-Agent", "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36")
+	response, err := client.Do(request)
+	if err != nil {
+		return WeiboCredentials{}, fmt.Errorf("微博账号登录请求失败：%w", err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, 2<<20))
+	if err != nil {
+		return WeiboCredentials{}, errors.New("无法读取微博账号登录响应")
+	}
+	var payload map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	if decoder.Decode(&payload) != nil {
+		return WeiboCredentials{}, fmt.Errorf("微博账号登录响应异常（HTTP %d）：%s", response.StatusCode, responseSummary(body))
+	}
+	if response.StatusCode != http.StatusOK || jsonValueString(payload["retcode"]) != "20000000" {
+		message := firstNonEmptyRemoteText(jsonValueString(payload["msg"]), jsonValueString(payload["message"]), jsonValueString(payload["reason"]))
+		if message == "" {
+			message = "微博拒绝了账号登录"
+		}
+		lower := strings.ToLower(message)
+		if strings.Contains(lower, "verify") || strings.Contains(message, "验证码") || strings.Contains(message, "安全验证") || strings.Contains(message, "异常") {
+			return WeiboCredentials{}, errors.New(message + "；请完成微博安全验证后使用扫码或 Cookie 登录")
+		}
+		return WeiboCredentials{}, errors.New(message)
+	}
+	data, _ := payload["data"].(map[string]any)
+	userID := firstNonEmptyRemoteText(jsonValueString(data["uid"]), jsonValueString(payload["uid"]), jsonValueString(data["user_id"]))
+	if crossDomain, ok := data["crossdomainlist"].(map[string]any); ok {
+		for _, raw := range crossDomain {
+			crossURL := jsonValueString(raw)
+			if crossURL == "" {
+				continue
+			}
+			crossRequest, requestErr := http.NewRequest(http.MethodGet, crossURL, nil)
+			if requestErr == nil {
+				crossRequest.Header.Set("User-Agent", request.Header.Get("User-Agent"))
+				if crossResponse, requestErr := client.Do(crossRequest); requestErr == nil {
+					_, _ = io.Copy(io.Discard, io.LimitReader(crossResponse.Body, 1<<20))
+					crossResponse.Body.Close()
+				}
+			}
+		}
+	}
+	cookie := collectWeiboClientCookies(client, response.Request.URL)
+	if cookie == "" || userID == "" {
+		return WeiboCredentials{}, errors.New("微博账号登录成功但未返回完整会话，请改用扫码登录")
+	}
+	return validateWeiboLoginSession(cookie, userID, proxyURL)
+}
+
 func normalizeWeiboCookie(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if index := strings.Index(raw, "\n"); index >= 0 {
@@ -2675,14 +2791,22 @@ func (b *BilibiliStore) weiboAccountHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var input struct {
-		Cookie string `json:"cookie"`
-		UserID string `json:"userId"`
+		Cookie   string `json:"cookie"`
+		UserID   string `json:"userId"`
+		Username string `json:"username"`
+		Password string `json:"password"`
 	}
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10)).Decode(&input) != nil {
 		writeAPIError(w, http.StatusBadRequest, "微博凭证格式无效")
 		return
 	}
-	credentials, err := validateWeiboCredentials(input.Cookie, input.UserID, proxyURL)
+	var credentials WeiboCredentials
+	var err error
+	if strings.TrimSpace(input.Username) != "" || strings.TrimSpace(input.Password) != "" {
+		credentials, err = loginWeiboWithPassword(input.Username, input.Password, proxyURL)
+	} else {
+		credentials, err = validateWeiboCredentials(input.Cookie, input.UserID, proxyURL)
+	}
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
