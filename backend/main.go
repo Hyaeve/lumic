@@ -763,8 +763,24 @@ func loginHandler(sessions *SessionStore, auth *AuthConfig) http.HandlerFunc {
 			http.Error(w, "unable to create session", http.StatusInternalServerError)
 			return
 		}
-		http.SetCookie(w, &http.Cookie{Name: "lumic_session", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: os.Getenv("LUMIC_COOKIE_SECURE") == "true", MaxAge: 30 * 24 * 60 * 60, Expires: time.Now().Add(30 * 24 * time.Hour)})
+		http.SetCookie(w, &http.Cookie{Name: "lumic_session", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: os.Getenv("LUMIC_COOKIE_SECURE") == "true", MaxAge: 30 * 24 * 60 * 60, Expires: time.Now().Add(30 * 24 * time.Hour)})
 		writeJSON(w, map[string]string{"status": "ok"})
+	}
+}
+
+func sessionHandler(sessions *SessionStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		cookie, err := r.Cookie("lumic_session")
+		if err != nil || !sessions.valid(cookie.Value) {
+			http.SetCookie(w, &http.Cookie{Name: "lumic_session", Value: "", Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: os.Getenv("LUMIC_COOKIE_SECURE") == "true", MaxAge: -1, Expires: time.Unix(1, 0)})
+			writeJSON(w, map[string]bool{"authenticated": false})
+			return
+		}
+		writeJSON(w, map[string]bool{"authenticated": true})
 	}
 }
 
@@ -818,7 +834,7 @@ func passwordHash() string {
 
 func authMiddleware(sessions *SessionStore, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/login" || r.URL.Path == "/api/health" {
+		if r.URL.Path == "/api/login" || r.URL.Path == "/api/session" || r.URL.Path == "/api/health" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -3848,6 +3864,7 @@ func main() {
 	sessions := &SessionStore{tokens: make(map[string]time.Time), key: bilibili.key}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/login", loginHandler(sessions, auth))
+	mux.HandleFunc("/api/session", sessionHandler(sessions))
 	mux.HandleFunc("/api/settings", settingsHandler(auth))
 	mux.HandleFunc("/api/posts", store.postsHandler)
 	mux.HandleFunc("/api/feeds", store.feedsHandler)

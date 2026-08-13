@@ -11,6 +11,7 @@ import twitterIcon from '../icon/推特.png'
 import twitterLineIcon from '../icon/推特-1.png'
 
 const authenticated = ref(false)
+const sessionChecked = ref(false)
 const loginError = ref('')
 const showSettings = ref(false)
 const settingsTab = ref('settings')
@@ -84,6 +85,8 @@ const estimatedPostHeight = 560
 const timelineOverscan = 5
 let timelineFrame = 0
 let postResizeObserver = null
+const observedPostElements = new Map()
+const transientTimers = new Set()
 const lightbox = ref({ open: false, media: [], index: 0, author: '', scale: 1, x: 0, y: 0, dragging: false })
 let lightboxDrag = null
 
@@ -146,7 +149,7 @@ async function login() {
   loginError.value = ''
   loginBusy.value = true
   try {
-    const response = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(credentials.value) })
+    const response = await fetch('/api/login', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(credentials.value) })
     if (!response.ok) throw new Error('账号或密码不正确')
     authenticated.value = true
     await loadData()
@@ -168,7 +171,7 @@ function setDarkMode(value) {
 async function syncNow() {
   syncing.value = true
   try { await fetch('/api/sync', { method: 'POST' }) } catch {}
-  setTimeout(() => { syncing.value = false }, 900)
+  scheduleTransient(() => { syncing.value = false }, 900)
 }
 async function openSettings(_section = 'settings', updateHistory = true) {
   settingsTab.value = 'settings'; showSettings.value = true; activeNav.value = 'settings'; settingsError.value = ''; proxyMessage.value = ''; pixivError.value = ''; weiboError.value = ''
@@ -570,7 +573,7 @@ async function deletePost(post) {
     if (!response.ok) throw new Error(await responseError(response, '删除动态失败'))
     posts.value = posts.value.filter(item => item.id !== post.id)
     timelineMessage.value = '动态已从时间线删除'
-    window.setTimeout(() => { if (timelineMessage.value === '动态已从时间线删除') timelineMessage.value = '' }, 2500)
+    scheduleTransient(() => { if (timelineMessage.value === '动态已从时间线删除') timelineMessage.value = '' }, 2500)
   } catch (error) { timelineMessage.value = error.message } finally { postActionBusy.value = '' }
 }
 function togglePostSelection(post) {
@@ -633,6 +636,24 @@ function setMediaShape(post, mediaIndex, event) {
 function mediaShape(post, mediaIndex) {
   return mediaShapes.value[`${post.id}:${mediaIndex}`] || 'unknown'
 }
+function scheduleTransient(callback, delay) {
+  const timer = window.setTimeout(() => {
+    transientTimers.delete(timer)
+    callback()
+  }, delay)
+  transientTimers.add(timer)
+  return timer
+}
+function prunePostCaches() {
+  const activeIds = new Set(posts.value.map(post => String(post.id)))
+  for (const [id, element] of observedPostElements) {
+    if (activeIds.has(id)) continue
+    postResizeObserver?.unobserve(element)
+    observedPostElements.delete(id)
+  }
+  timelineHeights.value = Object.fromEntries(Object.entries(timelineHeights.value).filter(([id]) => activeIds.has(id)))
+  mediaShapes.value = Object.fromEntries(Object.entries(mediaShapes.value).filter(([key]) => activeIds.has(key.split(':', 1)[0])))
+}
 async function togglePostLike(post) {
   if (postActionBusy.value) return
   const previous = Boolean(post.liked)
@@ -672,8 +693,16 @@ function measurePostElement(post, element) {
   if (height > 0 && timelineHeights.value[post.id] !== height) timelineHeights.value[post.id] = height
 }
 function setPostCard(post, element) {
-  if (!element) return
+  const id = String(post.id)
+  const previous = observedPostElements.get(id)
+  if (!element) {
+    if (previous) postResizeObserver?.unobserve(previous)
+    observedPostElements.delete(id)
+    return
+  }
+  if (previous && previous !== element) postResizeObserver?.unobserve(previous)
   element.dataset.postId = post.id
+  observedPostElements.set(id, element)
   measurePostElement(post, element)
   postResizeObserver?.observe(element)
 }
@@ -765,22 +794,34 @@ function platformEmptyMessage(platformKey) {
 }
 async function checkSession() {
   try {
-    const response = await fetch('/api/posts')
-    if (!response.ok) throw new Error('unauthorized')
-    posts.value = await response.json()
+    const response = await fetch('/api/session', { credentials: 'same-origin' })
+    if (!response.ok) throw new Error('session unavailable')
+    const session = await response.json()
+    if (!session.authenticated) {
+      authenticated.value = false
+      return
+    }
     authenticated.value = true
-    const [feedResponse, biliFeedResponse, weiboFeedResponse, weiboAccountResponse] = await Promise.all([fetch('/api/feeds'), fetch('/api/bilibili/subscriptions'), fetch('/api/weibo/subscriptions'), fetch('/api/weibo/account')])
-    if (feedResponse.ok && biliFeedResponse.ok && weiboFeedResponse.ok) feeds.value = [...await feedResponse.json(), ...await biliFeedResponse.json(), ...await weiboFeedResponse.json()]
+    await loadData()
+    const weiboAccountResponse = await fetch('/api/weibo/account', { credentials: 'same-origin' })
     if (weiboAccountResponse.ok) weiboAccount.value = await weiboAccountResponse.json()
-  } catch { authenticated.value = false }
+  } catch {
+    loginError.value = '暂时无法连接服务，请稍后刷新页面'
+  } finally {
+    sessionChecked.value = true
+  }
 }
 watch(filteredPosts, resetTimelineWindow)
+watch(posts, prunePostCaches)
 onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); checkSession(); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', applyRoute); window.addEventListener('scroll', scheduleTimelineWindow, { passive: true }); window.addEventListener('resize', scheduleTimelineWindow) })
-onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserver?.disconnect(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', applyRoute); window.removeEventListener('scroll', scheduleTimelineWindow); window.removeEventListener('resize', scheduleTimelineWindow); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
+onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserver?.disconnect(); observedPostElements.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); closeLightbox(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', applyRoute); window.removeEventListener('scroll', scheduleTimelineWindow); window.removeEventListener('resize', scheduleTimelineWindow); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
 </script>
 
 <template>
-  <div v-if="!authenticated" class="login-shell">
+  <div v-if="!sessionChecked" class="session-loading" aria-label="正在恢复登录状态">
+    <span></span>
+  </div>
+  <div v-else-if="!authenticated" class="login-shell">
     <div class="login-panel">
       <div class="login-brand">
 <span class="brand-mark">✦</span>

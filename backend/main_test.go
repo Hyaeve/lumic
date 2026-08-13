@@ -802,3 +802,21 @@ func TestSignedSessionRemainsValidAcrossStoreRestart(t *testing.T) {
 		t.Fatal("tampered signed session was accepted")
 	}
 }
+
+func TestSessionHandlerRecognizesPersistentSignedCookie(t *testing.T) {
+	key := []byte("persistent-session-signing-key")
+	token, err := (&SessionStore{tokens: make(map[string]time.Time), key: key}).create()
+	if err != nil {
+		t.Fatalf("create signed session: %v", err)
+	}
+
+	restarted := &SessionStore{tokens: make(map[string]time.Time), key: key}
+	request := httptest.NewRequest(http.MethodGet, "/api/session", nil)
+	request.AddCookie(&http.Cookie{Name: "lumic_session", Value: token})
+	response := httptest.NewRecorder()
+	sessionHandler(restarted)(response, request)
+
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"authenticated":true`) {
+		t.Fatalf("session was not restored: status=%d body=%s", response.Code, response.Body.String())
+	}
+}
