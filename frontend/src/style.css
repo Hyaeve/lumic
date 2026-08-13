@@ -99,13 +99,19 @@ body, button, input, textarea, select { font-size: 14px; }
 .post-foot .post-like-button:hover { color: #bd6b70; background: #f8e9e9; }
 .post-foot .post-like-button.liked { color: #bf5f67; background: #f8e4e5; border-color: #edc8cb; }
 .post-foot .post-like-button:disabled { opacity: .55; cursor: wait; }
-.media-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; width: min(100%, 760px); margin: 14px 0 18px; }
-.media-grid button { display: grid; place-items: center; aspect-ratio: 4 / 3; background: #edf1ee; border: 1px solid #e0e7e2; }
-.media-grid img { width: 100%; height: 100%; object-fit: contain; }
-.media-grid button:hover img { transform: none; }
-.media-count-1 { display: block; width: min(100%, 760px); }
-.media-count-1 button { width: 100%; height: clamp(360px, 58vw, 620px); aspect-ratio: auto; }
+.media-grid { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px; width: min(100%, 820px); margin: 14px 0 18px; }
+.media-grid .media-frame { display: flex; align-items: flex-start; justify-content: center; overflow: hidden; width: min(100%, 400px); height: auto; aspect-ratio: auto; padding: 0; background: #edf1ee; border: 1px solid #e0e7e2; }
+.media-grid .media-frame.landscape { width: min(100%, 520px); }
+.media-grid .media-frame.portrait { width: auto; max-width: min(100%, 400px); }
+.media-grid .media-frame img { display: block; width: auto; max-width: 100%; height: auto; max-height: min(72vh, 760px); object-fit: contain; }
+.media-grid .media-frame.landscape img { width: 100%; max-height: none; }
+.media-grid .media-frame:hover img { transform: none; }
+.media-count-1 { display: flex; width: min(100%, 820px); }
+.media-count-1 .media-frame { width: auto; max-width: 100%; }
+.media-count-1 .media-frame.landscape { width: 100%; }
+.media-count-1 .media-frame.portrait img { max-height: min(78vh, 900px); }
 @media (max-width: 760px) {
-  .media-grid { grid-template-columns: 1fr; }
-  .media-count-1 button { height: clamp(300px, 85vw, 520px); }
+  .media-grid .media-frame, .media-grid .media-frame.landscape { width: 100%; }
+  .media-grid .media-frame.portrait { width: auto; max-width: 100%; }
+  .media-grid .media-frame img { max-height: 72vh; }
 }

@@ -176,7 +176,7 @@ func TestCollectWeiboUsers(t *testing.T) {
 	payload := map[string]any{
 		"data": map[string]any{
 			"cards": []any{
-				map[string]any{"user": map[string]any{"id": float64(3546637624412244), "screen_name": "测试博主", "profile_image_url": "https://example.com/avatar.jpg", "followers_count": float64(1234)}},
+				map[string]any{"user": map[string]any{"idstr": "3546637624412244", "screen_name": "测试博主", "avatar": "//example.com/avatar.jpg", "followers_count": float64(1234)}},
 				map[string]any{"user": map[string]any{"id": json.Number("3546637624412244"), "name": "重复用户"}},
 			},
 		},
@@ -186,7 +186,7 @@ func TestCollectWeiboUsers(t *testing.T) {
 	if len(users) != 1 {
 		t.Fatalf("expected one unique user, got %#v", users)
 	}
-	if users[0].UserID != "3546637624412244" || users[0].Name != "测试博主" || users[0].Fans != 1234 {
+	if users[0].UserID != "3546637624412244" || users[0].Name != "测试博主" || users[0].Fans != 1234 || users[0].Avatar != "https://example.com/avatar.jpg" {
 		t.Fatalf("unexpected parsed user: %#v", users[0])
 	}
 }

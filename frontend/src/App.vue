@@ -64,6 +64,7 @@ const posts = ref([])
 const feeds = ref([])
 const postActionBusy = ref('')
 const timelineMessage = ref('')
+const mediaShapes = ref({})
 const lightbox = ref({ open: false, media: [], index: 0, author: '', scale: 1, x: 0, y: 0, dragging: false })
 let lightboxDrag = null
 
@@ -451,6 +452,14 @@ async function deletePost(post) {
     window.setTimeout(() => { if (timelineMessage.value === '动态已从时间线删除') timelineMessage.value = '' }, 2500)
   } catch (error) { timelineMessage.value = error.message } finally { postActionBusy.value = '' }
 }
+function setMediaShape(post, mediaIndex, event) {
+  const image = event.target
+  if (!image.naturalWidth || !image.naturalHeight) return
+  mediaShapes.value[`${post.id}:${mediaIndex}`] = image.naturalWidth >= image.naturalHeight ? 'landscape' : 'portrait'
+}
+function mediaShape(post, mediaIndex) {
+  return mediaShapes.value[`${post.id}:${mediaIndex}`] || 'unknown'
+}
 async function togglePostLike(post) {
   if (postActionBusy.value) return
   const previous = Boolean(post.liked)
@@ -622,7 +631,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
 </div>
 <p v-if="post.caption" class="caption">{{ post.caption }}</p>
 <div v-if="post.media?.length" :class="['media-grid', `media-count-${Math.min(post.media.length, 4)}`]">
-<button v-for="(media, mediaIndex) in post.media" :key="media" type="button" :aria-label="`查看 ${post.author} 的第 ${mediaIndex + 1} 张图片`" @click="openLightbox(post, mediaIndex)"><img :src="media" alt=""></button>
+<button v-for="(media, mediaIndex) in post.media" :key="media" :class="['media-frame', mediaShape(post, mediaIndex)]" type="button" :aria-label="`查看 ${post.author} 的第 ${mediaIndex + 1} 张图片`" @click="openLightbox(post, mediaIndex)"><img :src="media" alt="" @load="setMediaShape(post, mediaIndex, $event)"></button>
 </div>
 <div class="tag-row">
 <span v-for="tag in post.tags" :key="tag"># {{ tag }}</span>
@@ -735,7 +744,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
             </article>
             <article class="platform-auth-card weibo">
               <header class="platform-auth-head"><img class="source-icon" :src="sourceMeta.weibo.image" alt="微博图标"><div><h3>微博</h3><span>扫码或 Cookie 登录</span></div><em :class="['connection-dot', { online: weiboAccount.configured }]">{{ weiboAccount.configured ? '已连接' : '未连接' }}</em></header>
-              <p v-if="weiboAccount.configured">当前账号：{{ weiboAccount.userName || `UID ${weiboAccount.userId}` }}。</p><p v-else>优先使用微博客户端扫码，也可导入浏览器登录 Cookie。</p>
+              <p v-if="weiboAccount.configured">当前账号：{{ weiboAccount.userName || `UID ${weiboAccount.userId}` }}。</p><p v-else>优先使用微博客户端扫码，也可导入浏览器登录 Cookie。微博网页登录包含动态验证码和风控校验，暂不保存账号密码。</p>
               <div v-if="weiboQR" class="weibo-qr"><img :src="weiboQR.image.startsWith('//') ? `https:${weiboQR.image}` : weiboQR.image" alt="微博登录二维码"><span>请在二维码过期前扫码并确认</span></div><button class="login-button platform-login-button" type="button" @click="startWeiboQR" :disabled="weiboBusy && !weiboQR">{{ weiboQR ? '刷新二维码' : weiboBusy ? '获取中…' : weiboAccount.configured ? '扫码切换微博账号' : '扫码连接微博' }}</button><details class="manual-credential"><summary>高级：手动导入 Cookie</summary><form class="settings-form bili-credentials" @submit.prevent="saveWeiboAccount" autocomplete="off"><label>微博 UID</label><input v-model="weiboCredentials.userId" inputmode="numeric" required placeholder="个人主页地址中的数字 UID"><label>完整 Cookie</label><textarea v-model="weiboCredentials.cookie" rows="4" required placeholder="可粘贴浏览器请求头中的 Cookie: 完整内容"></textarea><p class="credential-note">请使用已成功打开微博的同一网络出口获取 Cookie；保存前会验证账号资料，不会回显原始 Cookie。</p><button class="login-button" :disabled="weiboBusy">{{ weiboBusy ? '验证中…' : '验证并保存 Cookie' }}</button></form></details><p v-if="weiboError" class="login-error">{{ weiboError }}</p>
             </article>
             <article class="platform-auth-card pixiv">
