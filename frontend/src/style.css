@@ -35,7 +35,7 @@ button { border: 0; font: inherit; cursor: pointer; color: inherit; }
 .dark .settings-page { background: #17211f; }
 .settings-page-inner { width: min(1120px, 100%); margin: 0 auto; }
 .settings-page-inner > .settings-pane + .settings-pane, .settings-page-inner > .settings-pane + .settings-window-grid, .settings-window-grid + .settings-pane { margin-top: 18px; }
-.settings-window-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: stretch; gap: 18px; margin-top: 18px; }
+.settings-window-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; gap: 18px; margin-top: 18px; }
 .settings-window-grid .settings-pane { min-width: 0; min-height: 0; }
 .settings-page .settings-tabs { position: sticky; top: 0; z-index: 5; display: flex; gap: 28px; margin: 0 0 22px; padding: 0 2px; background: #f6f8f6e8; border-bottom: 1px solid var(--line); border-radius: 0; backdrop-filter: blur(14px); }
 .dark .settings-page .settings-tabs { background: #17211fe8; }
@@ -90,6 +90,11 @@ button { border: 0; font: inherit; cursor: pointer; color: inherit; }
 .restore-file-button { display: inline-flex; height: 45px; align-items: center; padding: 0 18px; color: #fff; background: #6f9f81; border-radius: 8px; font-size: 12px; cursor: pointer; }
 .restore-file-button input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .restore-file-button.disabled { opacity: .55; cursor: wait; }
+.timeline-sort { display: inline-flex; margin-left: 10px; padding: 3px; background: #edf3ee; border: 1px solid var(--line); border-radius: 7px; }
+.dark .timeline-sort { background: #24332e; }
+.filters .timeline-sort button { min-width: 48px; justify-content: center; padding: 5px 9px; border-radius: 5px; }
+.filters .timeline-sort button.selected { color: #426e56; background: var(--card); box-shadow: 0 1px 5px #58706018; }
+.dark .filters .timeline-sort button.selected { color: #b9d8c4; }
 .content:has(.timeline-hero) { padding-top: 28px; }
 .timeline-hero { position: relative; isolation: isolate; overflow: hidden; min-height: 124px; align-items: center; padding: 24px 28px; background: linear-gradient(120deg, #f8fbf8 0%, #f1f7f3 62%, #f7f5ed 100%); border: 1px solid #dfe9e2; border-radius: 8px; box-shadow: 0 10px 30px #4d68580d; }
 .dark .timeline-hero { background: linear-gradient(120deg, #202f2a 0%, #24342f 58%, #302f29 100%); border-color: #35473f; }

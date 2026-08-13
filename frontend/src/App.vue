@@ -74,6 +74,7 @@ const postActionBusy = ref('')
 const timelineMessage = ref('')
 const selectionMode = ref(false)
 const selectedPostIds = ref([])
+const timelineSort = ref('newest')
 const mediaShapes = ref({})
 const timelineStart = ref(0)
 const timelineEnd = ref(15)
@@ -98,9 +99,13 @@ const selectedPostCount = computed(() => selectedPostIds.value.length)
 const filteredPosts = computed(() => {
   const timeline = activeNav.value === 'liked' ? posts.value.filter(post => post.liked) : posts.value
   const sourceTimeline = activeSource.value === 'all' ? timeline : timeline.filter(post => post.source === activeSource.value)
-  if (selectedTag.value) return sourceTimeline.filter(post => post.tags?.includes(selectedTag.value))
-  if (!selectedAuthor.value) return sourceTimeline
-  return sourceTimeline.filter(post => post.source === selectedAuthor.value.source && post.author === selectedAuthor.value.name)
+  let result = sourceTimeline
+  if (selectedTag.value) result = result.filter(post => post.tags?.includes(selectedTag.value))
+  else if (selectedAuthor.value) result = result.filter(post => post.source === selectedAuthor.value.source && post.author === selectedAuthor.value.name)
+  return [...result].sort((left, right) => {
+    const difference = new Date(right.published).getTime() - new Date(left.published).getTime()
+    return timelineSort.value === 'newest' ? difference : -difference
+  })
 })
 const visiblePosts = computed(() => filteredPosts.value.slice(timelineStart.value, timelineEnd.value))
 const timelineTopSpace = computed(() => filteredPosts.value.slice(0, timelineStart.value).reduce((height, post) => height + (timelineHeights.value[post.id] || estimatedPostHeight) + 15, 0))
@@ -793,18 +798,18 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
       <nav class="main-nav">
         <div class="source-nav-group">
           <div class="source-nav-heading">
-            <button class="source-nav-main" :class="{ active: activeNav === 'all' }" @click="navigateTo('all', 'all')"><span class="nav-line-symbol">⌂</span> 全部动态 <b>{{ posts.length }}</b></button>
+            <button class="source-nav-main" :class="{ active: activeNav === 'all' }" @click="navigateTo('all', 'all')"><span class="nav-line-symbol">⌂</span> 全部动态</button>
             <button class="source-nav-toggle" type="button" :title="sourcesExpanded ? '收起平台来源' : '展开平台来源'" :aria-expanded="sourcesExpanded" @click="sourcesExpanded = !sourcesExpanded"><span :class="{ collapsed: !sourcesExpanded }">⌄</span></button>
           </div>
           <div v-show="sourcesExpanded" class="source-nav-children">
-            <button v-for="(meta, key) in sourceMeta" :key="key" :class="{ active: activeNav === 'source' && activeSource === key }" @click="navigateTo('source', key)"><img class="sidebar-source-icon" :src="meta.lineImage" :alt="`${meta.label}线条图标`">{{ meta.label }} <b>{{ posts.filter(p => p.source === key).length }}</b></button>
+            <button v-for="(meta, key) in sourceMeta" :key="key" :class="{ active: activeNav === 'source' && activeSource === key }" @click="navigateTo('source', key)"><img class="sidebar-source-icon" :src="meta.lineImage" :alt="`${meta.label}线条图标`">{{ meta.label }}</button>
           </div>
         </div>
         <button :class="{ active: activeNav === 'liked' }" @click="navigateTo('liked', 'all')">
-<span class="nav-line-symbol">♡</span> 我的点赞 <b>{{ likedCount }}</b>
+<span class="nav-line-symbol">♡</span> 我的点赞
 </button>
         <button :class="{ active: activeNav === 'pulls' }" @click="navigateTo('pulls')">
-<span class="nav-line-symbol">▦</span> 订阅平台 <b>{{ feeds.length }}</b>
+<span class="nav-line-symbol">▦</span> 订阅平台
 </button>
       </nav>
       <div class="sidebar-bottom">
@@ -837,9 +842,6 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
 <span :class="{ spin: syncing }">↻</span> {{ syncing ? '同步中' : '立即同步' }}</button>
 </div>
 </header>
-      <div v-if="!authorProfile && activeNav === 'liked'" class="compact-page-actions">
-        <button class="secondary-button" :disabled="syncing" @click="syncWeiboLikes">{{ syncing ? '同步中…' : '同步微博点赞' }}</button>
-      </div>
       <section v-if="!authorProfile" class="stats">
 <div class="stat-card">
 <div class="stat-icon mint">✦</div>
@@ -869,15 +871,11 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
 </div>
 </section>
       <div class="section-heading">
-<div>
-<h2>{{ authorProfile ? `${authorProfile.name} 的动态` : activeNav === 'liked' ? '点赞动态' : selectedTag ? `#${selectedTag} 动态` : '最新动态' }}</h2>
-<p>{{ authorProfile ? `仅显示此作者 · ${filteredPosts.length} 条` : activeNav === 'liked' ? `共 ${likedCount} 条 · 按时间顺序排列` : '按时间顺序排列 · 自动同步于 10 分钟前' }}</p>
-</div>
 <div v-if="!authorProfile" class="filters">
 <button v-for="(meta, key) in { all: { label: '全部', icon: '✦' }, ...sourceMeta }" :key="key" :class="{ selected: activeSource === key }" @click="activeSource = key">
 <span v-if="key === 'all'">✦</span>
 <img v-else class="source-icon" :src="meta.image" :alt="`${meta.label}图标`">{{ meta.label }}</button>
-<button class="view-button">▦</button>
+<div class="timeline-sort" role="group" aria-label="动态时间排序"><button type="button" :class="{ selected: timelineSort === 'newest' }" @click="timelineSort = 'newest'">最新</button><button type="button" :class="{ selected: timelineSort === 'oldest' }" @click="timelineSort = 'oldest'">最早</button></div>
 </div>
 <div class="selection-actions"><button class="secondary-button" @click="selectionMode ? stopSelection() : selectionMode = true">{{ selectionMode ? '取消选择' : '多选删除' }}</button><button v-if="selectionMode" class="danger-outline-button" :disabled="!selectedPostCount || postActionBusy === 'batch-delete'" @click="deleteSelectedPosts">删除所选（{{ selectedPostCount }}）</button></div>
 </div>
