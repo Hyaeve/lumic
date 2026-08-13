@@ -1400,6 +1400,43 @@ func combineRemoteText(values ...string) string {
 	return strings.Join(parts, "\n\n")
 }
 
+func collectBilibiliRichText(value any, parts *[]string) {
+	switch typed := value.(type) {
+	case string:
+		if text := cleanRemoteText(typed); text != "" {
+			*parts = append(*parts, text)
+		}
+	case []any:
+		for _, item := range typed {
+			collectBilibiliRichText(item, parts)
+		}
+	case map[string]any:
+		if text, ok := typed["text"].(string); ok {
+			collectBilibiliRichText(text, parts)
+		}
+		for _, key := range []string{"rich_text_nodes", "nodes", "paragraphs", "content", "summary"} {
+			if nested, exists := typed[key]; exists {
+				collectBilibiliRichText(nested, parts)
+			}
+		}
+	}
+}
+
+func bilibiliRichText(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var value any
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if decoder.Decode(&value) != nil {
+		return ""
+	}
+	parts := make([]string, 0)
+	collectBilibiliRichText(value, &parts)
+	return combineRemoteText(parts...)
+}
+
 func mediaFileExtension(remoteURL, contentType string) string {
 	extension := strings.ToLower(filepath.Ext(path.Base(strings.Split(remoteURL, "?")[0])))
 	if matched, _ := regexp.MatchString(`^\.(jpe?g|png|gif|webp|avif)$`, extension); matched {
@@ -1566,7 +1603,8 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 					} `json:"module_author"`
 					Dynamic struct {
 						Desc *struct {
-							Text string `json:"text"`
+							Text          string            `json:"text"`
+							RichTextNodes []json.RawMessage `json:"rich_text_nodes"`
 						} `json:"desc"`
 						Major *struct {
 							Draw *struct {
@@ -1581,9 +1619,9 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 								Covers  []string `json:"covers"`
 							} `json:"article"`
 							Opus *struct {
-								Title   string `json:"title"`
-								Summary string `json:"summary"`
-								Content string `json:"content"`
+								Title   string          `json:"title"`
+								Summary json.RawMessage `json:"summary"`
+								Content json.RawMessage `json:"content"`
 								Pics    []struct {
 									URL string `json:"url"`
 								} `json:"pics"`
@@ -1618,6 +1656,9 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 			captionParts := make([]string, 0, 4)
 			if item.Modules.Dynamic.Desc != nil {
 				captionParts = append(captionParts, item.Modules.Dynamic.Desc.Text)
+				if nodes, err := json.Marshal(item.Modules.Dynamic.Desc.RichTextNodes); err == nil {
+					captionParts = append(captionParts, bilibiliRichText(nodes))
+				}
 			}
 			media := make([]string, 0)
 			if major := item.Modules.Dynamic.Major; major != nil {
@@ -1640,7 +1681,7 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 					captionParts = append(captionParts, major.Article.Title, major.Article.Desc, major.Article.Content)
 				}
 				if major.Opus != nil {
-					captionParts = append(captionParts, major.Opus.Title, major.Opus.Summary, major.Opus.Content)
+					captionParts = append(captionParts, major.Opus.Title, bilibiliRichText(major.Opus.Summary), bilibiliRichText(major.Opus.Content))
 				}
 			}
 			caption := combineRemoteText(captionParts...)

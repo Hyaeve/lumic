@@ -72,6 +72,17 @@ func TestAllowedBilibiliDynamicTypeIncludesTextButNotVideo(t *testing.T) {
 	}
 }
 
+func TestBilibiliRichTextExtractsOpusCaption(t *testing.T) {
+	raw := json.RawMessage(`{"rich_text_nodes":[{"type":"RICH_TEXT_NODE_TYPE_EMOJI","text":""},{"type":"RICH_TEXT_NODE_TYPE_TEXT","text":"非常好灵梦画了"}]}`)
+	if got := bilibiliRichText(raw); got != "非常好灵梦画了" {
+		t.Fatalf("opus caption was not extracted: %q", got)
+	}
+	plain := json.RawMessage(`"普通动态文字"`)
+	if got := bilibiliRichText(plain); got != "普通动态文字" {
+		t.Fatalf("plain caption was not extracted: %q", got)
+	}
+}
+
 func TestMergePostsUpdatesArchivedMedia(t *testing.T) {
 	store := &Store{posts: []Post{{ID: "post-1", Source: SourceBilibili, Author: "UP", Media: []string{"https://remote/image.jpg"}, Liked: true}}}
 	added, err := store.mergePosts([]Post{{ID: "post-1", Source: SourceBilibili, Author: "UP", Media: []string{"/flow/bilibili/UP/post-1.jpg"}}})
