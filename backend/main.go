@@ -45,15 +45,16 @@ const (
 )
 
 type Post struct {
-	ID        string    `json:"id"`
-	Source    Source    `json:"source"`
-	Author    string    `json:"author"`
-	Avatar    string    `json:"avatar"`
-	Caption   string    `json:"caption"`
-	Tags      []string  `json:"tags"`
-	Media     []string  `json:"media"`
-	Published time.Time `json:"published"`
-	Liked     bool      `json:"liked"`
+	ID          string    `json:"id"`
+	Source      Source    `json:"source"`
+	Author      string    `json:"author"`
+	Avatar      string    `json:"avatar"`
+	Caption     string    `json:"caption"`
+	Tags        []string  `json:"tags"`
+	Media       []string  `json:"media"`
+	OriginalURL string    `json:"originalUrl,omitempty"`
+	Published   time.Time `json:"published"`
+	Liked       bool      `json:"liked"`
 }
 
 type SourceConfig struct {
@@ -1675,7 +1676,7 @@ func collectBilibiliRichText(value any, parts *[]string) {
 		if text, ok := typed["text"].(string); ok {
 			collectBilibiliRichText(text, parts)
 		}
-		for _, key := range []string{"rich_text_nodes", "nodes", "paragraphs", "content", "summary", "desc", "title", "text_content", "opus", "draw", "article", "major"} {
+		for _, key := range []string{"rich_text_nodes", "nodes", "paragraphs", "content", "summary", "desc", "title", "text_content", "opus", "draw", "article", "major", "modules", "module_dynamic", "item"} {
 			if nested, exists := typed[key]; exists {
 				collectBilibiliRichText(nested, parts)
 			}
@@ -1702,6 +1703,40 @@ func bilibiliRichText(raw json.RawMessage) string {
 	parts := make([]string, 0)
 	collectBilibiliRichText(value, &parts)
 	return combineRemoteText(parts...)
+}
+
+func bilibiliCaptionFromRaw(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var value any
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if decoder.Decode(&value) != nil {
+		return ""
+	}
+	return bilibiliObjectText(value)
+}
+
+func (b *BilibiliStore) fetchBilibiliDynamicCaption(dynamicID string, credentials BilibiliCredentials, proxyURL string) string {
+	endpoints := []string{
+		"https://api.bilibili.com/x/polymer/web-dynamic/v1/detail?id=" + url.QueryEscape(dynamicID),
+		"https://api.bilibili.com/x/polymer/web-dynamic/v1/opus/detail?id=" + url.QueryEscape(dynamicID),
+	}
+	for _, endpoint := range endpoints {
+		var payload map[string]any
+		if err := bilibiliRequest(endpoint, credentials, proxyURL, &payload); err != nil {
+			continue
+		}
+		code := jsonValueString(payload["code"])
+		if code != "" && code != "0" {
+			continue
+		}
+		if caption := bilibiliObjectText(payload["data"]); caption != "" {
+			return caption
+		}
+	}
+	return ""
 }
 
 func mediaFileExtension(remoteURL, contentType string) string {
@@ -1787,7 +1822,9 @@ func (b *BilibiliStore) archiveSourceContent(feed SourceConfig, posts []Post) (S
 		}
 	}
 	for postIndex := range posts {
-		posts[postIndex].Avatar = prepared.Avatar
+		if !strings.HasPrefix(prepared.ID, "weibo-likes-") {
+			posts[postIndex].Avatar = prepared.Avatar
+		}
 		localMedia := make([]string, 0, len(posts[postIndex].Media))
 		for mediaIndex, remoteURL := range posts[postIndex].Media {
 			if strings.HasPrefix(remoteURL, "/flow/") {
@@ -1859,47 +1896,48 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 		Code    int    `json:"code"`
 		Message string `json:"message"`
 		Data    struct {
-			Items []struct {
-				ID      string `json:"id_str"`
-				Type    string `json:"type"`
-				Modules struct {
-					Author struct {
-						Name  string          `json:"name"`
-						Face  string          `json:"face"`
-						PubTs json.RawMessage `json:"pub_ts"`
-					} `json:"module_author"`
-					Dynamic struct {
-						Desc *struct {
-							Text          string            `json:"text"`
-							RichTextNodes []json.RawMessage `json:"rich_text_nodes"`
-						} `json:"desc"`
-						Major *struct {
-							Draw *struct {
-								Items []struct {
-									Src string `json:"src"`
-								} `json:"items"`
-							} `json:"draw"`
-							Article *struct {
-								Title   string   `json:"title"`
-								Desc    string   `json:"desc"`
-								Content string   `json:"content"`
-								Covers  []string `json:"covers"`
-							} `json:"article"`
-							Opus *struct {
-								Title   string          `json:"title"`
-								Summary json.RawMessage `json:"summary"`
-								Content json.RawMessage `json:"content"`
-								Pics    []struct {
-									URL string `json:"url"`
-								} `json:"pics"`
-							} `json:"opus"`
-						} `json:"major"`
-					} `json:"module_dynamic"`
-				} `json:"modules"`
-			} `json:"items"`
-			Offset  string `json:"offset"`
-			HasMore bool   `json:"has_more"`
+			Items   []json.RawMessage `json:"items"`
+			Offset  string            `json:"offset"`
+			HasMore bool              `json:"has_more"`
 		} `json:"data"`
+	}
+	type bilibiliDynamicItem struct {
+		ID      string `json:"id_str"`
+		Type    string `json:"type"`
+		Modules struct {
+			Author struct {
+				Name  string          `json:"name"`
+				Face  string          `json:"face"`
+				PubTs json.RawMessage `json:"pub_ts"`
+			} `json:"module_author"`
+			Dynamic struct {
+				Desc *struct {
+					Text          string            `json:"text"`
+					RichTextNodes []json.RawMessage `json:"rich_text_nodes"`
+				} `json:"desc"`
+				Major *struct {
+					Draw *struct {
+						Items []struct {
+							Src string `json:"src"`
+						} `json:"items"`
+					} `json:"draw"`
+					Article *struct {
+						Title   string   `json:"title"`
+						Desc    string   `json:"desc"`
+						Content string   `json:"content"`
+						Covers  []string `json:"covers"`
+					} `json:"article"`
+					Opus *struct {
+						Title   string          `json:"title"`
+						Summary json.RawMessage `json:"summary"`
+						Content json.RawMessage `json:"content"`
+						Pics    []struct {
+							URL string `json:"url"`
+						} `json:"pics"`
+					} `json:"opus"`
+				} `json:"major"`
+			} `json:"module_dynamic"`
+		} `json:"modules"`
 	}
 	posts := make([]Post, 0)
 	offset := ""
@@ -1916,7 +1954,11 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 			return nil, fmt.Errorf("B 站接口拒绝拉取: %s", payload.Message)
 		}
 		reachedBoundary := false
-		for _, item := range payload.Data.Items {
+		for _, rawItem := range payload.Data.Items {
+			var item bilibiliDynamicItem
+			if json.Unmarshal(rawItem, &item) != nil {
+				continue
+			}
 			if item.ID == "" || !allowedBilibiliDynamicType(item.Type) {
 				continue
 			}
@@ -1951,13 +1993,11 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 					captionParts = append(captionParts, major.Opus.Title, bilibiliRichText(major.Opus.Summary), bilibiliRichText(major.Opus.Content))
 				}
 			}
-			if raw, err := json.Marshal(item.Modules.Dynamic); err == nil {
-				var dynamicValue any
-				if json.Unmarshal(raw, &dynamicValue) == nil {
-					captionParts = append(captionParts, bilibiliObjectText(dynamicValue))
-				}
-			}
+			captionParts = append(captionParts, bilibiliCaptionFromRaw(rawItem))
 			caption := combineRemoteText(captionParts...)
+			if caption == "" {
+				caption = b.fetchBilibiliDynamicCaption(item.ID, credentials, proxyURL)
+			}
 			publishedAt := parseRemoteTimestamp(item.Modules.Author.PubTs)
 			published := time.Unix(publishedAt, 0)
 			if publishedAt == 0 {
@@ -1970,7 +2010,7 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 			if avatar == "" {
 				avatar = feed.Avatar
 			}
-			posts = append(posts, Post{ID: "bili-dynamic-" + item.ID, Source: SourceBilibili, Author: name, Avatar: avatar, Caption: caption, Tags: append([]string(nil), feed.Tags...), Media: media, Published: published})
+			posts = append(posts, Post{ID: "bili-dynamic-" + item.ID, Source: SourceBilibili, Author: name, Avatar: avatar, Caption: caption, Tags: append([]string(nil), feed.Tags...), Media: media, OriginalURL: "https://t.bilibili.com/" + url.PathEscape(item.ID), Published: published})
 			if !full && !feed.LastSyncedAt.IsZero() && !published.After(feed.LastSyncedAt) {
 				reachedBoundary = true
 			}
@@ -2040,7 +2080,15 @@ func collectWeiboPosts(value any, feed SourceConfig, posts *[]Post, seen map[str
 			if caption == "" {
 				caption = cleanRemoteText(jsonValueString(mblog["text"]))
 			}
-			*posts = append(*posts, Post{ID: "weibo-status-" + id, Source: SourceWeibo, Author: name, Avatar: avatar, Caption: caption, Tags: append([]string(nil), feed.Tags...), Media: media, Published: published})
+			profileID := jsonValueString(user["idstr"])
+			if profileID == "" {
+				profileID = jsonValueString(user["id"])
+			}
+			originalURL := ""
+			if profileID != "" {
+				originalURL = "https://weibo.com/" + url.PathEscape(profileID) + "/" + url.PathEscape(id)
+			}
+			*posts = append(*posts, Post{ID: "weibo-status-" + id, Source: SourceWeibo, Author: name, Avatar: avatar, Caption: caption, Tags: append([]string(nil), feed.Tags...), Media: media, OriginalURL: originalURL, Published: published})
 		}
 		for _, child := range object {
 			collectWeiboPosts(child, feed, posts, seen)
@@ -2110,14 +2158,16 @@ func (b *BilibiliStore) fetchWeiboPosts(feed SourceConfig, full bool) ([]Post, e
 	return nil, fmt.Errorf("微博拉取失败：%w", lastErr)
 }
 
-func (b *BilibiliStore) fetchWeiboLikedPosts() ([]Post, error) {
+func (b *BilibiliStore) fetchWeiboLikedPosts(feed SourceConfig) ([]Post, error) {
 	b.RLock()
 	credentials, proxyURL := b.config.Weibo, b.config.ProxyURL
 	b.RUnlock()
 	if credentials.Cookie == "" || credentials.UserID == "" {
 		return nil, errors.New("微博账号未连接")
 	}
-	feed := SourceConfig{ID: "weibo-liked-" + credentials.UserID, Source: SourceWeibo, Name: credentials.UserName, Handle: "我的点赞", Avatar: credentials.Avatar}
+	if feed.ID == "" {
+		feed = SourceConfig{ID: "weibo-likes-" + credentials.UserID, Source: SourceWeibo, Name: "我的点赞", Handle: credentials.UserName, Avatar: credentials.Avatar}
+	}
 	endpoints := []func(int) string{
 		func(page int) string {
 			return fmt.Sprintf("https://weibo.com/ajax/statuses/likelist?uid=%s&page=%d&relate=fans", url.QueryEscape(credentials.UserID), page)
@@ -2163,7 +2213,7 @@ func (b *BilibiliStore) weiboLikesHandler(w http.ResponseWriter, r *http.Request
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	posts, err := b.fetchWeiboLikedPosts()
+	posts, err := b.fetchWeiboLikedPosts(SourceConfig{})
 	if err != nil {
 		writeAPIError(w, http.StatusBadGateway, err.Error())
 		return
@@ -2201,7 +2251,7 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 			}
 		}
 	}
-	if feed.Source == SourceWeibo {
+	if feed.Source == SourceWeibo && !strings.HasPrefix(feed.ID, "weibo-likes-") {
 		userID := strings.TrimSpace(strings.TrimPrefix(feed.ID, "weibo-"))
 		b.RLock()
 		credentials, proxyURL := b.config.Weibo, b.config.ProxyURL
@@ -2223,7 +2273,11 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 	case SourceBilibili:
 		posts, err = b.fetchBilibiliPosts(feed, full)
 	case SourceWeibo:
-		posts, err = b.fetchWeiboPosts(feed, full)
+		if strings.HasPrefix(feed.ID, "weibo-likes-") {
+			posts, err = b.fetchWeiboLikedPosts(feed)
+		} else {
+			posts, err = b.fetchWeiboPosts(feed, full)
+		}
 	default:
 		err = errors.New("该来源尚未配置采集器")
 	}
@@ -3160,6 +3214,38 @@ func (b *BilibiliStore) weiboSubscriptionsHandler(w http.ResponseWriter, r *http
 	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if r.URL.Query().Get("type") == "likes" {
+		b.RLock()
+		credentials := b.config.Weibo
+		b.RUnlock()
+		if credentials.Cookie == "" || credentials.UserID == "" {
+			writeAPIError(w, http.StatusPreconditionFailed, "请先连接微博账号")
+			return
+		}
+		feed := SourceConfig{ID: "weibo-likes-" + credentials.UserID, Source: SourceWeibo, Name: "我的点赞", Handle: credentials.UserName, Avatar: credentials.Avatar, Enabled: true, Schedule: "0 6 * * *", StoragePath: sourceStoragePath(SourceWeibo, "我的点赞")}
+		if prepared, err := prepareSourceStorage(feed); err == nil {
+			feed = prepared
+		} else {
+			writeAPIError(w, http.StatusInternalServerError, "无法创建微博点赞内容目录")
+			return
+		}
+		b.Lock()
+		for _, existing := range b.config.WeiboSubscriptions {
+			if existing.ID == feed.ID {
+				b.Unlock()
+				writeAPIError(w, http.StatusConflict, "微博我的点赞来源已添加")
+				return
+			}
+		}
+		b.config.WeiboSubscriptions = append(b.config.WeiboSubscriptions, feed)
+		b.Unlock()
+		if err := b.save(); err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "无法保存微博点赞来源")
+			return
+		}
+		writeJSON(w, feed)
 		return
 	}
 	var input struct {

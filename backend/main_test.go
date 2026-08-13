@@ -90,6 +90,22 @@ func TestBilibiliRichTextExtractsNestedDrawCaption(t *testing.T) {
 	}
 }
 
+func TestBilibiliCaptionFromRawItemPreservesUnknownNestedText(t *testing.T) {
+	raw := json.RawMessage(`{"id_str":"123","modules":{"module_dynamic":{"major":{"opus":{"summary":{"paragraphs":[{"nodes":[{"text":"列表原始 JSON 中的完整文案"}]}]}}}}}}`)
+	if got := bilibiliCaptionFromRaw(raw); got != "列表原始 JSON 中的完整文案" {
+		t.Fatalf("raw item caption was not extracted: %q", got)
+	}
+}
+
+func TestCollectedWeiboPostIncludesOriginalURL(t *testing.T) {
+	payload := map[string]any{"mblog": map[string]any{"id": "AbCd", "text_raw": "正文", "created_at": "Mon Aug 12 10:00:00 +0800 2024", "user": map[string]any{"idstr": "12345", "screen_name": "博主"}}}
+	posts := make([]Post, 0)
+	collectWeiboPosts(payload, SourceConfig{}, &posts, make(map[string]bool))
+	if len(posts) != 1 || posts[0].OriginalURL != "https://weibo.com/12345/AbCd" {
+		t.Fatalf("unexpected original URL: %#v", posts)
+	}
+}
+
 func TestFilterSourcePosts(t *testing.T) {
 	posts := []Post{
 		{ID: "keep", Caption: "今天分享一张插画", Media: []string{"image.jpg"}},
@@ -659,5 +675,23 @@ func TestWeiboSubscriptionLifecycle(t *testing.T) {
 	}
 	if len(reloaded.WeiboSubscriptions) != 0 {
 		t.Fatalf("deleted weibo subscription returned after reload: %#v", reloaded.WeiboSubscriptions)
+	}
+}
+
+func TestWeiboLikesSubscriptionCanBeAddedAndDeleted(t *testing.T) {
+	tempDir := t.TempDir()
+	oldFile, oldFlowRoot := bilibiliFile, flowRoot
+	bilibiliFile, flowRoot = filepath.Join(tempDir, "platform.enc"), filepath.Join(tempDir, "flow")
+	t.Cleanup(func() { bilibiliFile, flowRoot = oldFile, oldFlowRoot })
+	store := &BilibiliStore{config: BilibiliConfig{Weibo: WeiboCredentials{Cookie: "SUB=test", UserID: "42", UserName: "账号", Avatar: "https://example.com/me.jpg"}, WeiboSubscriptions: []SourceConfig{}}, key: make([]byte, 32)}
+	create := httptest.NewRecorder()
+	store.weiboSubscriptionsHandler(create, httptest.NewRequest(http.MethodPost, "/api/weibo/subscriptions?type=likes", nil))
+	if create.Code != http.StatusOK || len(store.config.WeiboSubscriptions) != 1 || store.config.WeiboSubscriptions[0].ID != "weibo-likes-42" || !store.config.WeiboSubscriptions[0].Enabled {
+		t.Fatalf("create likes source failed: status=%d feeds=%#v body=%s", create.Code, store.config.WeiboSubscriptions, create.Body.String())
+	}
+	remove := httptest.NewRecorder()
+	store.weiboSubscriptionsHandler(remove, httptest.NewRequest(http.MethodDelete, "/api/weibo/subscriptions?id=weibo-likes-42", nil))
+	if remove.Code != http.StatusOK || len(store.config.WeiboSubscriptions) != 0 {
+		t.Fatalf("delete likes source failed: status=%d feeds=%#v", remove.Code, store.config.WeiboSubscriptions)
 	}
 }

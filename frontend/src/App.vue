@@ -21,6 +21,7 @@ const proxyForm = ref({ proxyUrl: '' })
 const proxyStatus = ref({ proxyEnabled: false, proxyUrl: '' })
 const proxyMessage = ref('')
 const selectedFeed = ref(null)
+const cronEditing = ref(false)
 const showFeedSettings = ref(false)
 const selectedPlatform = ref(null)
 const sourceActionBusy = ref('')
@@ -126,6 +127,7 @@ const platformCards = computed(() => [
   { key: 'pixiv', label: 'Pixiv', short: 'P', ...sourceMeta.pixiv, configured: pixivAccount.value.configured, account: pixivAccount.value.configured ? (pixivAccount.value.userName || `UID ${pixivAccount.value.userId}`) : '尚未连接账号', path: '/flow/pixiv', description: '画师作品与插画媒体', feeds: feeds.value.filter(feed => feed.source === 'pixiv') },
   { key: 'twitter', label: '推特', short: '推', ...sourceMeta.twitter, configured: false, account: '采集器尚未配置', path: '/flow/twitter', description: '推文、图片与媒体动态', feeds: feeds.value.filter(feed => feed.source === 'twitter') }
 ])
+const hasWeiboLikesSource = computed(() => feeds.value.some(feed => feed.id?.startsWith('weibo-likes-')))
 
 async function responseError(response, fallback) {
   try { return (await response.json()).error || fallback } catch { return fallback }
@@ -281,10 +283,42 @@ async function saveWeiboAccount() {
     weiboCredentials.value = { cookie: '', userId: '' }
   } catch (error) { weiboError.value = error.message } finally { weiboBusy.value = false }
 }
+function postDateTime(date) {
+  return new Date(date).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
+}
+function openOriginalPost(post) {
+  if (!post.originalUrl) return
+  window.open(post.originalUrl, '_blank', 'noopener,noreferrer')
+}
 function parseTagInput(value) { return [...new Set(String(value || '').split(/[#，,；;\s]+/).map(tag => tag.trim()).filter(Boolean))] }
 function formatTagInput(tags) { return (tags || []).map(tag => `#${tag}`).join(' ') }
 function parseKeywordInput(value) { return [...new Set(String(value || '').split(/[，,；;\n\r\t]+/).map(keyword => keyword.trim()).filter(Boolean))] }
 function formatKeywordInput(values) { return (values || []).join('，') }
+function cronFieldMatches(field, value, min, max) {
+  return field.split(',').some(rawPart => {
+    let part = rawPart.trim(); let step = 1
+    const stepParts = part.split('/')
+    if (stepParts.length === 2) { step = Number(stepParts[1]); part = stepParts[0]; if (!Number.isInteger(step) || step < 1) return false }
+    let start = min; let end = max
+    if (part !== '*') {
+      const range = part.split('-').map(Number)
+      if (range.some(Number.isNaN)) return false
+      if (range.length === 1) start = end = range[0]
+      else if (range.length === 2) [start, end] = range
+      else return false
+    }
+    return start >= min && end <= max && start <= end && value >= start && value <= end && (value - start) % step === 0
+  })
+}
+function nextCronExecution(expression) {
+  const fields = String(expression || '').trim().split(/\s+/)
+  if (fields.length !== 5) return 'Cron 表达式无效，双击修改'
+  const next = new Date(); next.setSeconds(0, 0); next.setMinutes(next.getMinutes() + 1)
+  for (let minutes = 0; minutes < 366 * 24 * 60; minutes++, next.setMinutes(next.getMinutes() + 1)) {
+    if (cronFieldMatches(fields[0], next.getMinutes(), 0, 59) && cronFieldMatches(fields[1], next.getHours(), 0, 23) && cronFieldMatches(fields[2], next.getDate(), 1, 31) && cronFieldMatches(fields[3], next.getMonth() + 1, 1, 12) && cronFieldMatches(fields[4], next.getDay(), 0, 6)) return `下次执行：${next.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short', hour: '2-digit', minute: '2-digit' })}`
+  }
+  return '未来一年内没有匹配的执行时间'
+}
 async function loginWeiboAccount() {
   weiboBusy.value = true; weiboError.value = ''
   try {
@@ -348,6 +382,7 @@ function managePlatformCredentials(platformKey) {
   if (platformKey === 'weibo' && !weiboAccount.value.configured) startWeiboQR()
 }
 function openFeedSettings(feed) {
+  cronEditing.value = false
   selectedFeed.value = { ...feed, contentTypes: [...(feed.contentTypes || [])], tags: [...(feed.tags || [])], tagInput: formatTagInput(feed.tags), includeKeywordInput: formatKeywordInput(feed.includeKeywords), excludeKeywordInput: formatKeywordInput(feed.excludeKeywords) }
   showFeedSettings.value = true
 }
@@ -373,6 +408,7 @@ async function saveFeedSettings() {
       if (index >= 0) feeds.value[index] = { ...selectedFeed.value }
     }
     showFeedSettings.value = false
+    cronEditing.value = false
   } catch (error) { settingsError.value = error.message } finally { settingsBusy.value = false }
 }
 function sourceOperationEndpoint(feed) {
@@ -542,6 +578,16 @@ async function syncWeiboLikes() {
     await loadData()
     timelineMessage.value = result.message
   } catch (error) { timelineMessage.value = error.message } finally { syncing.value = false }
+}
+async function addWeiboLikesSource() {
+  sourceActionBusy.value = 'add:weibo-likes'; sourceActionMessage.value = ''; settingsError.value = ''
+  try {
+    const response = await fetch('/api/weibo/subscriptions?type=likes', { method: 'POST' })
+    if (!response.ok) throw new Error(await responseError(response, response.status === 409 ? '微博我的点赞来源已添加' : '添加微博点赞来源失败'))
+    const feed = await response.json(); feeds.value.push(feed)
+    if (selectedPlatform.value?.key === 'weibo') selectedPlatform.value.feeds.push(feed)
+    sourceActionMessage.value = '已添加“我的点赞”，可设置启停、Cron 和过滤规则'
+  } catch (error) { settingsError.value = error.message } finally { sourceActionBusy.value = '' }
 }
 function setMediaShape(post, mediaIndex, event) {
   const image = event.target
@@ -827,23 +873,20 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
 <button class="post-author-avatar" type="button" :title="`查看 ${post.author} 的动态`" @click="openAuthor(post)"><img :src="post.avatar" :alt="post.author"></button>
 <div class="author">
 <button class="post-author-name" type="button" :title="`查看 ${post.author} 的动态`" @click="openAuthor(post)"><strong>{{ post.author }}</strong></button>
-<span>{{ relativeTime(post.published) }}</span>
+<span>{{ postDateTime(post.published) }}</span>
 </div>
 <span :class="['source-pill', 'post-source-pill', sourceMeta[post.source].color]">
 <img class="source-icon" :src="sourceMeta[post.source].image" :alt="`${sourceMeta[post.source].label}图标`">{{ sourceMeta[post.source].label }}</span>
 </div>
 <p v-if="post.caption" class="caption">{{ post.caption }}</p>
-<div v-if="post.media?.length" :class="['media-grid', `media-count-${Math.min(post.media.length, 4)}`]">
-<button v-for="(media, mediaIndex) in post.media" :key="media" :class="['media-frame', mediaShape(post, mediaIndex)]" type="button" :aria-label="`查看 ${post.author} 的第 ${mediaIndex + 1} 张图片`" @click="openLightbox(post, mediaIndex)"><img :src="media" alt="" loading="lazy" decoding="async" @load="setMediaShape(post, mediaIndex, $event); scheduleTimelineWindow()"></button>
-</div>
-<div class="tag-row">
-<button v-for="tag in post.tags" :key="tag" type="button" :class="{ active: selectedTag === tag }" @click="openTag(tag)">#{{ tag }}</button>
+<div v-if="post.media?.length" :class="['media-grid', `media-count-${Math.min(post.media.length, 9)}`]">
+<button v-for="(media, mediaIndex) in post.media.slice(0, 9)" :key="media" :class="['media-frame', mediaShape(post, mediaIndex)]" type="button" :aria-label="`查看 ${post.author} 的第 ${mediaIndex + 1} 张图片`" @click="openLightbox(post, mediaIndex)"><img :src="media" alt="" loading="lazy" decoding="async" @load="setMediaShape(post, mediaIndex, $event); scheduleTimelineWindow()"><span v-if="mediaIndex === 8 && post.media.length > 9" class="media-more-count">+{{ post.media.length - 9 }}</span></button>
 </div>
 <div class="post-foot">
-<span>◷ {{ new Date(post.published).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }}</span>
+<div class="tag-row"><button v-for="tag in post.tags" :key="tag" type="button" :class="{ active: selectedTag === tag }" @click="openTag(tag)">#{{ tag }}</button></div>
 <div class="post-foot-actions">
 <button :class="['post-like-button', { liked: post.liked }]" :disabled="postActionBusy === `like:${post.id}`" :title="post.liked ? '取消点赞' : '点赞'" :aria-label="post.liked ? '取消点赞' : '点赞'" @click="togglePostLike(post)">{{ post.liked ? '♥' : '♡' }}</button>
-<button title="打开原动态" aria-label="打开原动态">↗</button>
+<button :disabled="!post.originalUrl" :title="post.originalUrl ? '打开原动态' : '旧动态暂无原始链接，请重新拉取'" aria-label="打开原动态" @click="openOriginalPost(post)">↗</button>
 <button class="post-delete-button" :disabled="postActionBusy === post.id" title="删除这条动态" @click="deletePost(post)"><span>⌫</span>{{ postActionBusy === post.id ? '删除中…' : '删除' }}</button>
 </div>
 </div>
@@ -986,7 +1029,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
         <button class="modal-close" @click="selectedPlatform = null">×</button>
         <div class="platform-detail-title"><img class="source-icon" :src="selectedPlatform.image" alt="平台图标"><div><p class="eyebrow">PLATFORM SOURCE</p><h2>{{ selectedPlatform.label }}</h2></div><span :class="['connection-dot', { online: selectedPlatform.configured }]">{{ selectedPlatform.configured ? '已连接' : '未连接' }}</span></div>
         <div class="platform-detail-summary"><div><span>当前账号</span><strong>{{ selectedPlatform.account }}</strong></div><div><span>内容目录</span><strong>{{ selectedPlatform.path }}</strong></div><div><span>作者来源</span><strong>{{ selectedPlatform.feeds.length }} 个</strong></div></div>
-        <div class="platform-detail-actions"><button v-if="selectedPlatform.key !== 'twitter'" class="secondary-button" @click="managePlatformCredentials(selectedPlatform.key)">{{ selectedPlatform.configured ? '管理账号凭证' : '连接平台账号' }}</button><button v-if="selectedPlatform.key === 'bilibili' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openBilibili()">添加 UP 主</button><button v-if="selectedPlatform.key === 'weibo' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openWeibo()">添加博主</button></div>
+        <div class="platform-detail-actions"><button v-if="selectedPlatform.key !== 'twitter'" class="secondary-button" @click="managePlatformCredentials(selectedPlatform.key)">{{ selectedPlatform.configured ? '管理账号凭证' : '连接平台账号' }}</button><button v-if="selectedPlatform.key === 'weibo' && selectedPlatform.configured && !hasWeiboLikesSource" class="secondary-button" :disabled="sourceActionBusy !== ''" @click="addWeiboLikesSource">添加我的点赞</button><button v-if="selectedPlatform.key === 'bilibili' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openBilibili()">添加 UP 主</button><button v-if="selectedPlatform.key === 'weibo' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openWeibo()">添加博主</button></div>
         <p v-if="sourceActionMessage" class="success-message source-action-message">{{ sourceActionMessage }}</p><p v-if="settingsError" class="login-error">{{ settingsError }}</p>
         <div class="configured-source-list">
           <div class="configured-source-heading"><h3>已配置作者</h3><span>{{ selectedPlatform.feeds.length }} 个</span></div>
@@ -1006,7 +1049,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
         </div>
       </div>
     </div>
-    <div v-if="showFeedSettings && selectedFeed" class="modal-backdrop feed-detail-backdrop" @click.self="showFeedSettings = false"><div class="modal feed-settings-modal"><button class="modal-close" @click="showFeedSettings = false">×</button><p class="eyebrow">SOURCE DETAILS</p><h2>{{ selectedFeed.name }}</h2><p>{{ sourceMeta[selectedFeed.source]?.label }} · {{ selectedFeed.handle }}</p><form class="settings-form" @submit.prevent="saveFeedSettings"><label class="switch-row"><span>启用自动同步</span><input v-model="selectedFeed.enabled" type="checkbox"></label><label>Cron 执行计划</label><input v-model="selectedFeed.schedule" required placeholder="0 6 * * *" maxlength="80"><p class="credential-note">五段式 Cron：分钟 小时 日期 月份 星期。默认 0 6 * * *，即每天 06:00。</p><label>作者标签</label><input v-model="selectedFeed.tagInput" placeholder="#标签1 #标签2" maxlength="120"><p class="credential-note">保存后会同步更新此作者已经拉取的全部动态。</p><fieldset class="source-filter-settings"><legend>动态过滤</legend><label class="switch-row"><span>只拉取包含图片的动态</span><input v-model="selectedFeed.onlyWithImages" type="checkbox"></label><label>必须包含关键词</label><input v-model="selectedFeed.includeKeywordInput" placeholder="关键词1，关键词2" maxlength="240"><small>命中任意一个关键词即可保留；留空表示不限制。</small><label>排除关键词</label><input v-model="selectedFeed.excludeKeywordInput" placeholder="广告，抽奖" maxlength="240"><small>命中任意排除关键词时不会拉取，排除规则优先。</small></fieldset><label class="switch-row"><span>首次拉取历史内容</span><input v-model="selectedFeed.includePast" type="checkbox"></label><div v-if="selectedFeed.source === 'bilibili'" class="content-scope"><strong>内容范围</strong><span>图文动态（DRAW）</span><span>专栏（ARTICLE）</span><small>视频及转发视频始终过滤，无法在此开启。</small></div><p v-if="settingsError" class="login-error">{{ settingsError }}</p><button class="login-button" :disabled="settingsBusy">保存来源设置</button></form></div></div>
+    <div v-if="showFeedSettings && selectedFeed" class="modal-backdrop feed-detail-backdrop" @click.self="showFeedSettings = false"><div class="modal feed-settings-modal"><button class="modal-close" @click="showFeedSettings = false">×</button><p class="eyebrow">SOURCE DETAILS</p><h2>{{ selectedFeed.name }}</h2><p>{{ sourceMeta[selectedFeed.source]?.label }} · {{ selectedFeed.handle }}</p><form class="settings-form feed-settings-form" @submit.prevent="saveFeedSettings"><label class="switch-row"><span>启用自动同步</span><input v-model="selectedFeed.enabled" type="checkbox"></label><input v-model="selectedFeed.schedule" class="cron-input" :readonly="!cronEditing" :title="nextCronExecution(selectedFeed.schedule)" required placeholder="0 6 * * *" maxlength="80" aria-label="Cron 执行计划，双击修改" @dblclick="cronEditing = true" @blur="cronEditing = false"><label>作者标签</label><input v-model="selectedFeed.tagInput" placeholder="#标签1 #标签2" maxlength="120"><fieldset class="source-filter-settings"><legend>动态过滤</legend><label class="switch-row"><span>只拉取包含图片的动态</span><input v-model="selectedFeed.onlyWithImages" type="checkbox"></label><label>必须包含关键词</label><input v-model="selectedFeed.includeKeywordInput" placeholder="关键词1，关键词2" maxlength="240"><small>命中任意一个关键词即可保留；留空表示不限制。</small><label>排除关键词</label><input v-model="selectedFeed.excludeKeywordInput" placeholder="广告，抽奖" maxlength="240"><small>命中任意排除关键词时不会拉取，排除规则优先。</small></fieldset><label class="switch-row"><span>首次拉取历史内容</span><input v-model="selectedFeed.includePast" type="checkbox"></label><div v-if="selectedFeed.source === 'bilibili'" class="content-scope"><strong>内容范围</strong><span>图文动态（DRAW）</span><span>专栏（ARTICLE）</span><small>视频及转发视频始终过滤，无法在此开启。</small></div><p v-if="settingsError" class="login-error">{{ settingsError }}</p><button class="login-button" :disabled="settingsBusy">保存来源设置</button></form></div></div>
     <div v-if="confirmDialog.open" class="confirm-dialog-layer" @click.self="closeConfirmDialog(false)">
       <section class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
         <div :class="['confirm-dialog-icon', confirmDialog.tone]">!</div>
