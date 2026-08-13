@@ -32,6 +32,8 @@ const credentials = ref({ username: '', password: '' })
 const activeNav = ref('all')
 const activeSource = ref('all')
 const sourcesExpanded = ref(true)
+const selectedAuthor = ref(null)
+const authorReturnState = ref({ nav: 'all', source: 'all' })
 const isDark = ref(false)
 const showAdd = ref(false)
 const showBilibili = ref(false)
@@ -87,7 +89,15 @@ const sourceMeta = {
 const likedCount = computed(() => posts.value.filter(post => post.liked).length)
 const filteredPosts = computed(() => {
   const timeline = activeNav.value === 'liked' ? posts.value.filter(post => post.liked) : posts.value
-  return activeSource.value === 'all' ? timeline : timeline.filter(post => post.source === activeSource.value)
+  const sourceTimeline = activeSource.value === 'all' ? timeline : timeline.filter(post => post.source === activeSource.value)
+  if (!selectedAuthor.value) return sourceTimeline
+  return sourceTimeline.filter(post => post.source === selectedAuthor.value.source && post.author === selectedAuthor.value.name)
+})
+const authorProfile = computed(() => {
+  if (!selectedAuthor.value) return null
+  const authorPosts = posts.value.filter(post => post.source === selectedAuthor.value.source && post.author === selectedAuthor.value.name)
+  const latest = authorPosts[0]
+  return { ...selectedAuthor.value, avatar: latest?.avatar || selectedAuthor.value.avatar, count: authorPosts.length }
 })
 const sourceCount = computed(() => new Set(posts.value.map(p => p.source)).size)
 const platformCards = computed(() => [
@@ -495,6 +505,17 @@ function navigateTo(nav, source = activeSource.value) {
   showFeedSettings.value = false
   activeNav.value = nav
   activeSource.value = source
+  selectedAuthor.value = null
+}
+function openAuthor(post) {
+  authorReturnState.value = { nav: activeNav.value, source: activeSource.value }
+  showSettings.value = false
+  activeNav.value = 'author'
+  activeSource.value = post.source
+  selectedAuthor.value = { name: post.author, source: post.source, avatar: post.avatar }
+}
+function closeAuthor() {
+  navigateTo(authorReturnState.value.nav, authorReturnState.value.source)
 }
 function closeSettingsPage() { navigateTo(activeSource.value === 'all' ? 'all' : 'source') }
 function formatFans(count) { return count >= 10000 ? `${(count / 10000).toFixed(1)}万` : count }
@@ -569,7 +590,15 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
     </aside>
 
     <main v-if="!showSettings && activeNav !== 'pulls'" class="content">
-      <header class="topbar">
+      <header v-if="authorProfile" class="topbar author-page-header">
+        <div class="author-profile-main">
+          <button class="author-back-button" type="button" title="返回时间线" aria-label="返回时间线" @click="closeAuthor">←</button>
+          <img :src="authorProfile.avatar || sourceMeta[authorProfile.source].image" :alt="authorProfile.name">
+          <div><p class="eyebrow">AUTHOR TIMELINE · {{ sourceMeta[authorProfile.source].label }}</p><h1>{{ authorProfile.name }}</h1><p class="subtitle">共 {{ authorProfile.count }} 条已拉取动态</p></div>
+        </div>
+        <div class="header-actions"><button class="sync-button" :disabled="syncing" @click="runFullSync"><span :class="{ spin: syncing }">↻</span>{{ syncing ? '同步中' : '同步动态' }}</button></div>
+      </header>
+      <header v-else class="topbar">
 <div>
 <p class="eyebrow">{{ activeNav === 'liked' ? 'LIKED MOMENTS' : 'SAVED MOMENTS' }} · {{ new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' }) }}</p>
 <h1>{{ activeNav === 'liked' ? '我的点赞' : '早上好，拾光者' }} <span>{{ activeNav === 'liked' ? '♡' : '☼' }}</span>
@@ -582,7 +611,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
 <span :class="{ spin: syncing }">↻</span> {{ syncing ? '同步中' : '立即同步' }}</button>
 </div>
 </header>
-      <section class="stats">
+      <section v-if="!authorProfile" class="stats">
 <div class="stat-card">
 <div class="stat-icon mint">✦</div>
 <div>
@@ -612,10 +641,10 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
 </section>
       <div class="section-heading">
 <div>
-<h2>{{ activeNav === 'liked' ? '点赞动态' : '最新动态' }}</h2>
-<p>{{ activeNav === 'liked' ? `共 ${likedCount} 条 · 按时间顺序排列` : '按时间顺序排列 · 自动同步于 10 分钟前' }}</p>
+<h2>{{ authorProfile ? `${authorProfile.name} 的动态` : activeNav === 'liked' ? '点赞动态' : '最新动态' }}</h2>
+<p>{{ authorProfile ? `仅显示此作者 · ${filteredPosts.length} 条` : activeNav === 'liked' ? `共 ${likedCount} 条 · 按时间顺序排列` : '按时间顺序排列 · 自动同步于 10 分钟前' }}</p>
 </div>
-<div class="filters">
+<div v-if="!authorProfile" class="filters">
 <button v-for="(meta, key) in { all: { label: '全部', icon: '✦' }, ...sourceMeta }" :key="key" :class="{ selected: activeSource === key }" @click="activeSource = key">
 <span v-if="key === 'all'">✦</span>
 <img v-else class="source-icon" :src="meta.image" :alt="`${meta.label}图标`">{{ meta.label }}</button>
@@ -624,11 +653,11 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
 </div>
       <p v-if="timelineMessage" class="timeline-message">{{ timelineMessage }}</p>
       <section class="feed-list">
-        <article v-for="post in filteredPosts" :key="post.id" class="post-card">
+<article v-for="post in filteredPosts" :key="post.id" class="post-card">
 <div class="post-head">
-<img :src="post.avatar" :alt="post.author">
+<button class="post-author-avatar" type="button" :title="`查看 ${post.author} 的动态`" @click="openAuthor(post)"><img :src="post.avatar" :alt="post.author"></button>
 <div class="author">
-<strong>{{ post.author }}</strong>
+<button class="post-author-name" type="button" :title="`查看 ${post.author} 的动态`" @click="openAuthor(post)"><strong>{{ post.author }}</strong></button>
 <span>{{ relativeTime(post.published) }}</span>
 </div>
 <span :class="['source-pill', 'post-source-pill', sourceMeta[post.source].color]">
@@ -650,7 +679,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); window.removeEven
 </div>
 </div>
 </article>
-<div v-if="!filteredPosts.length" class="empty">{{ activeNav === 'liked' ? '还没有点赞的动态' : '还没有这个来源的动态' }}</div>
+<div v-if="!filteredPosts.length" class="empty">{{ authorProfile ? '还没有拉取到这个作者的动态' : activeNav === 'liked' ? '还没有点赞的动态' : '还没有这个来源的动态' }}</div>
 </section>
     </main>
     <main v-if="!showSettings && activeNav === 'pulls'" class="content pulls-page">

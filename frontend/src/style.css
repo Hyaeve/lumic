@@ -130,3 +130,21 @@ body, button, input, textarea, select { font-size: 14px; }
 .sidebar-bottom > button { min-height: 48px; }
 .weibo-password-form { margin-bottom: 13px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
 .weibo-password-form .login-button { margin-top: 3px; }
+
+/* Author timeline */
+.post-author-avatar, .post-author-name { padding: 0; color: inherit; background: transparent; text-align: left; }
+.post-author-avatar { width: 38px; height: 38px; flex: none; border-radius: 50%; }
+.post-author-avatar img { width: 100%; height: 100%; }
+.post-author-name strong { transition: color .15s ease; }
+.post-author-avatar:hover + .author .post-author-name strong, .post-author-name:hover strong { color: #47745d; }
+.author-page-header { align-items: center; }
+.author-profile-main { display: flex; align-items: center; gap: 16px; min-width: 0; }
+.author-profile-main > img { width: 66px; height: 66px; flex: none; border: 1px solid var(--line); border-radius: 50%; object-fit: cover; background: #e7efe8; }
+.author-profile-main h1 { margin-top: 3px; }
+.author-back-button { display: grid; place-items: center; width: 38px; height: 38px; flex: none; color: #5f7568; background: var(--card); border: 1px solid var(--line); border-radius: 7px; font-size: 21px; }
+.author-back-button:hover { color: #426e56; background: #edf4ee; }
+@media (max-width: 760px) {
+  .author-page-header { align-items: flex-start; }
+  .author-profile-main { gap: 11px; }
+  .author-profile-main > img { width: 52px; height: 52px; }
+}

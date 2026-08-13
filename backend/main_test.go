@@ -51,6 +51,25 @@ func TestBilibiliCaptionPreservesText(t *testing.T) {
 	if got := firstNonEmptyRemoteText("", "标题"); got != "标题" {
 		t.Fatalf("caption fallback: %q", got)
 	}
+	if got := cleanRemoteText("第一段<br>第二段</p><p>第三段"); got != "第一段\n第二段\n第三段" {
+		t.Fatalf("HTML line breaks were lost: %q", got)
+	}
+	if got := combineRemoteText("动态描述", "标题", "正文第一行<br>正文第二行", "动态描述"); got != "动态描述\n\n标题\n\n正文第一行\n正文第二行" {
+		t.Fatalf("combined caption lost content: %q", got)
+	}
+}
+
+func TestAllowedBilibiliDynamicTypeIncludesTextButNotVideo(t *testing.T) {
+	for _, dynamicType := range []string{"DYNAMIC_TYPE_WORD", "DYNAMIC_TYPE_DRAW", "DYNAMIC_TYPE_ARTICLE", "DYNAMIC_TYPE_OPUS"} {
+		if !allowedBilibiliDynamicType(dynamicType) {
+			t.Fatalf("expected %s to be collected", dynamicType)
+		}
+	}
+	for _, dynamicType := range []string{"DYNAMIC_TYPE_AV", "DYNAMIC_TYPE_FORWARD", "DYNAMIC_TYPE_LIVE_RCMD"} {
+		if allowedBilibiliDynamicType(dynamicType) {
+			t.Fatalf("expected %s to remain filtered", dynamicType)
+		}
+	}
 }
 
 func TestMergePostsUpdatesArchivedMedia(t *testing.T) {

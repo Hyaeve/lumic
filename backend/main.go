@@ -1341,12 +1341,18 @@ func (b *BilibiliStore) projectSettingsHandler(w http.ResponseWriter, r *http.Re
 	writeJSON(w, ProjectSettingsView{ProxyEnabled: input.ProxyURL != "", ProxyURL: maskedProxyURL(input.ProxyURL)})
 }
 
-// Bilibili sync accepts only image-text and article cards; video and forwarded-video cards are excluded.
+// Bilibili sync accepts text, image-text, opus and article cards; video and forwarded-video cards are excluded.
 func allowedBilibiliDynamicType(dynamicType string) bool {
-	return dynamicType == "DYNAMIC_TYPE_DRAW" || dynamicType == "DYNAMIC_TYPE_ARTICLE"
+	switch dynamicType {
+	case "DYNAMIC_TYPE_WORD", "DYNAMIC_TYPE_DRAW", "DYNAMIC_TYPE_ARTICLE", "DYNAMIC_TYPE_OPUS":
+		return true
+	default:
+		return false
+	}
 }
 
 var htmlTagPattern = regexp.MustCompile(`<[^>]+>`)
+var htmlLineBreakPattern = regexp.MustCompile(`(?i)<br\s*/?>|</p\s*>|</div\s*>|</li\s*>`)
 
 func normalizeRemoteImage(value string) string {
 	value = strings.TrimSpace(value)
@@ -1357,7 +1363,18 @@ func normalizeRemoteImage(value string) string {
 }
 
 func cleanRemoteText(value string) string {
-	return strings.TrimSpace(html.UnescapeString(htmlTagPattern.ReplaceAllString(value, "")))
+	value = htmlLineBreakPattern.ReplaceAllString(value, "\n")
+	value = html.UnescapeString(htmlTagPattern.ReplaceAllString(value, ""))
+	lines := strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n")
+	cleaned := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" && (len(cleaned) == 0 || cleaned[len(cleaned)-1] == "") {
+			continue
+		}
+		cleaned = append(cleaned, line)
+	}
+	return strings.TrimSpace(strings.Join(cleaned, "\n"))
 }
 
 func firstNonEmptyRemoteText(values ...string) string {
@@ -1368,6 +1385,19 @@ func firstNonEmptyRemoteText(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func combineRemoteText(values ...string) string {
+	parts, seen := make([]string, 0, len(values)), make(map[string]bool)
+	for _, value := range values {
+		value = cleanRemoteText(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		parts = append(parts, value)
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 func mediaFileExtension(remoteURL, contentType string) string {
@@ -1582,12 +1612,12 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 		}
 		reachedBoundary := false
 		for _, item := range payload.Data.Items {
-			if item.ID == "" || (item.Type != "DYNAMIC_TYPE_DRAW" && item.Type != "DYNAMIC_TYPE_ARTICLE") {
+			if item.ID == "" || !allowedBilibiliDynamicType(item.Type) {
 				continue
 			}
-			caption := ""
+			captionParts := make([]string, 0, 4)
 			if item.Modules.Dynamic.Desc != nil {
-				caption = cleanRemoteText(item.Modules.Dynamic.Desc.Text)
+				captionParts = append(captionParts, item.Modules.Dynamic.Desc.Text)
 			}
 			media := make([]string, 0)
 			if major := item.Modules.Dynamic.Major; major != nil {
@@ -1606,13 +1636,14 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 						media = append(media, normalizeRemoteImage(image.URL))
 					}
 				}
-				if caption == "" && major.Article != nil {
-					caption = firstNonEmptyRemoteText(major.Article.Content, major.Article.Desc, major.Article.Title)
+				if major.Article != nil {
+					captionParts = append(captionParts, major.Article.Title, major.Article.Desc, major.Article.Content)
 				}
-				if caption == "" && major.Opus != nil {
-					caption = firstNonEmptyRemoteText(major.Opus.Content, major.Opus.Summary, major.Opus.Title)
+				if major.Opus != nil {
+					captionParts = append(captionParts, major.Opus.Title, major.Opus.Summary, major.Opus.Content)
 				}
 			}
+			caption := combineRemoteText(captionParts...)
 			publishedAt := parseRemoteTimestamp(item.Modules.Author.PubTs)
 			published := time.Unix(publishedAt, 0)
 			if publishedAt == 0 {
