@@ -262,6 +262,16 @@ func TestPostsHandlerPersistsLikedState(t *testing.T) {
 }
 
 func TestPostsHandlerDeletesMultipleAndAuthorPosts(t *testing.T) {
+	oldFlowRoot := flowRoot
+	flowRoot = filepath.Join(t.TempDir(), "flow")
+	t.Cleanup(func() { flowRoot = oldFlowRoot })
+	authorDirectory := sourceStoragePath(SourceWeibo, "甲")
+	if err := os.MkdirAll(authorDirectory, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(authorDirectory, "media.jpg"), []byte("image"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(t.TempDir(), "content.json")
 	store := &Store{posts: []Post{
 		{ID: "one", Source: SourceWeibo, Author: "甲"},
@@ -280,6 +290,9 @@ func TestPostsHandlerDeletesMultipleAndAuthorPosts(t *testing.T) {
 	store.postsHandler(authorResponse, authorRequest)
 	if authorResponse.Code != http.StatusOK || len(store.posts) != 1 || store.posts[0].ID != "four" {
 		t.Fatalf("author delete failed: status=%d posts=%#v body=%s", authorResponse.Code, store.posts, authorResponse.Body.String())
+	}
+	if _, err := os.Stat(authorDirectory); !os.IsNotExist(err) {
+		t.Fatalf("author content directory was not deleted: %v", err)
 	}
 }
 

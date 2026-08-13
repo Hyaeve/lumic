@@ -358,6 +358,25 @@ func sourceStoragePath(source Source, name string) string {
 	return filepath.Join(flowRoot, string(source), safeFlowDirectoryName(name))
 }
 
+func deleteSourceStorage(source Source, author string) error {
+	root, err := filepath.Abs(flowRoot)
+	if err != nil {
+		return err
+	}
+	target, err := filepath.Abs(sourceStoragePath(source, author))
+	if err != nil {
+		return err
+	}
+	relative, err := filepath.Rel(root, target)
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return errors.New("作者内容目录不在 flow 存储范围内")
+	}
+	if err := os.RemoveAll(target); err != nil {
+		return err
+	}
+	return nil
+}
+
 func flowPublicPath(source Source, author, name string) string {
 	return "/flow/" + url.PathEscape(string(source)) + "/" + url.PathEscape(safeFlowDirectoryName(author)) + "/" + url.PathEscape(name)
 }
@@ -759,6 +778,11 @@ func (s *Store) deletePosts(ids []string, source Source, author string) (int, er
 	}
 	for _, post := range removed {
 		_ = deletePostMedia(post.Media)
+	}
+	if author != "" {
+		if err := deleteSourceStorage(source, author); err != nil {
+			return len(removed), err
+		}
 	}
 	return len(removed), nil
 }
