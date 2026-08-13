@@ -6,14 +6,17 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
 	"io"
 	"log"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/cookiejar"
@@ -2189,8 +2192,71 @@ func weiboClient(proxyURL string) (*http.Client, error) {
 	return client, nil
 }
 
-var weiboLoginEndpoint = "https://passport.weibo.cn/sso/login"
+var weiboPreloginEndpoint = "https://login.sina.com.cn/sso/prelogin.php"
+var weiboLoginEndpoint = "https://login.sina.com.cn/sso/login.php"
 var validateWeiboLoginSession = validateWeiboCredentials
+
+type weiboPreloginResponse struct {
+	ServerTime int64  `json:"servertime"`
+	Nonce      string `json:"nonce"`
+	PublicKey  string `json:"pubkey"`
+	RSAKV      string `json:"rsakv"`
+	ShowPin    int    `json:"showpin"`
+}
+
+func encodeWeiboUsername(username string) string {
+	escaped := url.QueryEscape(username)
+	return base64.StdEncoding.EncodeToString([]byte(escaped))
+}
+
+func encryptWeiboPassword(publicKeyHex string, serverTime int64, nonce, password string) (string, error) {
+	modulus := new(big.Int)
+	if _, ok := modulus.SetString(strings.TrimSpace(publicKeyHex), 16); !ok || modulus.Sign() <= 0 {
+		return "", errors.New("微博预登录返回了无效的 RSA 公钥")
+	}
+	plain := []byte(strconv.FormatInt(serverTime, 10) + "\t" + nonce + "\n" + password)
+	encrypted, err := rsa.EncryptPKCS1v15(rand.Reader, &rsa.PublicKey{N: modulus, E: 65537}, plain)
+	if err != nil {
+		return "", fmt.Errorf("无法加密微博密码：%w", err)
+	}
+	return hex.EncodeToString(encrypted), nil
+}
+
+func requestWeiboPrelogin(client *http.Client, encodedUsername string) (weiboPreloginResponse, error) {
+	query := url.Values{
+		"entry":    {"weibo"},
+		"callback": {"sinaSSOController.preloginCallBack"},
+		"su":       {encodedUsername},
+		"rsakt":    {"mod"},
+		"checkpin": {"1"},
+		"client":   {"ssologin.js(v1.4.19)"},
+		"_":        {strconv.FormatInt(time.Now().UnixMilli(), 10)},
+	}
+	request, err := http.NewRequest(http.MethodGet, weiboPreloginEndpoint+"?"+query.Encode(), nil)
+	if err != nil {
+		return weiboPreloginResponse{}, err
+	}
+	request.Header.Set("Accept", "*/*")
+	request.Header.Set("Referer", "https://weibo.com/")
+	request.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36")
+	response, err := client.Do(request)
+	if err != nil {
+		return weiboPreloginResponse{}, fmt.Errorf("微博预登录请求失败：%w", err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	if err != nil {
+		return weiboPreloginResponse{}, errors.New("无法读取微博预登录响应")
+	}
+	var payload weiboPreloginResponse
+	if response.StatusCode != http.StatusOK || json.Unmarshal(unwrapJSONP(body), &payload) != nil || payload.ServerTime == 0 || payload.Nonce == "" || payload.PublicKey == "" || payload.RSAKV == "" {
+		return weiboPreloginResponse{}, fmt.Errorf("微博预登录响应异常（HTTP %d）：%s", response.StatusCode, responseSummary(body))
+	}
+	if payload.ShowPin != 0 {
+		return weiboPreloginResponse{}, errors.New("微博要求输入验证码，请改用扫码登录或浏览器 Cookie")
+	}
+	return payload, nil
+}
 
 func collectWeiboClientCookies(client *http.Client, extraURLs ...*url.URL) string {
 	parts, seen := []string{}, map[string]bool{}
@@ -2228,32 +2294,46 @@ func loginWeiboWithPassword(username, password, proxyURL string) (WeiboCredentia
 	if err != nil {
 		return WeiboCredentials{}, err
 	}
-	values := url.Values{
-		"username":     {username},
-		"password":     {password},
-		"savestate":    {"1"},
-		"r":            {"https://m.weibo.cn/"},
-		"ec":           {"0"},
-		"pagerefer":    {"https://m.weibo.cn/"},
-		"entry":        {"mweibo"},
-		"wentry":       {""},
-		"loginfrom":    {""},
-		"client_id":    {""},
-		"code":         {""},
-		"qq":           {""},
-		"mainpageflag": {"1"},
-		"hff":          {""},
-		"hfp":          {""},
+	encodedUsername := encodeWeiboUsername(username)
+	prelogin, err := requestWeiboPrelogin(client, encodedUsername)
+	if err != nil {
+		return WeiboCredentials{}, err
 	}
-	request, err := http.NewRequest(http.MethodPost, weiboLoginEndpoint, strings.NewReader(values.Encode()))
+	encryptedPassword, err := encryptWeiboPassword(prelogin.PublicKey, prelogin.ServerTime, prelogin.Nonce, password)
+	if err != nil {
+		return WeiboCredentials{}, err
+	}
+	values := url.Values{
+		"entry":       {"weibo"},
+		"gateway":     {"1"},
+		"from":        {""},
+		"savestate":   {"7"},
+		"qrcode_flag": {"false"},
+		"useticket":   {"1"},
+		"pagerefer":   {"https://weibo.com/"},
+		"vsnf":        {"1"},
+		"su":          {encodedUsername},
+		"service":     {"miniblog"},
+		"servertime":  {strconv.FormatInt(prelogin.ServerTime, 10)},
+		"nonce":       {prelogin.Nonce},
+		"pwencode":    {"rsa2"},
+		"rsakv":       {prelogin.RSAKV},
+		"sp":          {encryptedPassword},
+		"sr":          {"1920*1080"},
+		"encoding":    {"UTF-8"},
+		"prelt":       {"35"},
+		"url":         {"https://weibo.com/ajaxlogin.php?framelogin=1&callback=parent.sinaSSOController.feedBackUrlCallBack"},
+		"returntype":  {"TEXT"},
+	}
+	request, err := http.NewRequest(http.MethodPost, weiboLoginEndpoint+"?client=ssologin.js(v1.4.19)", strings.NewReader(values.Encode()))
 	if err != nil {
 		return WeiboCredentials{}, err
 	}
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	request.Header.Set("Accept", "application/json, text/plain, */*")
-	request.Header.Set("Referer", "https://m.weibo.cn/")
-	request.Header.Set("Origin", "https://m.weibo.cn")
-	request.Header.Set("User-Agent", "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36")
+	request.Header.Set("Accept", "*/*")
+	request.Header.Set("Referer", "https://weibo.com/")
+	request.Header.Set("Origin", "https://weibo.com")
+	request.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36")
 	response, err := client.Do(request)
 	if err != nil {
 		return WeiboCredentials{}, fmt.Errorf("微博账号登录请求失败：%w", err)
@@ -2269,20 +2349,20 @@ func loginWeiboWithPassword(username, password, proxyURL string) (WeiboCredentia
 	if decoder.Decode(&payload) != nil {
 		return WeiboCredentials{}, fmt.Errorf("微博账号登录响应异常（HTTP %d）：%s", response.StatusCode, responseSummary(body))
 	}
-	if response.StatusCode != http.StatusOK || jsonValueString(payload["retcode"]) != "20000000" {
-		message := firstNonEmptyRemoteText(jsonValueString(payload["msg"]), jsonValueString(payload["message"]), jsonValueString(payload["reason"]))
+	retCode := jsonValueString(payload["retcode"])
+	if response.StatusCode != http.StatusOK || (retCode != "0" && retCode != "20000000") {
+		message := firstNonEmptyRemoteText(jsonValueString(payload["reason"]), jsonValueString(payload["msg"]), jsonValueString(payload["message"]))
 		if message == "" {
 			message = "微博拒绝了账号登录"
 		}
 		lower := strings.ToLower(message)
-		if strings.Contains(lower, "verify") || strings.Contains(message, "验证码") || strings.Contains(message, "安全验证") || strings.Contains(message, "异常") {
+		if strings.Contains(lower, "verify") || strings.Contains(message, "验证码") || strings.Contains(message, "安全验证") || strings.Contains(message, "异常") || strings.Contains(message, "系统错误") {
 			return WeiboCredentials{}, errors.New(message + "；请完成微博安全验证后使用扫码或 Cookie 登录")
 		}
 		return WeiboCredentials{}, errors.New(message)
 	}
-	data, _ := payload["data"].(map[string]any)
-	userID := firstNonEmptyRemoteText(jsonValueString(data["uid"]), jsonValueString(payload["uid"]), jsonValueString(data["user_id"]))
-	if crossDomain, ok := data["crossdomainlist"].(map[string]any); ok {
+	userID := firstNonEmptyRemoteText(jsonValueString(payload["uid"]), jsonValueString(payload["user_id"]))
+	if crossDomain, ok := payload["crossDomainUrlList"].([]any); ok {
 		for _, raw := range crossDomain {
 			crossURL := jsonValueString(raw)
 			if crossURL == "" {

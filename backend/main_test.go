@@ -2,7 +2,11 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
+	"crypto/rsa"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -78,30 +82,52 @@ func TestPostsAfterUsesStrictIncrementalBoundary(t *testing.T) {
 }
 
 func TestLoginWeiboWithPasswordExchangesSession(t *testing.T) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldPreloginEndpoint := weiboPreloginEndpoint
 	oldEndpoint := weiboLoginEndpoint
 	oldValidator := validateWeiboLoginSession
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Fatalf("unexpected method: %s", r.Method)
+		if r.URL.Path == "/prelogin" {
+			if r.Method != http.MethodGet || r.URL.Query().Get("su") != encodeWeiboUsername("account") {
+				t.Fatalf("unexpected prelogin request: %s %s", r.Method, r.URL.String())
+			}
+			fmt.Fprintf(w, `sinaSSOController.preloginCallBack({"servertime":123456,"nonce":"nonce","pubkey":"%x","rsakv":"rsa-version","showpin":0})`, privateKey.N)
+			return
+		}
+		if r.URL.Path != "/login" || r.Method != http.MethodPost {
+			t.Fatalf("unexpected login request: %s %s", r.Method, r.URL.String())
 		}
 		if err := r.ParseForm(); err != nil {
 			t.Fatal(err)
 		}
-		if r.Form.Get("username") != "account" || r.Form.Get("password") != "secret" {
-			t.Fatalf("credentials were not forwarded correctly: %#v", r.Form)
+		ciphertext, err := hex.DecodeString(r.Form.Get("sp"))
+		if err != nil {
+			t.Fatalf("password was not hex encoded: %v", err)
+		}
+		plain, err := rsa.DecryptPKCS1v15(rand.Reader, privateKey, ciphertext)
+		if err != nil || string(plain) != "123456\tnonce\nsecret" || r.Form.Get("pwencode") != "rsa2" || r.Form.Get("su") != encodeWeiboUsername("account") {
+			t.Fatalf("credentials were not SSO encoded correctly: plain=%q form=%#v err=%v", plain, r.Form, err)
 		}
 		http.SetCookie(w, &http.Cookie{Name: "SUB", Value: "session", Path: "/"})
-		writeJSON(w, map[string]any{"retcode": 20000000, "data": map[string]any{"uid": "42"}})
+		writeJSON(w, map[string]any{"retcode": 0, "uid": "42"})
 	}))
 	defer server.Close()
-	weiboLoginEndpoint = server.URL
+	weiboPreloginEndpoint = server.URL + "/prelogin"
+	weiboLoginEndpoint = server.URL + "/login"
 	validateWeiboLoginSession = func(cookie, userID, proxyURL string) (WeiboCredentials, error) {
 		if !strings.Contains(cookie, "SUB=session") || userID != "42" {
 			t.Fatalf("unexpected session: cookie=%q userID=%q", cookie, userID)
 		}
 		return WeiboCredentials{Cookie: cookie, UserID: userID, UserName: "测试账号"}, nil
 	}
-	t.Cleanup(func() { weiboLoginEndpoint = oldEndpoint; validateWeiboLoginSession = oldValidator })
+	t.Cleanup(func() {
+		weiboPreloginEndpoint = oldPreloginEndpoint
+		weiboLoginEndpoint = oldEndpoint
+		validateWeiboLoginSession = oldValidator
+	})
 
 	credentials, err := loginWeiboWithPassword("account", "secret", "")
 	if err != nil {
@@ -119,6 +145,29 @@ func TestWeiboAccountHandlerRequiresCompletePasswordLogin(t *testing.T) {
 	store.weiboAccountHandler(response, request)
 	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "账号和密码均不能为空") {
 		t.Fatalf("unexpected response: status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestLoginWeiboWithPasswordExplainsPlatformSystemError(t *testing.T) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldPreloginEndpoint, oldEndpoint := weiboPreloginEndpoint, weiboLoginEndpoint
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/prelogin" {
+			fmt.Fprintf(w, `sinaSSOController.preloginCallBack({"servertime":123456,"nonce":"nonce","pubkey":"%x","rsakv":"rsa-version","showpin":0})`, privateKey.N)
+			return
+		}
+		writeJSON(w, map[string]any{"retcode": 50000000, "reason": "系统错误，请稍后再试"})
+	}))
+	defer server.Close()
+	weiboPreloginEndpoint, weiboLoginEndpoint = server.URL+"/prelogin", server.URL+"/login"
+	t.Cleanup(func() { weiboPreloginEndpoint, weiboLoginEndpoint = oldPreloginEndpoint, oldEndpoint })
+
+	_, err = loginWeiboWithPassword("account", "secret", "")
+	if err == nil || !strings.Contains(err.Error(), "扫码或 Cookie 登录") {
+		t.Fatalf("unexpected error guidance: %v", err)
 	}
 }
 
