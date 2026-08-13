@@ -35,8 +35,9 @@ button { border: 0; font: inherit; cursor: pointer; color: inherit; }
 .dark .settings-page { background: #17211f; }
 .settings-page-inner { width: min(1120px, 100%); margin: 0 auto; }
 .settings-page-inner > .settings-pane + .settings-pane, .settings-page-inner > .settings-pane + .settings-window-grid, .settings-window-grid + .settings-pane { margin-top: 18px; }
-.settings-window-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; gap: 18px; margin-top: 18px; }
+.settings-window-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: stretch; gap: 18px; margin-top: 18px; }
 .settings-window-grid .settings-pane { min-width: 0; min-height: 0; }
+.settings-window-grid > .settings-pane { height: 100%; }
 .settings-page .settings-window-grid .settings-pane { min-height: 0; padding: 20px 22px 22px; }
 .settings-page .settings-window-grid .pane-heading { margin-bottom: 16px; padding-bottom: 14px; }
 .settings-page .settings-window-grid .compact-settings-pane .settings-form { margin-top: 14px; }
