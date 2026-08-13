@@ -1884,6 +1884,33 @@ func downloadRemoteImage(client *http.Client, remoteURL, targetBase, referer, co
 	return target, nil
 }
 
+func postMediaBaseName(post Post, mediaIndex int) string {
+	author := safeFlowDirectoryName(post.Author)
+	if author == "unnamed" {
+		author = "作者"
+	}
+	published := post.Published
+	if published.IsZero() {
+		published = time.Now()
+	}
+	base := author + published.Format("20060102")
+	if len(post.Media) > 1 {
+		base += "-" + strconv.Itoa(mediaIndex+1)
+	}
+	return base
+}
+
+func availableMediaTargetBase(directory, base string) string {
+	target := filepath.Join(directory, base)
+	for sequence := 2; ; sequence++ {
+		matches, _ := filepath.Glob(target + ".*")
+		if len(matches) == 0 {
+			return target
+		}
+		target = filepath.Join(directory, base+"-"+strconv.Itoa(sequence))
+	}
+}
+
 func (b *BilibiliStore) archiveSourceContent(feed SourceConfig, posts []Post) (SourceConfig, []Post, error) {
 	prepared, err := prepareSourceStorage(feed)
 	if err != nil {
@@ -1913,7 +1940,7 @@ func (b *BilibiliStore) archiveSourceContent(feed SourceConfig, posts []Post) (S
 				localMedia = append(localMedia, remoteURL)
 				continue
 			}
-			base := filepath.Join(prepared.StoragePath, safeFlowDirectoryName(posts[postIndex].ID)+"-"+strconv.Itoa(mediaIndex+1))
+			base := availableMediaTargetBase(prepared.StoragePath, postMediaBaseName(posts[postIndex], mediaIndex))
 			localPath, downloadErr := downloadRemoteImage(client, remoteURL, base, referer, cookie)
 			if downloadErr != nil {
 				return feed, posts, fmt.Errorf("下载动态 %s 的第 %d 张图片失败: %w", posts[postIndex].ID, mediaIndex+1, downloadErr)

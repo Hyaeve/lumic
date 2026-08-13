@@ -821,8 +821,9 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
         </div>
         <div class="header-actions"><button class="danger-outline-button" :disabled="postActionBusy !== '' || !authorProfile.count" @click="deleteAuthorPosts(authorProfile.source, authorProfile.name)">删除全部动态</button><button class="sync-button" :disabled="syncing" @click="runFullSync"><span :class="{ spin: syncing }">↻</span>{{ syncing ? '同步中' : '同步动态' }}</button></div>
       </header>
-      <header v-else class="topbar">
-<div>
+      <header v-else-if="activeNav !== 'liked'" class="topbar timeline-hero">
+<span class="star-field" aria-hidden="true"></span>
+<div class="timeline-hero-copy">
 <img v-if="activeNav === 'liked' && weiboAccount.avatar" class="liked-account-avatar" :src="weiboAccount.avatar" :alt="weiboAccount.userName || '微博账号头像'">
 <p class="eyebrow">{{ activeNav === 'liked' ? 'LIKED MOMENTS' : 'SAVED MOMENTS' }} · {{ new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' }) }}</p>
 <h1>{{ activeNav === 'liked' ? '我的点赞' : selectedTag ? `#${selectedTag}` : '早上好，拾光者' }} <span>{{ activeNav === 'liked' ? '♡' : selectedTag ? '#' : '☼' }}</span>
@@ -836,6 +837,9 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
 <span :class="{ spin: syncing }">↻</span> {{ syncing ? '同步中' : '立即同步' }}</button>
 </div>
 </header>
+      <div v-if="!authorProfile && activeNav === 'liked'" class="compact-page-actions">
+        <button class="secondary-button" :disabled="syncing" @click="syncWeiboLikes">{{ syncing ? '同步中…' : '同步微博点赞' }}</button>
+      </div>
       <section v-if="!authorProfile" class="stats">
 <div class="stat-card">
 <div class="stat-icon mint">✦</div>
@@ -909,7 +913,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
 </section>
     </main>
     <main v-if="!showSettings && activeNav === 'pulls'" class="content pulls-page">
-      <header class="topbar"><div><p class="eyebrow">SUBSCRIPTION PLATFORMS · {{ feeds.length }} SOURCES</p><h1>订阅平台</h1><p class="subtitle">集中管理平台连接、订阅作者和动态拉取。</p></div><div class="header-actions"><button class="sync-button" :disabled="syncing" @click="runFullSync"><span :class="{ spin: syncing }">↻</span>{{ syncing ? '拉取中' : '全部拉取' }}</button></div></header>
+      <div class="compact-page-actions"><button class="sync-button" :disabled="syncing" @click="runFullSync"><span :class="{ spin: syncing }">↻</span>{{ syncing ? '拉取中' : '全部拉取' }}</button></div>
       <p v-if="timelineMessage" class="timeline-message">{{ timelineMessage }}</p>
       <section class="subscription-platforms">
         <div class="section-heading"><div><h2>平台来源</h2><p>查看账号连接状态与订阅数量。</p></div><span>{{ platformCards.filter(platform => platform.configured).length }} / 4 已连接</span></div>
@@ -995,7 +999,6 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
     </div>
     <main v-if="showSettings" class="settings-page">
       <div class="settings-page-inner">
-        <header class="settings-workspace-header"><div><p class="eyebrow">PROJECT SETTINGS</p><h2>设置</h2><p>管理平台凭证、网络连接、登录安全和配置备份。</p></div></header>
         <section class="settings-pane platform-credentials-pane">
           <div class="pane-heading"><div><h3>平台凭证</h3><p>各平台凭证仅由服务端验证，并加密保存在本地数据目录。</p></div><span>4 个平台</span></div>
           <div class="platform-auth-grid">
@@ -1008,13 +1011,13 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
             <article class="platform-auth-card weibo">
               <header class="platform-auth-head"><img class="source-icon" :src="sourceMeta.weibo.image" alt="微博图标"><div><h3>微博</h3><span>账号密码、扫码或 Cookie 登录</span></div><em :class="['connection-dot', { online: weiboAccount.configured }]">{{ weiboAccount.configured ? '已连接' : '未连接' }}</em></header>
               <p v-if="weiboAccount.configured">当前账号：{{ weiboAccount.userName || `UID ${weiboAccount.userId}` }}。</p><p v-else>可直接使用微博账号密码建立会话。密码仅用于本次登录请求，不会写入本地配置；触发验证码或安全验证时请改用扫码。</p>
-              <form class="settings-form platform-auth-form weibo-password-form" @submit.prevent="loginWeiboAccount" autocomplete="off"><label>微博账号</label><input v-model="weiboPasswordCredentials.username" type="text" autocomplete="username" required placeholder="手机号、邮箱或微博账号"><label>微博密码</label><input v-model="weiboPasswordCredentials.password" type="password" autocomplete="current-password" required><button class="login-button" :disabled="weiboBusy">{{ weiboBusy ? '登录中…' : '账号密码登录' }}</button></form>
+              <details class="platform-auth-details"><summary>账号密码登录</summary><form class="settings-form platform-auth-form weibo-password-form" @submit.prevent="loginWeiboAccount" autocomplete="off"><label>微博账号</label><input v-model="weiboPasswordCredentials.username" type="text" autocomplete="username" required placeholder="手机号、邮箱或微博账号"><label>微博密码</label><input v-model="weiboPasswordCredentials.password" type="password" autocomplete="current-password" required><button class="login-button" :disabled="weiboBusy">{{ weiboBusy ? '登录中…' : '账号密码登录' }}</button></form></details>
               <div v-if="weiboQR" class="weibo-qr"><img :src="weiboQR.image.startsWith('//') ? `https:${weiboQR.image}` : weiboQR.image" alt="微博登录二维码"><span>请在二维码过期前扫码并确认</span></div><button class="login-button platform-login-button" type="button" @click="startWeiboQR" :disabled="weiboBusy && !weiboQR">{{ weiboQR ? '刷新二维码' : weiboBusy ? '获取中…' : weiboAccount.configured ? '扫码切换微博账号' : '扫码连接微博' }}</button><details class="manual-credential"><summary>高级：手动导入 Cookie</summary><form class="settings-form bili-credentials" @submit.prevent="saveWeiboAccount" autocomplete="off"><label>微博 UID</label><input v-model="weiboCredentials.userId" inputmode="numeric" required placeholder="个人主页地址中的数字 UID"><label>完整 Cookie</label><textarea v-model="weiboCredentials.cookie" rows="4" required placeholder="可粘贴浏览器请求头中的 Cookie: 完整内容"></textarea><p class="credential-note">请使用已成功打开微博的同一网络出口获取 Cookie；保存前会验证账号资料，不会回显原始 Cookie。</p><button class="login-button" :disabled="weiboBusy">{{ weiboBusy ? '验证中…' : '验证并保存 Cookie' }}</button></form></details><p v-if="weiboError" class="login-error">{{ weiboError }}</p>
             </article>
             <article class="platform-auth-card pixiv">
               <header class="platform-auth-head"><img class="source-icon" :src="sourceMeta.pixiv.image" alt="Pixiv图标"><div><h3>Pixiv</h3><span>OAuth refresh_token</span></div><em :class="['connection-dot', { online: pixivAccount.configured }]">{{ pixivAccount.configured ? '已连接' : '未连接' }}</em></header>
               <p v-if="pixivAccount.configured">当前账号：{{ pixivAccount.userName || pixivAccount.userId }}。重新保存时需填写新 token。</p><p v-else>使用 OAuth refresh_token 连接，不保存账号密码。</p>
-              <form class="settings-form platform-auth-form" @submit.prevent="savePixivAccount"><label>refresh_token</label><input v-model="pixivRefreshToken" type="password" required autocomplete="off"><p class="credential-note">服务端需配置 Pixiv OAuth 客户端环境变量，token 将加密保存。</p><button class="login-button" :disabled="pixivBusy">{{ pixivBusy ? '验证中…' : '验证并保存 Pixiv' }}</button></form><p v-if="pixivError" class="login-error">{{ pixivError }}</p>
+              <details class="platform-auth-details"><summary>配置 refresh_token</summary><form class="settings-form platform-auth-form" @submit.prevent="savePixivAccount"><label>refresh_token</label><input v-model="pixivRefreshToken" type="password" required autocomplete="off"><p class="credential-note">服务端需配置 Pixiv OAuth 客户端环境变量，token 将加密保存。</p><button class="login-button" :disabled="pixivBusy">{{ pixivBusy ? '验证中…' : '验证并保存 Pixiv' }}</button></form></details><p v-if="pixivError" class="login-error">{{ pixivError }}</p>
             </article>
             <article class="platform-auth-card twitter">
               <header class="platform-auth-head"><img class="source-icon" :src="sourceMeta.twitter.image" alt="推特图标"><div><h3>推特</h3><span>账号连接与作者采集</span></div><em class="connection-dot">未开放</em></header>
@@ -1030,16 +1033,15 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
             <form class="settings-form" @submit.prevent="saveProxy" autocomplete="off"><label>代理地址</label><input v-model="proxyForm.proxyUrl" placeholder="socks5://host.docker.internal:7890"><div class="form-actions"><button type="button" class="secondary-button" @click="testProxy" :disabled="settingsBusy">测试</button><button class="login-button" :disabled="settingsBusy">保存代理</button><button type="button" class="danger-link" @click="proxyForm.proxyUrl = ''; saveProxy()">关闭</button></div></form>
             <p v-if="proxyMessage" class="success-message">{{ proxyMessage }}</p>
           </section>
+          <section class="settings-pane backup-settings-pane">
+            <div class="pane-heading"><div><h3>备份配置</h3><p>导出或恢复登录、平台、代理和订阅配置。</p></div><span>JSON</span></div>
+            <div class="backup-action-grid">
+              <article><h4>下载备份</h4><p>备份中包含账号凭证，请妥善保管。</p><button class="secondary-button" type="button" :disabled="settingsBusy" @click="downloadConfigurationBackup">下载备份</button></article>
+              <article><h4>恢复配置</h4><p>覆盖当前配置，不改变动态及图片文件。</p><label class="restore-file-button" :class="{ disabled: settingsBusy }"><input type="file" accept="application/json,.json" :disabled="settingsBusy" @change="restoreConfiguration"><span>选择备份文件</span></label></article>
+            </div>
+          </section>
           <section class="settings-pane compact-settings-pane"><div class="pane-heading"><div><h3>账号管理</h3><p>更新 Lumic 本地管理账号和密码。</p></div><span>密码至少 8 位</span></div><form class="settings-form" @submit.prevent="saveSettings" autocomplete="off"><label>新账号</label><input v-model="settingsForm.username" required minlength="3" autocomplete="off"><label>当前密码</label><input v-model="settingsForm.currentPassword" type="password" required autocomplete="current-password"><label>新密码</label><input v-model="settingsForm.newPassword" type="password" required minlength="8" autocomplete="new-password"><button class="login-button" type="submit" :disabled="settingsBusy">{{ settingsBusy ? '保存中…' : '保存账号' }}</button></form></section>
         </div>
-        <section class="settings-pane backup-settings-pane">
-          <div class="pane-heading"><div><h3>备份与恢复</h3><p>备份登录设置、平台凭证、代理和订阅来源，不包含动态记录及图片文件。</p></div><span>JSON</span></div>
-          <div class="backup-action-grid">
-            <article><h4>备份配置</h4><p>下载当前项目配置。文件中包含账号凭证，请妥善保管。</p><button class="secondary-button" type="button" :disabled="settingsBusy" @click="downloadConfigurationBackup">下载备份</button></article>
-            <article><h4>恢复配置</h4><p>选择 Lumic 配置备份并覆盖当前设置，不会删除已有动态和图片。</p><label class="restore-file-button" :class="{ disabled: settingsBusy }"><input type="file" accept="application/json,.json" :disabled="settingsBusy" @change="restoreConfiguration"><span>选择备份文件</span></label></article>
-          </div>
-          <p v-if="proxyMessage" class="success-message">{{ proxyMessage }}</p>
-        </section>
         <p v-if="settingsError" class="login-error settings-page-error">{{ settingsError }}</p>
       </div>
     </main>
