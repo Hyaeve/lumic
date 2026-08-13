@@ -493,6 +493,29 @@ func TestPostDelete(t *testing.T) {
 	}
 }
 
+func TestPostDeleteHandlesEncodedFlowURLWithQuery(t *testing.T) {
+	root := t.TempDir()
+	oldFlowRoot := flowRoot
+	flowRoot = root
+	t.Cleanup(func() { flowRoot = oldFlowRoot })
+	localMedia := filepath.Join(root, "bilibili", "测试作者", "dynamic-1.jpg")
+	if err := os.MkdirAll(filepath.Dir(localMedia), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(localMedia, []byte("image"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	store := &Store{posts: []Post{{ID: "post-encoded", Source: SourceBilibili, Author: "测试作者", Media: []string{"/flow/bilibili/%E6%B5%8B%E8%AF%95%E4%BD%9C%E8%80%85/dynamic-1.jpg?v=1"}}}, feeds: []SourceConfig{}, file: filepath.Join(root, "content.json")}
+	response := httptest.NewRecorder()
+	store.postsHandler(response, httptest.NewRequest(http.MethodDelete, "/api/posts?id=post-encoded", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("delete status=%d body=%s", response.Code, response.Body.String())
+	}
+	if _, err := os.Stat(localMedia); !os.IsNotExist(err) {
+		t.Fatalf("encoded local media was not deleted: %v", err)
+	}
+}
+
 func TestRegularFeedSyncAndDelete(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "content.json")
 	store := &Store{posts: []Post{}, feeds: []SourceConfig{{ID: "feed-demo", Source: SourceBilibili, Name: "演示来源", Enabled: true}}, file: path}
@@ -631,7 +654,7 @@ func TestWeiboSubscriptionLifecycle(t *testing.T) {
 	if createResponse.Code != http.StatusOK {
 		t.Fatalf("create status=%d body=%s", createResponse.Code, createResponse.Body.String())
 	}
-	if len(store.config.WeiboSubscriptions) != 1 || store.config.WeiboSubscriptions[0].ID != "weibo-12345" || store.config.WeiboSubscriptions[0].Avatar != "https://example.com/avatar.jpg" {
+	if len(store.config.WeiboSubscriptions) != 1 || store.config.WeiboSubscriptions[0].ID != "weibo-12345" || store.config.WeiboSubscriptions[0].Avatar != "https://example.com/avatar.jpg" || !store.config.WeiboSubscriptions[0].OnlyWithImages {
 		t.Fatalf("unexpected subscriptions: %#v", store.config.WeiboSubscriptions)
 	}
 	if _, err := os.Stat(store.config.WeiboSubscriptions[0].StoragePath); err != nil {
@@ -686,7 +709,7 @@ func TestWeiboLikesSubscriptionCanBeAddedAndDeleted(t *testing.T) {
 	store := &BilibiliStore{config: BilibiliConfig{Weibo: WeiboCredentials{Cookie: "SUB=test", UserID: "42", UserName: "账号", Avatar: "https://example.com/me.jpg"}, WeiboSubscriptions: []SourceConfig{}}, key: make([]byte, 32)}
 	create := httptest.NewRecorder()
 	store.weiboSubscriptionsHandler(create, httptest.NewRequest(http.MethodPost, "/api/weibo/subscriptions?type=likes", nil))
-	if create.Code != http.StatusOK || len(store.config.WeiboSubscriptions) != 1 || store.config.WeiboSubscriptions[0].ID != "weibo-likes-42" || !store.config.WeiboSubscriptions[0].Enabled {
+	if create.Code != http.StatusOK || len(store.config.WeiboSubscriptions) != 1 || store.config.WeiboSubscriptions[0].ID != "weibo-likes-42" || !store.config.WeiboSubscriptions[0].Enabled || !store.config.WeiboSubscriptions[0].OnlyWithImages {
 		t.Fatalf("create likes source failed: status=%d feeds=%#v body=%s", create.Code, store.config.WeiboSubscriptions, create.Body.String())
 	}
 	remove := httptest.NewRecorder()

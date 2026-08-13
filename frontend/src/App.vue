@@ -290,10 +290,10 @@ function openOriginalPost(post) {
   if (!post.originalUrl) return
   window.open(post.originalUrl, '_blank', 'noopener,noreferrer')
 }
-function parseTagInput(value) { return [...new Set(String(value || '').split(/[#，,；;\s]+/).map(tag => tag.trim()).filter(Boolean))] }
+function parseTagInput(value) { return [...new Set(String(value || '').split(/\s+/).map(tag => tag.replace(/^#+/, '').trim()).filter(Boolean))] }
 function formatTagInput(tags) { return (tags || []).map(tag => `#${tag}`).join(' ') }
-function parseKeywordInput(value) { return [...new Set(String(value || '').split(/[，,；;\n\r\t]+/).map(keyword => keyword.trim()).filter(Boolean))] }
-function formatKeywordInput(values) { return (values || []).join('，') }
+function parseKeywordInput(value) { return [...new Set(String(value || '').split(/\s+/).map(keyword => keyword.trim()).filter(Boolean))] }
+function formatKeywordInput(values) { return (values || []).join(' ') }
 function cronFieldMatches(field, value, min, max) {
   return field.split(',').some(rawPart => {
     let part = rawPart.trim(); let step = 1
@@ -1049,7 +1049,29 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
         </div>
       </div>
     </div>
-    <div v-if="showFeedSettings && selectedFeed" class="modal-backdrop feed-detail-backdrop" @click.self="showFeedSettings = false"><div class="modal feed-settings-modal"><button class="modal-close" @click="showFeedSettings = false">×</button><p class="eyebrow">SOURCE DETAILS</p><h2>{{ selectedFeed.name }}</h2><p>{{ sourceMeta[selectedFeed.source]?.label }} · {{ selectedFeed.handle }}</p><form class="settings-form feed-settings-form" @submit.prevent="saveFeedSettings"><label class="switch-row"><span>启用自动同步</span><input v-model="selectedFeed.enabled" type="checkbox"></label><input v-model="selectedFeed.schedule" class="cron-input" :readonly="!cronEditing" :title="nextCronExecution(selectedFeed.schedule)" required placeholder="0 6 * * *" maxlength="80" aria-label="Cron 执行计划，双击修改" @dblclick="cronEditing = true" @blur="cronEditing = false"><label>作者标签</label><input v-model="selectedFeed.tagInput" placeholder="#标签1 #标签2" maxlength="120"><fieldset class="source-filter-settings"><legend>动态过滤</legend><label class="switch-row"><span>只拉取包含图片的动态</span><input v-model="selectedFeed.onlyWithImages" type="checkbox"></label><label>必须包含关键词</label><input v-model="selectedFeed.includeKeywordInput" placeholder="关键词1，关键词2" maxlength="240"><small>命中任意一个关键词即可保留；留空表示不限制。</small><label>排除关键词</label><input v-model="selectedFeed.excludeKeywordInput" placeholder="广告，抽奖" maxlength="240"><small>命中任意排除关键词时不会拉取，排除规则优先。</small></fieldset><label class="switch-row"><span>首次拉取历史内容</span><input v-model="selectedFeed.includePast" type="checkbox"></label><div v-if="selectedFeed.source === 'bilibili'" class="content-scope"><strong>内容范围</strong><span>图文动态（DRAW）</span><span>专栏（ARTICLE）</span><small>视频及转发视频始终过滤，无法在此开启。</small></div><p v-if="settingsError" class="login-error">{{ settingsError }}</p><button class="login-button" :disabled="settingsBusy">保存来源设置</button></form></div></div>
+    <div v-if="showFeedSettings && selectedFeed" class="modal-backdrop feed-detail-backdrop" @click.self="showFeedSettings = false">
+      <div class="modal feed-settings-modal">
+        <button class="modal-close" @click="showFeedSettings = false">×</button>
+        <p class="eyebrow">SOURCE DETAILS</p><h2>{{ selectedFeed.name }}</h2><p>{{ sourceMeta[selectedFeed.source]?.label }} · {{ selectedFeed.handle }}</p>
+        <form class="settings-form feed-settings-form" @submit.prevent="saveFeedSettings">
+          <div class="feed-field-row">
+            <label><span>Cron</span><input v-model="selectedFeed.schedule" class="cron-input" :readonly="!cronEditing" :title="nextCronExecution(selectedFeed.schedule)" required placeholder="0 6 * * *" maxlength="80" @dblclick="cronEditing = true" @blur="cronEditing = false"></label>
+            <label><span>作者标签</span><input v-model="selectedFeed.tagInput" placeholder="#绘画 #日常" maxlength="120"></label>
+          </div>
+          <div class="feed-field-row">
+            <label><span>包含关键词</span><input v-model="selectedFeed.includeKeywordInput" placeholder="插画 绘画" maxlength="240"></label>
+            <label><span>排除关键词</span><input v-model="selectedFeed.excludeKeywordInput" placeholder="广告 抽奖" maxlength="240"></label>
+          </div>
+          <div class="feed-toggle-row">
+            <label><input v-model="selectedFeed.onlyWithImages" type="checkbox"><span>只拉取包含图片的动态</span></label>
+            <label><input v-model="selectedFeed.includePast" type="checkbox"><span>首次拉取历史动态</span></label>
+            <label><input v-model="selectedFeed.enabled" type="checkbox"><span>启用自动同步</span></label>
+          </div>
+          <div v-if="selectedFeed.source === 'bilibili'" class="content-scope"><strong>内容范围</strong><span>图文动态（DRAW）</span><span>专栏（ARTICLE）</span><small>视频及转发视频始终过滤，无法在此开启。</small></div>
+          <p v-if="settingsError" class="login-error">{{ settingsError }}</p><button class="login-button" :disabled="settingsBusy">保存来源设置</button>
+        </form>
+      </div>
+    </div>
     <div v-if="confirmDialog.open" class="confirm-dialog-layer" @click.self="closeConfirmDialog(false)">
       <section class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
         <div :class="['confirm-dialog-icon', confirmDialog.tone]">!</div>

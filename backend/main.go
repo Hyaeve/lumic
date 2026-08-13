@@ -926,14 +926,16 @@ func (s *Store) deletePosts(ids []string, source Source, author string) (int, er
 	if len(removed) == 0 {
 		return 0, os.ErrNotExist
 	}
+	for _, post := range removed {
+		if err := deletePostMedia(post.Media); err != nil {
+			return 0, err
+		}
+	}
 	previous := s.posts
 	s.posts = kept
 	if err := s.saveLocked(); err != nil {
 		s.posts = previous
 		return 0, err
-	}
-	for _, post := range removed {
-		_ = deletePostMedia(post.Media)
 	}
 	if author != "" {
 		if err := deleteSourceStorage(source, author); err != nil {
@@ -964,8 +966,11 @@ func deletePostMedia(media []string) error {
 			continue
 		}
 		candidate := value
-		if parseErr == nil && parsed.Scheme == "file" {
+		if parseErr == nil {
 			candidate = parsed.Path
+			if parsed.Scheme == "file" && parsed.Host != "" {
+				candidate = "//" + parsed.Host + parsed.Path
+			}
 		}
 		if strings.HasPrefix(filepath.ToSlash(candidate), "/flow/") {
 			candidate = filepath.Join(flowRoot, strings.TrimPrefix(filepath.ToSlash(candidate), "/flow/"))
@@ -1524,7 +1529,7 @@ func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "invalid subscription", http.StatusBadRequest)
 		return
 	}
-	feed := SourceConfig{ID: "bili-" + userID, Source: SourceBilibili, Name: strings.TrimSpace(input.Name), Handle: "UID " + userID, Avatar: strings.TrimSpace(input.Avatar), Enabled: true, IncludePast: input.IncludePast, Schedule: input.Schedule, ContentTypes: []string{"DRAW", "ARTICLE"}, Tags: normalizeTags(input.Tags)}
+	feed := SourceConfig{ID: "bili-" + userID, Source: SourceBilibili, Name: strings.TrimSpace(input.Name), Handle: "UID " + userID, Avatar: strings.TrimSpace(input.Avatar), Enabled: true, IncludePast: input.IncludePast, Schedule: input.Schedule, ContentTypes: []string{"DRAW", "ARTICLE"}, Tags: normalizeTags(input.Tags), OnlyWithImages: true}
 	var storageErr error
 	feed, storageErr = prepareSourceStorage(feed)
 	if storageErr != nil {
@@ -3224,7 +3229,7 @@ func (b *BilibiliStore) weiboSubscriptionsHandler(w http.ResponseWriter, r *http
 			writeAPIError(w, http.StatusPreconditionFailed, "请先连接微博账号")
 			return
 		}
-		feed := SourceConfig{ID: "weibo-likes-" + credentials.UserID, Source: SourceWeibo, Name: "我的点赞", Handle: credentials.UserName, Avatar: credentials.Avatar, Enabled: true, Schedule: "0 6 * * *", StoragePath: sourceStoragePath(SourceWeibo, "我的点赞")}
+		feed := SourceConfig{ID: "weibo-likes-" + credentials.UserID, Source: SourceWeibo, Name: "我的点赞", Handle: credentials.UserName, Avatar: credentials.Avatar, Enabled: true, Schedule: "0 6 * * *", StoragePath: sourceStoragePath(SourceWeibo, "我的点赞"), OnlyWithImages: true}
 		if prepared, err := prepareSourceStorage(feed); err == nil {
 			feed = prepared
 		} else {
@@ -3279,7 +3284,7 @@ func (b *BilibiliStore) weiboSubscriptionsHandler(w http.ResponseWriter, r *http
 			}
 		}
 	}
-	feed := SourceConfig{ID: "weibo-" + userID, Source: SourceWeibo, Name: strings.TrimSpace(input.Name), Handle: "UID " + userID, Avatar: normalizeRemoteImage(input.Avatar), Enabled: true, IncludePast: input.IncludePast, Schedule: input.Schedule, Tags: normalizeTags(input.Tags)}
+	feed := SourceConfig{ID: "weibo-" + userID, Source: SourceWeibo, Name: strings.TrimSpace(input.Name), Handle: "UID " + userID, Avatar: normalizeRemoteImage(input.Avatar), Enabled: true, IncludePast: input.IncludePast, Schedule: input.Schedule, Tags: normalizeTags(input.Tags), OnlyWithImages: true}
 	var err error
 	if feed, err = prepareSourceStorage(feed); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "无法创建微博博主内容目录")
