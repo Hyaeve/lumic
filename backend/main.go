@@ -66,11 +66,29 @@ type SourceConfig struct {
 	IncludePast     bool      `json:"includePast"`
 	Schedule        string    `json:"schedule"`
 	ContentTypes    []string  `json:"contentTypes,omitempty"`
+	Tags            []string  `json:"tags,omitempty"`
 	LastSyncedAt    time.Time `json:"lastSyncedAt"`
 	LastSyncStatus  string    `json:"lastSyncStatus,omitempty"`
 	LastSyncMessage string    `json:"lastSyncMessage,omitempty"`
 	LastSyncCount   int       `json:"lastSyncCount,omitempty"`
 	StoragePath     string    `json:"storagePath,omitempty"`
+}
+
+func normalizeTags(tags []string) []string {
+	result := make([]string, 0, len(tags))
+	seen := make(map[string]bool)
+	for _, raw := range tags {
+		for _, value := range strings.FieldsFunc(raw, func(r rune) bool {
+			return r == '#' || r == ',' || r == '，' || r == ';' || r == '；' || r == '\n' || r == '\r' || r == '\t'
+		}) {
+			value = strings.TrimSpace(value)
+			if value != "" && !seen[value] {
+				seen[value] = true
+				result = append(result, value)
+			}
+		}
+	}
+	return result
 }
 
 type BilibiliCredentials struct {
@@ -686,6 +704,65 @@ func (s *Store) setPostLiked(id string, liked bool) (Post, error) {
 	return Post{}, os.ErrNotExist
 }
 
+func (s *Store) setAuthorTags(source Source, author string, tags []string) error {
+	s.Lock()
+	defer s.Unlock()
+	previous := append([]Post(nil), s.posts...)
+	changed := false
+	for index := range s.posts {
+		if s.posts[index].Source == source && s.posts[index].Author == author {
+			s.posts[index].Tags = append([]string(nil), tags...)
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	if err := s.saveLocked(); err != nil {
+		s.posts = previous
+		return err
+	}
+	return nil
+}
+
+func (s *Store) deletePosts(ids []string, source Source, author string) (int, error) {
+	idSet := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if id = strings.TrimSpace(id); id != "" {
+			idSet[id] = true
+		}
+	}
+	author = strings.TrimSpace(author)
+	if len(idSet) == 0 && author == "" {
+		return 0, errors.New("未指定要删除的动态")
+	}
+	s.Lock()
+	defer s.Unlock()
+	kept := make([]Post, 0, len(s.posts))
+	removed := make([]Post, 0)
+	for _, post := range s.posts {
+		matched := idSet[post.ID] || (author != "" && post.Source == source && post.Author == author)
+		if matched {
+			removed = append(removed, post)
+			continue
+		}
+		kept = append(kept, post)
+	}
+	if len(removed) == 0 {
+		return 0, os.ErrNotExist
+	}
+	previous := s.posts
+	s.posts = kept
+	if err := s.saveLocked(); err != nil {
+		s.posts = previous
+		return 0, err
+	}
+	for _, post := range removed {
+		_ = deletePostMedia(post.Media)
+	}
+	return len(removed), nil
+}
+
 func postsEqual(left, right Post) bool {
 	leftJSON, leftErr := json.Marshal(left)
 	rightJSON, rightErr := json.Marshal(right)
@@ -762,34 +839,31 @@ func (s *Store) postsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodDelete {
-		id := strings.TrimSpace(r.URL.Query().Get("id"))
-		if id == "" {
-			writeAPIError(w, http.StatusBadRequest, "动态 ID 不能为空")
-			return
-		}
-		s.Lock()
-		for index, post := range s.posts {
-			if post.ID == id {
-				if err := deletePostMedia(post.Media); err != nil {
-					s.Unlock()
-					writeAPIError(w, http.StatusInternalServerError, "无法删除动态关联媒体文件")
-					return
-				}
-				previous := s.posts
-				s.posts = append(append([]Post(nil), s.posts[:index]...), s.posts[index+1:]...)
-				if err := s.saveLocked(); err != nil {
-					s.posts = previous
-					s.Unlock()
-					writeAPIError(w, http.StatusInternalServerError, "无法持久化动态删除")
-					return
-				}
-				s.Unlock()
-				writeJSON(w, map[string]string{"status": "deleted", "message": "动态及关联媒体文件已永久删除"})
+		ids := r.URL.Query()["id"]
+		source := Source(strings.TrimSpace(r.URL.Query().Get("source")))
+		author := strings.TrimSpace(r.URL.Query().Get("author"))
+		if r.Body != nil && r.ContentLength != 0 {
+			var input struct {
+				IDs    []string `json:"ids"`
+				Source Source   `json:"source"`
+				Author string   `json:"author"`
+			}
+			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&input); err != nil {
+				writeAPIError(w, http.StatusBadRequest, "删除请求格式无效")
 				return
 			}
+			ids, source, author = append(ids, input.IDs...), input.Source, input.Author
 		}
-		s.Unlock()
-		writeAPIError(w, http.StatusNotFound, "动态不存在或已删除")
+		count, err := s.deletePosts(ids, source, author)
+		if errors.Is(err, os.ErrNotExist) {
+			writeAPIError(w, http.StatusNotFound, "动态不存在或已删除")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, map[string]any{"status": "deleted", "count": count, "message": "动态及关联媒体文件已永久删除"})
 		return
 	}
 	if r.Method != http.MethodGet {
@@ -1222,6 +1296,7 @@ func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Requ
 				b.config.Subscriptions[index].IncludePast = input.IncludePast
 				b.config.Subscriptions[index].Schedule = input.Schedule
 				b.config.Subscriptions[index].ContentTypes = []string{"DRAW", "ARTICLE"}
+				b.config.Subscriptions[index].Tags = normalizeTags(input.Tags)
 				input = b.config.Subscriptions[index]
 				found = true
 				break
@@ -1236,6 +1311,9 @@ func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Requ
 			writeAPIError(w, http.StatusInternalServerError, "无法保存来源设置")
 			return
 		}
+		if b.content != nil {
+			_ = b.content.setAuthorTags(input.Source, input.Name, input.Tags)
+		}
 		writeJSON(w, input)
 		return
 	}
@@ -1244,11 +1322,12 @@ func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var input struct {
-		UserID      string `json:"userId"`
-		Name        string `json:"name"`
-		Avatar      string `json:"avatar"`
-		IncludePast bool   `json:"includePast"`
-		Schedule    string `json:"schedule"`
+		UserID      string   `json:"userId"`
+		Name        string   `json:"name"`
+		Avatar      string   `json:"avatar"`
+		IncludePast bool     `json:"includePast"`
+		Schedule    string   `json:"schedule"`
+		Tags        []string `json:"tags"`
 	}
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&input) != nil || strings.TrimSpace(input.UserID) == "" || strings.TrimSpace(input.Name) == "" {
 		http.Error(w, "invalid subscription", http.StatusBadRequest)
@@ -1262,7 +1341,7 @@ func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "invalid subscription", http.StatusBadRequest)
 		return
 	}
-	feed := SourceConfig{ID: "bili-" + userID, Source: SourceBilibili, Name: strings.TrimSpace(input.Name), Handle: "UID " + userID, Avatar: strings.TrimSpace(input.Avatar), Enabled: true, IncludePast: input.IncludePast, Schedule: input.Schedule, ContentTypes: []string{"DRAW", "ARTICLE"}}
+	feed := SourceConfig{ID: "bili-" + userID, Source: SourceBilibili, Name: strings.TrimSpace(input.Name), Handle: "UID " + userID, Avatar: strings.TrimSpace(input.Avatar), Enabled: true, IncludePast: input.IncludePast, Schedule: input.Schedule, ContentTypes: []string{"DRAW", "ARTICLE"}, Tags: normalizeTags(input.Tags)}
 	var storageErr error
 	feed, storageErr = prepareSourceStorage(feed)
 	if storageErr != nil {
@@ -1697,7 +1776,7 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 			if avatar == "" {
 				avatar = feed.Avatar
 			}
-			posts = append(posts, Post{ID: "bili-dynamic-" + item.ID, Source: SourceBilibili, Author: name, Avatar: avatar, Caption: caption, Tags: []string{}, Media: media, Published: published})
+			posts = append(posts, Post{ID: "bili-dynamic-" + item.ID, Source: SourceBilibili, Author: name, Avatar: avatar, Caption: caption, Tags: append([]string(nil), feed.Tags...), Media: media, Published: published})
 			if !full && !feed.LastSyncedAt.IsZero() && !published.After(feed.LastSyncedAt) {
 				reachedBoundary = true
 			}
@@ -1767,7 +1846,7 @@ func collectWeiboPosts(value any, feed SourceConfig, posts *[]Post, seen map[str
 			if caption == "" {
 				caption = cleanRemoteText(jsonValueString(mblog["text"]))
 			}
-			*posts = append(*posts, Post{ID: "weibo-status-" + id, Source: SourceWeibo, Author: name, Avatar: avatar, Caption: caption, Tags: []string{}, Media: media, Published: published})
+			*posts = append(*posts, Post{ID: "weibo-status-" + id, Source: SourceWeibo, Author: name, Avatar: avatar, Caption: caption, Tags: append([]string(nil), feed.Tags...), Media: media, Published: published})
 		}
 		for _, child := range object {
 			collectWeiboPosts(child, feed, posts, seen)
@@ -1835,6 +1914,69 @@ func (b *BilibiliStore) fetchWeiboPosts(feed SourceConfig, full bool) ([]Post, e
 		}
 	}
 	return nil, fmt.Errorf("微博拉取失败：%w", lastErr)
+}
+
+func (b *BilibiliStore) fetchWeiboLikedPosts() ([]Post, error) {
+	b.RLock()
+	credentials, proxyURL := b.config.Weibo, b.config.ProxyURL
+	b.RUnlock()
+	if credentials.Cookie == "" || credentials.UserID == "" {
+		return nil, errors.New("微博账号未连接")
+	}
+	feed := SourceConfig{ID: "weibo-liked-" + credentials.UserID, Source: SourceWeibo, Name: credentials.UserName, Handle: "我的点赞"}
+	endpoints := []func(int) string{
+		func(page int) string {
+			return fmt.Sprintf("https://weibo.com/ajax/statuses/likelist?uid=%s&page=%d", url.QueryEscape(credentials.UserID), page)
+		},
+		func(page int) string {
+			return fmt.Sprintf("https://m.weibo.cn/api/container/getIndex?containerid=%s&page=%d", url.QueryEscape("230869"+credentials.UserID), page)
+		},
+	}
+	var lastErr error
+	for _, endpoint := range endpoints {
+		posts, seen := make([]Post, 0), make(map[string]bool)
+		for page := 1; page <= 50; page++ {
+			payload, _, err := weiboRawRequest(endpoint(page), credentials, proxyURL)
+			if err != nil {
+				lastErr = err
+				break
+			}
+			pagePosts := make([]Post, 0)
+			collectWeiboPosts(payload, feed, &pagePosts, seen)
+			if len(pagePosts) == 0 {
+				break
+			}
+			for index := range pagePosts {
+				pagePosts[index].Liked = true
+			}
+			posts = append(posts, pagePosts...)
+		}
+		if len(posts) > 0 {
+			return posts, nil
+		}
+	}
+	if lastErr == nil {
+		lastErr = errors.New("微博接口未返回点赞动态，请确认当前 Cookie 仍有效")
+	}
+	return nil, fmt.Errorf("微博点赞拉取失败：%w", lastErr)
+}
+
+func (b *BilibiliStore) weiboLikesHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	posts, err := b.fetchWeiboLikedPosts()
+	if err != nil {
+		writeAPIError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	added, err := b.content.mergePosts(posts)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "无法保存微博点赞动态")
+		return
+	}
+	writeJSON(w, map[string]any{"status": "success", "added": added, "count": len(posts), "message": fmt.Sprintf("已同步 %d 条微博点赞动态", len(posts))})
 }
 
 func postsAfter(posts []Post, boundary time.Time) []Post {
@@ -2769,6 +2911,7 @@ func (b *BilibiliStore) weiboSubscriptionsHandler(w http.ResponseWriter, r *http
 				b.config.WeiboSubscriptions[index].Enabled = input.Enabled
 				b.config.WeiboSubscriptions[index].IncludePast = input.IncludePast
 				b.config.WeiboSubscriptions[index].Schedule = input.Schedule
+				b.config.WeiboSubscriptions[index].Tags = normalizeTags(input.Tags)
 				input = b.config.WeiboSubscriptions[index]
 				found = true
 				break
@@ -2783,6 +2926,9 @@ func (b *BilibiliStore) weiboSubscriptionsHandler(w http.ResponseWriter, r *http
 			writeAPIError(w, http.StatusInternalServerError, "无法保存微博来源设置")
 			return
 		}
+		if b.content != nil {
+			_ = b.content.setAuthorTags(input.Source, input.Name, input.Tags)
+		}
 		writeJSON(w, input)
 		return
 	}
@@ -2791,11 +2937,12 @@ func (b *BilibiliStore) weiboSubscriptionsHandler(w http.ResponseWriter, r *http
 		return
 	}
 	var input struct {
-		UserID      string `json:"userId"`
-		Name        string `json:"name"`
-		Avatar      string `json:"avatar"`
-		IncludePast bool   `json:"includePast"`
-		Schedule    string `json:"schedule"`
+		UserID      string   `json:"userId"`
+		Name        string   `json:"name"`
+		Avatar      string   `json:"avatar"`
+		IncludePast bool     `json:"includePast"`
+		Schedule    string   `json:"schedule"`
+		Tags        []string `json:"tags"`
 	}
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&input) != nil || strings.TrimSpace(input.UserID) == "" || strings.TrimSpace(input.Name) == "" {
 		writeAPIError(w, http.StatusBadRequest, "微博订阅信息无效")
@@ -2820,7 +2967,7 @@ func (b *BilibiliStore) weiboSubscriptionsHandler(w http.ResponseWriter, r *http
 			}
 		}
 	}
-	feed := SourceConfig{ID: "weibo-" + userID, Source: SourceWeibo, Name: strings.TrimSpace(input.Name), Handle: "UID " + userID, Avatar: normalizeRemoteImage(input.Avatar), Enabled: true, IncludePast: input.IncludePast, Schedule: input.Schedule}
+	feed := SourceConfig{ID: "weibo-" + userID, Source: SourceWeibo, Name: strings.TrimSpace(input.Name), Handle: "UID " + userID, Avatar: normalizeRemoteImage(input.Avatar), Enabled: true, IncludePast: input.IncludePast, Schedule: input.Schedule, Tags: normalizeTags(input.Tags)}
 	var err error
 	if feed, err = prepareSourceStorage(feed); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "无法创建微博博主内容目录")
@@ -3278,6 +3425,7 @@ func main() {
 	mux.HandleFunc("/api/weibo/account", bilibili.weiboAccountHandler)
 	mux.HandleFunc("/api/weibo/qr", bilibili.weiboQRHandler)
 	mux.HandleFunc("/api/weibo/search", bilibili.weiboSearchHandler)
+	mux.HandleFunc("/api/weibo/likes", bilibili.weiboLikesHandler)
 	mux.HandleFunc("/api/weibo/subscriptions", bilibili.weiboSubscriptionsHandler)
 	mux.HandleFunc("/api/bilibili/search", bilibili.searchHandler)
 	mux.HandleFunc("/api/bilibili/subscriptions", bilibili.subscriptionsHandler)

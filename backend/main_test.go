@@ -261,6 +261,28 @@ func TestPostsHandlerPersistsLikedState(t *testing.T) {
 	}
 }
 
+func TestPostsHandlerDeletesMultipleAndAuthorPosts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "content.json")
+	store := &Store{posts: []Post{
+		{ID: "one", Source: SourceWeibo, Author: "甲"},
+		{ID: "two", Source: SourceWeibo, Author: "乙"},
+		{ID: "three", Source: SourceWeibo, Author: "甲"},
+		{ID: "four", Source: SourceBilibili, Author: "甲"},
+	}, feeds: []SourceConfig{}, file: path}
+	request := httptest.NewRequest(http.MethodDelete, "/api/posts", strings.NewReader(`{"ids":["two"]}`))
+	response := httptest.NewRecorder()
+	store.postsHandler(response, request)
+	if response.Code != http.StatusOK || len(store.posts) != 3 {
+		t.Fatalf("batch delete failed: status=%d posts=%#v body=%s", response.Code, store.posts, response.Body.String())
+	}
+	authorRequest := httptest.NewRequest(http.MethodDelete, "/api/posts", strings.NewReader(`{"source":"weibo","author":"甲"}`))
+	authorResponse := httptest.NewRecorder()
+	store.postsHandler(authorResponse, authorRequest)
+	if authorResponse.Code != http.StatusOK || len(store.posts) != 1 || store.posts[0].ID != "four" {
+		t.Fatalf("author delete failed: status=%d posts=%#v body=%s", authorResponse.Code, store.posts, authorResponse.Body.String())
+	}
+}
+
 func decodeTestResponse(t *testing.T, recorder *httptest.ResponseRecorder) map[string]any {
 	t.Helper()
 	var payload map[string]any

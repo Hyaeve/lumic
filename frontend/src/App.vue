@@ -33,6 +33,7 @@ const activeNav = ref('all')
 const activeSource = ref('all')
 const sourcesExpanded = ref(true)
 const selectedAuthor = ref(null)
+const selectedTag = ref('')
 const authorReturnState = ref({ nav: 'all', source: 'all' })
 const isDark = ref(false)
 const showAdd = ref(false)
@@ -41,6 +42,7 @@ const showWeibo = ref(false)
 const weiboKeyword = ref('')
 const weiboResults = ref([])
 const weiboIncludePast = ref(false)
+const weiboSubscriptionTags = ref('')
 const biliAccount = ref({ configured: false, userId: '' })
 const biliCredentials = ref({ cookie: '', SESSDATA: '', bili_jct: '', buvid3: '', DedeUserID: '', ac_time_value: '', buvid4: '', DedeUserID__ckMd5: '' })
 const biliKeyword = ref('')
@@ -48,6 +50,7 @@ const biliResults = ref([])
 const biliBusy = ref(false)
 const biliError = ref('')
 const biliIncludePast = ref(false)
+const biliSubscriptionTags = ref('')
 const biliQR = ref(null)
 const biliQRImage = ref('')
 const biliQRStatus = ref('')
@@ -68,6 +71,8 @@ const posts = ref([])
 const feeds = ref([])
 const postActionBusy = ref('')
 const timelineMessage = ref('')
+const selectionMode = ref(false)
+const selectedPostIds = ref([])
 const mediaShapes = ref({})
 const timelineStart = ref(0)
 const timelineEnd = ref(15)
@@ -97,9 +102,11 @@ const sourceMeta = {
 const validSources = new Set(Object.keys(sourceMeta))
 const validSettingsTabs = new Set(['sources', 'platforms', 'network', 'security'])
 const likedCount = computed(() => posts.value.filter(post => post.liked).length)
+const selectedPostCount = computed(() => selectedPostIds.value.length)
 const filteredPosts = computed(() => {
   const timeline = activeNav.value === 'liked' ? posts.value.filter(post => post.liked) : posts.value
   const sourceTimeline = activeSource.value === 'all' ? timeline : timeline.filter(post => post.source === activeSource.value)
+  if (selectedTag.value) return sourceTimeline.filter(post => post.tags?.includes(selectedTag.value))
   if (!selectedAuthor.value) return sourceTimeline
   return sourceTimeline.filter(post => post.source === selectedAuthor.value.source && post.author === selectedAuthor.value.name)
 })
@@ -274,6 +281,8 @@ async function saveWeiboAccount() {
     weiboCredentials.value = { cookie: '', userId: '' }
   } catch (error) { weiboError.value = error.message } finally { weiboBusy.value = false }
 }
+function parseTagInput(value) { return [...new Set(String(value || '').split(/[#，,；;\s]+/).map(tag => tag.trim()).filter(Boolean))] }
+function formatTagInput(tags) { return (tags || []).map(tag => `#${tag}`).join(' ') }
 async function loginWeiboAccount() {
   weiboBusy.value = true; weiboError.value = ''
   try {
@@ -314,17 +323,17 @@ async function runFullSync() {
 async function subscribeWeibo(user) {
   weiboBusy.value = true; weiboError.value = ''
   try {
-    const response = await fetch('/api/weibo/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: user.userId, name: user.name, avatar: user.avatar, includePast: weiboIncludePast.value, schedule: '每 6 小时' }) })
+    const response = await fetch('/api/weibo/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: user.userId, name: user.name, avatar: user.avatar, includePast: weiboIncludePast.value, schedule: '每 6 小时', tags: parseTagInput(weiboSubscriptionTags.value) }) })
     if (!response.ok) throw new Error(await responseError(response, response.status === 409 ? '已经订阅该微博博主' : '订阅失败'))
-    feeds.value.push(await response.json())
+    feeds.value.push(await response.json()); weiboSubscriptionTags.value = ''
   } catch (error) { weiboError.value = error.message } finally { weiboBusy.value = false }
 }
 async function subscribeBilibili(user) {
   biliBusy.value = true; biliError.value = ''
   try {
-    const response = await fetch('/api/bilibili/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: user.userId, name: user.name, avatar: user.avatar, includePast: biliIncludePast.value, schedule: '每 6 小时' }) })
+    const response = await fetch('/api/bilibili/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: user.userId, name: user.name, avatar: user.avatar, includePast: biliIncludePast.value, schedule: '每 6 小时', tags: parseTagInput(biliSubscriptionTags.value) }) })
     if (!response.ok) throw new Error(response.status === 409 ? '已经订阅该 UP 主' : '订阅失败')
-    feeds.value.push(await response.json())
+    feeds.value.push(await response.json()); biliSubscriptionTags.value = ''
   } catch (error) { biliError.value = error.message } finally { biliBusy.value = false }
 }
 function openPlatformSettings(platform) {
@@ -337,18 +346,20 @@ function managePlatformCredentials(platformKey) {
   if (platformKey === 'weibo' && !weiboAccount.value.configured) startWeiboQR()
 }
 function openFeedSettings(feed) {
-  selectedFeed.value = { ...feed, contentTypes: [...(feed.contentTypes || [])] }
+  selectedFeed.value = { ...feed, contentTypes: [...(feed.contentTypes || [])], tags: [...(feed.tags || [])], tagInput: formatTagInput(feed.tags) }
   showFeedSettings.value = true
 }
 async function saveFeedSettings() {
   if (!selectedFeed.value) return
   settingsBusy.value = true; settingsError.value = ''
   try {
+    selectedFeed.value.tags = parseTagInput(selectedFeed.value.tagInput)
     if ((selectedFeed.value.source === 'bilibili' && selectedFeed.value.id.startsWith('bili-')) || (selectedFeed.value.source === 'weibo' && selectedFeed.value.id.startsWith('weibo-'))) {
       const response = await fetch(sourceOperationEndpoint(selectedFeed.value), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(selectedFeed.value) })
       if (!response.ok) throw new Error(await responseError(response, '来源设置保存失败'))
       const saved = await response.json(); const index = feeds.value.findIndex(feed => feed.id === saved.id)
       if (index >= 0) feeds.value[index] = saved
+      posts.value = posts.value.map(post => post.source === saved.source && post.author === saved.name ? { ...post, tags: [...(saved.tags || [])] } : post)
       if (selectedPlatform.value) {
         const platformFeedIndex = selectedPlatform.value.feeds.findIndex(feed => feed.id === saved.id)
         if (platformFeedIndex >= 0) selectedPlatform.value.feeds[platformFeedIndex] = saved
@@ -486,6 +497,48 @@ async function deletePost(post) {
     window.setTimeout(() => { if (timelineMessage.value === '动态已从时间线删除') timelineMessage.value = '' }, 2500)
   } catch (error) { timelineMessage.value = error.message } finally { postActionBusy.value = '' }
 }
+function togglePostSelection(post) {
+  selectedPostIds.value = selectedPostIds.value.includes(post.id) ? selectedPostIds.value.filter(id => id !== post.id) : [...selectedPostIds.value, post.id]
+}
+function stopSelection() { selectionMode.value = false; selectedPostIds.value = [] }
+async function deleteSelectedPosts() {
+  if (!selectedPostCount.value) return
+  const confirmed = await askConfirm({ title: '批量删除动态', message: `确定永久删除选中的 ${selectedPostCount.value} 条动态吗？关联媒体文件也会一并删除。`, confirmText: '删除所选动态' })
+  if (!confirmed) return
+  postActionBusy.value = 'batch-delete'
+  try {
+    const response = await fetch('/api/posts', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: selectedPostIds.value }) })
+    if (!response.ok) throw new Error(await responseError(response, '批量删除失败'))
+    const removed = new Set(selectedPostIds.value)
+    posts.value = posts.value.filter(post => !removed.has(post.id))
+    timelineMessage.value = `已删除 ${removed.size} 条动态`
+    stopSelection()
+  } catch (error) { timelineMessage.value = error.message } finally { postActionBusy.value = '' }
+}
+async function deleteAuthorPosts(source, author) {
+  const count = posts.value.filter(post => post.source === source && post.author === author).length
+  if (!count) return
+  const confirmed = await askConfirm({ title: '删除作者全部动态', message: `确定永久删除“${author}”的全部 ${count} 条动态吗？订阅关系会保留，后续同步仍可重新拉取。`, confirmText: '删除全部动态' })
+  if (!confirmed) return
+  postActionBusy.value = `author:${source}:${author}`
+  try {
+    const response = await fetch('/api/posts', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source, author }) })
+    if (!response.ok) throw new Error(await responseError(response, '删除作者动态失败'))
+    posts.value = posts.value.filter(post => post.source !== source || post.author !== author)
+    timelineMessage.value = `已删除 ${author} 的 ${count} 条动态`
+  } catch (error) { timelineMessage.value = error.message } finally { postActionBusy.value = '' }
+}
+async function syncWeiboLikes() {
+  if (!weiboAccount.value.configured) { await openSettings('platforms'); return }
+  syncing.value = true; timelineMessage.value = ''
+  try {
+    const response = await fetch('/api/weibo/likes', { method: 'POST' })
+    if (!response.ok) throw new Error(await responseError(response, '微博点赞同步失败'))
+    const result = await response.json()
+    await loadData()
+    timelineMessage.value = result.message
+  } catch (error) { timelineMessage.value = error.message } finally { syncing.value = false }
+}
 function setMediaShape(post, mediaIndex, event) {
   const image = event.target
   if (!image.naturalWidth || !image.naturalHeight) return
@@ -513,6 +566,8 @@ async function togglePostLike(post) {
   }
 }
 function navigateTo(nav, source = activeSource.value) {
+  stopSelection()
+  selectedTag.value = ''
   showSettings.value = false
   selectedPlatform.value = null
   showFeedSettings.value = false
@@ -521,6 +576,10 @@ function navigateTo(nav, source = activeSource.value) {
   selectedAuthor.value = null
   const path = nav === 'source' ? `/source/${source}` : nav === 'liked' ? '/liked' : nav === 'pulls' ? '/pulls' : '/'
   updateRoute(path)
+}
+function openTag(tag) {
+  stopSelection(); showSettings.value = false; selectedAuthor.value = null; selectedTag.value = tag; activeNav.value = 'tag'; activeSource.value = 'all'
+  updateRoute(`/tag/${encodeURIComponent(tag)}`)
 }
 function measurePostElement(post, element) {
   const height = Math.ceil(element.getBoundingClientRect().height)
@@ -582,12 +641,17 @@ function applyRoute() {
   const segments = window.location.pathname.split('/').filter(Boolean).map(segment => decodeURIComponent(segment))
   showSettings.value = false
   selectedAuthor.value = null
+  selectedTag.value = ''
   if (segments[0] === 'source' && validSources.has(segments[1])) {
     activeNav.value = 'source'; activeSource.value = segments[1]
     return
   }
   if (segments[0] === 'liked') {
     activeNav.value = 'liked'; activeSource.value = 'all'
+    return
+  }
+  if (segments[0] === 'tag' && segments[1]) {
+    activeNav.value = 'tag'; activeSource.value = 'all'; selectedTag.value = segments.slice(1).join('/')
     return
   }
   if (segments[0] === 'pulls') {
@@ -691,16 +755,17 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
           <img :src="authorProfile.avatar || sourceMeta[authorProfile.source].image" :alt="authorProfile.name">
           <div><p class="eyebrow">AUTHOR TIMELINE · {{ sourceMeta[authorProfile.source].label }}</p><h1>{{ authorProfile.name }}</h1><p class="subtitle">共 {{ authorProfile.count }} 条已拉取动态</p></div>
         </div>
-        <div class="header-actions"><button class="sync-button" :disabled="syncing" @click="runFullSync"><span :class="{ spin: syncing }">↻</span>{{ syncing ? '同步中' : '同步动态' }}</button></div>
+        <div class="header-actions"><button class="danger-outline-button" :disabled="postActionBusy !== '' || !authorProfile.count" @click="deleteAuthorPosts(authorProfile.source, authorProfile.name)">删除全部动态</button><button class="sync-button" :disabled="syncing" @click="runFullSync"><span :class="{ spin: syncing }">↻</span>{{ syncing ? '同步中' : '同步动态' }}</button></div>
       </header>
       <header v-else class="topbar">
 <div>
 <p class="eyebrow">{{ activeNav === 'liked' ? 'LIKED MOMENTS' : 'SAVED MOMENTS' }} · {{ new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' }) }}</p>
-<h1>{{ activeNav === 'liked' ? '我的点赞' : '早上好，拾光者' }} <span>{{ activeNav === 'liked' ? '♡' : '☼' }}</span>
+<h1>{{ activeNav === 'liked' ? '我的点赞' : selectedTag ? `#${selectedTag}` : '早上好，拾光者' }} <span>{{ activeNav === 'liked' ? '♡' : selectedTag ? '#' : '☼' }}</span>
 </h1>
-<p class="subtitle">{{ activeNav === 'liked' ? '这里收集了你标记为喜欢的动态。' : '这里有你关注的世界，和刚刚发生的一切。' }}</p>
+<p class="subtitle">{{ activeNav === 'liked' ? '这里收集了你标记为喜欢的动态。' : selectedTag ? `这里汇总了所有带有 #${selectedTag} 的动态。` : '这里有你关注的世界，和刚刚发生的一切。' }}</p>
 </div>
 <div class="header-actions">
+<button v-if="activeNav === 'liked'" class="secondary-button" :disabled="syncing" @click="syncWeiboLikes">{{ syncing ? '同步中…' : '同步微博点赞' }}</button>
 <button class="icon-button" @click="isDark = !isDark" :title="isDark ? '切换日间主题' : '切换夜间主题'">{{ isDark ? '☀' : '☾' }}</button>
 <button class="sync-button" @click="runFullSync">
 <span :class="{ spin: syncing }">↻</span> {{ syncing ? '同步中' : '立即同步' }}</button>
@@ -736,7 +801,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
 </section>
       <div class="section-heading">
 <div>
-<h2>{{ authorProfile ? `${authorProfile.name} 的动态` : activeNav === 'liked' ? '点赞动态' : '最新动态' }}</h2>
+<h2>{{ authorProfile ? `${authorProfile.name} 的动态` : activeNav === 'liked' ? '点赞动态' : selectedTag ? `#${selectedTag} 动态` : '最新动态' }}</h2>
 <p>{{ authorProfile ? `仅显示此作者 · ${filteredPosts.length} 条` : activeNav === 'liked' ? `共 ${likedCount} 条 · 按时间顺序排列` : '按时间顺序排列 · 自动同步于 10 分钟前' }}</p>
 </div>
 <div v-if="!authorProfile" class="filters">
@@ -745,11 +810,13 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
 <img v-else class="source-icon" :src="meta.image" :alt="`${meta.label}图标`">{{ meta.label }}</button>
 <button class="view-button">▦</button>
 </div>
+<div class="selection-actions"><button class="secondary-button" @click="selectionMode ? stopSelection() : selectionMode = true">{{ selectionMode ? '取消选择' : '多选删除' }}</button><button v-if="selectionMode" class="danger-outline-button" :disabled="!selectedPostCount || postActionBusy === 'batch-delete'" @click="deleteSelectedPosts">删除所选（{{ selectedPostCount }}）</button></div>
 </div>
       <p v-if="timelineMessage" class="timeline-message">{{ timelineMessage }}</p>
       <section ref="feedListElement" class="feed-list">
 <div v-if="timelineTopSpace" class="timeline-spacer" :style="{ height: `${timelineTopSpace}px` }" aria-hidden="true"></div>
-<article v-for="post in visiblePosts" :key="post.id" :ref="element => setPostCard(post, element)" class="post-card" :data-post-id="post.id">
+<article v-for="post in visiblePosts" :key="post.id" :ref="element => setPostCard(post, element)" :class="['post-card', { selected: selectedPostIds.includes(post.id) }]" :data-post-id="post.id">
+<label v-if="selectionMode" class="post-select-control" :title="`选择 ${post.author} 的这条动态`"><input type="checkbox" :checked="selectedPostIds.includes(post.id)" @change="togglePostSelection(post)"><span></span></label>
 <div class="post-head">
 <button class="post-author-avatar" type="button" :title="`查看 ${post.author} 的动态`" @click="openAuthor(post)"><img :src="post.avatar" :alt="post.author"></button>
 <div class="author">
@@ -764,7 +831,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
 <button v-for="(media, mediaIndex) in post.media" :key="media" :class="['media-frame', mediaShape(post, mediaIndex)]" type="button" :aria-label="`查看 ${post.author} 的第 ${mediaIndex + 1} 张图片`" @click="openLightbox(post, mediaIndex)"><img :src="media" alt="" loading="lazy" decoding="async" @load="setMediaShape(post, mediaIndex, $event); scheduleTimelineWindow()"></button>
 </div>
 <div class="tag-row">
-<span v-for="tag in post.tags" :key="tag"># {{ tag }}</span>
+<button v-for="tag in post.tags" :key="tag" type="button" :class="{ active: selectedTag === tag }" @click="openTag(tag)">#{{ tag }}</button>
 </div>
 <div class="post-foot">
 <span>◷ {{ new Date(post.published).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }}</span>
@@ -826,6 +893,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
         <p>仅收集图文动态与专栏，视频动态和转发视频不会进入时间线。账号凭证请在设置页面管理。</p>
         <div class="bili-account"><span>已连接 B 站账号 · UID {{ biliAccount.userId }}</span><button @click="showBilibili = false; openSettings('platforms')">管理凭证</button></div>
         <form class="bili-search" @submit.prevent="searchBilibili"><input v-model="biliKeyword" placeholder="搜索 UP 主昵称" maxlength="40" required><button :disabled="biliBusy">⌕ 搜索</button></form>
+        <label class="subscription-tag-field"><span>作者标签</span><input v-model="biliSubscriptionTags" placeholder="#标签1 #标签2" maxlength="120"><small>订阅搜索结果中的作者时，会同时保存这些标签。</small></label>
         <label class="history-option"><input v-model="biliIncludePast" type="checkbox"> 首次订阅时拉取历史图文与专栏</label>
         <div class="bili-results">
           <article v-for="user in biliResults" :key="user.userId"><img :src="user.avatar" :alt="user.name"><div><strong>{{ user.name }}</strong><span>UID {{ user.userId }} · 粉丝 {{ formatFans(user.fans) }}</span><p>{{ user.description || '这位 UP 主还没有填写简介' }}</p></div><button @click="subscribeBilibili(user)" :disabled="biliBusy">订阅</button></article>
@@ -842,6 +910,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
         <p>搜索并订阅微博博主，后续动态将按计划进入时间线。账号凭证请在设置页面管理。</p>
         <div class="bili-account"><span>已连接微博账号 · {{ weiboAccount.userName || `UID ${weiboAccount.userId}` }}</span><button @click="showWeibo = false; openSettings('platforms')">管理凭证</button></div>
         <form class="bili-search" @submit.prevent="searchWeibo"><input v-model="weiboKeyword" placeholder="搜索微博博主昵称" maxlength="40" required><button :disabled="weiboBusy">⌕ 搜索</button></form>
+        <label class="subscription-tag-field"><span>作者标签</span><input v-model="weiboSubscriptionTags" placeholder="#标签1 #标签2" maxlength="120"><small>订阅搜索结果中的作者时，会同时保存这些标签。</small></label>
         <label class="history-option"><input v-model="weiboIncludePast" type="checkbox"> 首次订阅时拉取历史动态</label>
         <div class="bili-results">
           <article v-for="user in weiboResults" :key="user.userId"><img :src="user.avatar" :alt="user.name"><div><strong>{{ user.name }}</strong><span>UID {{ user.userId }} · 粉丝 {{ formatFans(user.fans) }}</span><p>{{ user.description || '这位博主还没有填写简介' }}</p></div><button @click="subscribeWeibo(user)" :disabled="weiboBusy">订阅</button></article>
@@ -917,12 +986,13 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
           <div class="configured-source-heading"><h3>已配置作者</h3><span>{{ selectedPlatform.feeds.length }} 个</span></div>
           <article v-for="feed in selectedPlatform.feeds" :key="feed.id">
             <img class="configured-source-avatar" :src="feed.avatar || selectedPlatform.image" :alt="`${feed.name}头像`" @error="$event.target.src = selectedPlatform.image">
-            <div><strong>{{ feed.name }}</strong><span>{{ feed.handle }} · {{ feed.schedule }}</span><small>{{ feed.storagePath || `${selectedPlatform.path}/${feed.name}` }}</small></div>
+            <div><strong>{{ feed.name }}</strong><span>{{ feed.handle }} · {{ feed.schedule }}</span><div v-if="feed.tags?.length" class="source-tag-preview"><b v-for="tag in feed.tags" :key="tag">#{{ tag }}</b></div><small>{{ feed.storagePath || `${selectedPlatform.path}/${feed.name}` }}</small></div>
             <em :class="{ disabled: !feed.enabled }">{{ feed.enabled ? '同步中' : '已停用' }}</em>
             <div class="source-row-actions">
               <button class="source-icon-action" title="立即拉取最新动态" aria-label="立即拉取最新动态" @click="syncSource(feed)" :disabled="sourceActionBusy !== ''"><span :class="{ spin: sourceActionBusy === `sync:${feed.id}` }">↻</span></button>
               <button class="source-icon-action" title="重新拉取全部历史动态" aria-label="重新拉取全部历史动态" @click="syncSource(feed, true)" :disabled="sourceActionBusy !== ''"><span :class="{ spin: sourceActionBusy === `resync:${feed.id}` }">⟳</span></button>
               <button class="source-icon-action" title="来源设置" aria-label="来源设置" @click="openFeedSettings(feed)"><span>⚙</span></button>
+              <button class="source-icon-action delete-posts-button" title="删除此作者全部动态" aria-label="删除此作者全部动态" @click="deleteAuthorPosts(feed.source, feed.name)" :disabled="sourceActionBusy !== '' || postActionBusy !== ''"><span>⌫</span></button>
               <button class="source-icon-action delete-source-button" title="删除来源" aria-label="删除来源" @click="deleteSource(feed)" :disabled="sourceActionBusy !== ''"><span>×</span></button>
             </div>
           </article>
@@ -930,7 +1000,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
         </div>
       </div>
     </div>
-    <div v-if="showFeedSettings && selectedFeed" class="modal-backdrop feed-detail-backdrop" @click.self="showFeedSettings = false"><div class="modal feed-settings-modal"><button class="modal-close" @click="showFeedSettings = false">×</button><p class="eyebrow">SOURCE DETAILS</p><h2>{{ selectedFeed.name }}</h2><p>{{ sourceMeta[selectedFeed.source]?.label }} · {{ selectedFeed.handle }}</p><form class="settings-form" @submit.prevent="saveFeedSettings"><label class="switch-row"><span>启用自动同步</span><input v-model="selectedFeed.enabled" type="checkbox"></label><label>执行计划</label><select v-model="selectedFeed.schedule"><option>每 1 小时</option><option>每 6 小时</option><option>每 12 小时</option><option>每天 20:00</option></select><label class="switch-row"><span>首次拉取历史内容</span><input v-model="selectedFeed.includePast" type="checkbox"></label><div v-if="selectedFeed.source === 'bilibili'" class="content-scope"><strong>内容范围</strong><span>图文动态（DRAW）</span><span>专栏（ARTICLE）</span><small>视频及转发视频始终过滤，无法在此开启。</small></div><p v-if="settingsError" class="login-error">{{ settingsError }}</p><button class="login-button" :disabled="settingsBusy">保存来源设置</button></form></div></div>
+    <div v-if="showFeedSettings && selectedFeed" class="modal-backdrop feed-detail-backdrop" @click.self="showFeedSettings = false"><div class="modal feed-settings-modal"><button class="modal-close" @click="showFeedSettings = false">×</button><p class="eyebrow">SOURCE DETAILS</p><h2>{{ selectedFeed.name }}</h2><p>{{ sourceMeta[selectedFeed.source]?.label }} · {{ selectedFeed.handle }}</p><form class="settings-form" @submit.prevent="saveFeedSettings"><label class="switch-row"><span>启用自动同步</span><input v-model="selectedFeed.enabled" type="checkbox"></label><label>执行计划</label><select v-model="selectedFeed.schedule"><option>每 1 小时</option><option>每 6 小时</option><option>每 12 小时</option><option>每天 20:00</option></select><label>作者标签</label><input v-model="selectedFeed.tagInput" placeholder="#标签1 #标签2" maxlength="120"><p class="credential-note">保存后会同步更新此作者已经拉取的全部动态。</p><label class="switch-row"><span>首次拉取历史内容</span><input v-model="selectedFeed.includePast" type="checkbox"></label><div v-if="selectedFeed.source === 'bilibili'" class="content-scope"><strong>内容范围</strong><span>图文动态（DRAW）</span><span>专栏（ARTICLE）</span><small>视频及转发视频始终过滤，无法在此开启。</small></div><p v-if="settingsError" class="login-error">{{ settingsError }}</p><button class="login-button" :disabled="settingsBusy">保存来源设置</button></form></div></div>
     <div v-if="confirmDialog.open" class="confirm-dialog-layer" @click.self="closeConfirmDialog(false)">
       <section class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
         <div :class="['confirm-dialog-icon', confirmDialog.tone]">!</div>
