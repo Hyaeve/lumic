@@ -786,3 +786,19 @@ func TestConfigurationBackupExportAndRestore(t *testing.T) {
 		t.Fatalf("restore failed: status=%d auth=%#v platforms=%#v body=%s", restoreResponse.Code, auth, platforms.config, restoreResponse.Body.String())
 	}
 }
+
+func TestSignedSessionRemainsValidAcrossStoreRestart(t *testing.T) {
+	key := []byte("persistent-session-signing-key")
+	first := &SessionStore{tokens: make(map[string]time.Time), key: key}
+	token, err := first.create()
+	if err != nil {
+		t.Fatalf("create signed session: %v", err)
+	}
+	restarted := &SessionStore{tokens: make(map[string]time.Time), key: key}
+	if !restarted.valid(token) {
+		t.Fatal("signed session became invalid after store restart")
+	}
+	if restarted.valid(token + "tampered") {
+		t.Fatal("tampered signed session was accepted")
+	}
+}

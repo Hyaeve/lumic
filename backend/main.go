@@ -5,8 +5,10 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
@@ -358,6 +360,7 @@ type AuthBackup struct {
 type SessionStore struct {
 	sync.RWMutex
 	tokens map[string]time.Time
+	key    []byte
 }
 
 type AuthConfig struct {
@@ -701,29 +704,26 @@ func configurationBackupHandler(auth *AuthConfig, platforms *BilibiliStore) http
 }
 
 func (s *SessionStore) create() (string, error) {
-	bytes := make([]byte, 32)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", err
-	}
-	token := base64.RawURLEncoding.EncodeToString(bytes)
-	s.Lock()
-	s.tokens[token] = time.Now().Add(12 * time.Hour)
-	s.Unlock()
-	return token, nil
+	expires := time.Now().Add(30 * 24 * time.Hour).Unix()
+	payload := strconv.FormatInt(expires, 10)
+	mac := hmac.New(sha256.New, s.key)
+	_, _ = mac.Write([]byte(payload))
+	return payload + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
 }
 
 func (s *SessionStore) valid(token string) bool {
-	if token == "" {
+	parts := strings.Split(token, ".")
+	if len(parts) != 2 {
 		return false
 	}
-	s.Lock()
-	defer s.Unlock()
-	expires, ok := s.tokens[token]
-	if !ok || time.Now().After(expires) {
-		delete(s.tokens, token)
+	expires, err := strconv.ParseInt(parts[0], 10, 64)
+	signature, decodeErr := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil || decodeErr != nil || time.Now().Unix() > expires {
 		return false
 	}
-	return true
+	mac := hmac.New(sha256.New, s.key)
+	_, _ = mac.Write([]byte(parts[0]))
+	return hmac.Equal(signature, mac.Sum(nil))
 }
 
 func hashPassword(password string, salt []byte) string {
@@ -763,7 +763,7 @@ func loginHandler(sessions *SessionStore, auth *AuthConfig) http.HandlerFunc {
 			http.Error(w, "unable to create session", http.StatusInternalServerError)
 			return
 		}
-		http.SetCookie(w, &http.Cookie{Name: "lumic_session", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: os.Getenv("LUMIC_COOKIE_SECURE") == "true", MaxAge: 43200})
+		http.SetCookie(w, &http.Cookie{Name: "lumic_session", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: os.Getenv("LUMIC_COOKIE_SECURE") == "true", MaxAge: 30 * 24 * 60 * 60, Expires: time.Now().Add(30 * 24 * time.Hour)})
 		writeJSON(w, map[string]string{"status": "ok"})
 	}
 }
@@ -3845,7 +3845,7 @@ func main() {
 		log.Fatal("unable to persist source storage paths: ", err)
 	}
 	bilibili.startScheduler()
-	sessions := &SessionStore{tokens: make(map[string]time.Time)}
+	sessions := &SessionStore{tokens: make(map[string]time.Time), key: bilibili.key}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/login", loginHandler(sessions, auth))
 	mux.HandleFunc("/api/settings", settingsHandler(auth))
