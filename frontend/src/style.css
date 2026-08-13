@@ -114,6 +114,7 @@ button { border: 0; font: inherit; cursor: pointer; color: inherit; }
 .content:has(.timeline-hero) .stats { margin-top: 34px; }
 .content:has(.timeline-hero) .section-heading { margin-top: 34px; margin-bottom: 18px; }
 .pulls-page .subscription-platforms { margin-top: 4px; }
+.content.pulls-page { padding-top: 28px; }
 .pulls-page .platform-source-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .pulls-page .platform-source-card { min-height: 250px; padding: 18px; border-radius: 8px; box-shadow: none; }
 .pulls-page .platform-source-card::before { display: none; }
