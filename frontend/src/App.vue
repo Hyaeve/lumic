@@ -875,9 +875,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
 </section>
       <div class="section-heading">
 <div v-if="!authorProfile" class="filters">
-<button v-for="(meta, key) in { all: { label: '全部', icon: '✦' }, ...sourceMeta }" :key="key" :class="{ selected: activeSource === key }" @click="activeSource = key">
-<span v-if="key === 'all'">✦</span>
-<img v-else class="source-icon" :src="meta.image" :alt="`${meta.label}图标`">{{ meta.label }}</button>
+<button :class="{ selected: activeSource === 'all' }" @click="activeSource = 'all'"><span>✦</span>全部</button>
 <div class="timeline-sort" role="group" aria-label="动态时间排序"><button type="button" :class="{ selected: timelineSort === 'newest' }" @click="timelineSort = 'newest'">最新</button><button type="button" :class="{ selected: timelineSort === 'oldest' }" @click="timelineSort = 'oldest'">最早</button></div>
 </div>
 <div class="selection-actions"><button class="secondary-button" @click="selectionMode ? stopSelection() : selectionMode = true">{{ selectionMode ? '取消选择' : '多选删除' }}</button><button v-if="selectionMode" class="danger-outline-button" :disabled="!selectedPostCount || postActionBusy === 'batch-delete'" @click="deleteSelectedPosts">删除所选（{{ selectedPostCount }}）</button></div>

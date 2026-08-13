@@ -37,6 +37,13 @@ button { border: 0; font: inherit; cursor: pointer; color: inherit; }
 .settings-page-inner > .settings-pane + .settings-pane, .settings-page-inner > .settings-pane + .settings-window-grid, .settings-window-grid + .settings-pane { margin-top: 18px; }
 .settings-window-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; gap: 18px; margin-top: 18px; }
 .settings-window-grid .settings-pane { min-width: 0; min-height: 0; }
+.settings-page .settings-window-grid .settings-pane { min-height: 0; padding: 20px 22px 22px; }
+.settings-page .settings-window-grid .pane-heading { margin-bottom: 16px; padding-bottom: 14px; }
+.settings-page .settings-window-grid .compact-settings-pane .settings-form { margin-top: 14px; }
+.settings-page .settings-window-grid .settings-form { gap: 5px; }
+.settings-page .settings-window-grid .settings-form input { height: 38px; margin-bottom: 6px; }
+.settings-page .settings-window-grid .setting-status { margin-bottom: 12px; padding: 8px 10px; }
+.settings-page .settings-window-grid .login-button, .settings-page .settings-window-grid .secondary-button, .settings-page .settings-window-grid .restore-file-button { height: 40px; }
 .settings-page .settings-tabs { position: sticky; top: 0; z-index: 5; display: flex; gap: 28px; margin: 0 0 22px; padding: 0 2px; background: #f6f8f6e8; border-bottom: 1px solid var(--line); border-radius: 0; backdrop-filter: blur(14px); }
 .dark .settings-page .settings-tabs { background: #17211fe8; }
 .settings-page .settings-tabs button { position: relative; flex: none; min-width: 0; padding: 14px 2px 13px; color: var(--muted); background: transparent; border-radius: 0; font-size: 12px; font-weight: 500; }
@@ -104,6 +111,8 @@ button { border: 0; font: inherit; cursor: pointer; color: inherit; }
 .timeline-hero .eyebrow { margin-bottom: 7px; }
 .timeline-hero h1 { font-size: 29px; }
 .timeline-hero .subtitle { margin-top: 6px; }
+.content:has(.timeline-hero) .stats { margin-top: 34px; }
+.content:has(.timeline-hero) .section-heading { margin-top: 34px; margin-bottom: 18px; }
 .pulls-page .subscription-platforms { margin-top: 4px; }
 .pulls-page .platform-source-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .pulls-page .platform-source-card { min-height: 250px; padding: 18px; border-radius: 8px; box-shadow: none; }
