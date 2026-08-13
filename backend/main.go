@@ -341,6 +341,18 @@ type ContentData struct {
 	Feeds []SourceConfig `json:"feeds"`
 }
 
+type ConfigurationBackup struct {
+	Version    int            `json:"version"`
+	ExportedAt time.Time      `json:"exportedAt"`
+	Auth       AuthBackup     `json:"auth"`
+	Platforms  BilibiliConfig `json:"platforms"`
+}
+
+type AuthBackup struct {
+	Username     string `json:"username"`
+	PasswordHash string `json:"passwordHash"`
+}
+
 type SessionStore struct {
 	sync.RWMutex
 	tokens map[string]time.Time
@@ -625,6 +637,67 @@ func (b *BilibiliStore) save() error {
 	return atomicWriteFile(bilibiliFile, data, 0600)
 }
 
+func configurationBackupHandler(auth *AuthConfig, platforms *BilibiliStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			auth.RLock()
+			authBackup := AuthBackup{Username: auth.Username, PasswordHash: auth.PasswordHash}
+			auth.RUnlock()
+			platforms.RLock()
+			platformBackup := platforms.config
+			platforms.RUnlock()
+			w.Header().Set("Content-Disposition", `attachment; filename="lumic-config-backup.json"`)
+			writeJSON(w, ConfigurationBackup{Version: 1, ExportedAt: time.Now().UTC(), Auth: authBackup, Platforms: platformBackup})
+		case http.MethodPut:
+			var backup ConfigurationBackup
+			decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20))
+			if decoder.Decode(&backup) != nil || backup.Version != 1 || strings.TrimSpace(backup.Auth.Username) == "" || strings.TrimSpace(backup.Auth.PasswordHash) == "" {
+				writeAPIError(w, http.StatusBadRequest, "备份文件无效或版本不受支持")
+				return
+			}
+			if backup.Platforms.Subscriptions == nil {
+				backup.Platforms.Subscriptions = []SourceConfig{}
+			}
+			if backup.Platforms.WeiboSubscriptions == nil {
+				backup.Platforms.WeiboSubscriptions = []SourceConfig{}
+			}
+			auth.Lock()
+			previousUsername, previousHash := auth.Username, auth.PasswordHash
+			auth.Username, auth.PasswordHash = strings.TrimSpace(backup.Auth.Username), backup.Auth.PasswordHash
+			auth.Unlock()
+			platforms.Lock()
+			previousPlatforms := platforms.config
+			platforms.config = backup.Platforms
+			platforms.Unlock()
+			if err := auth.save(); err != nil {
+				auth.Lock()
+				auth.Username, auth.PasswordHash = previousUsername, previousHash
+				auth.Unlock()
+				platforms.Lock()
+				platforms.config = previousPlatforms
+				platforms.Unlock()
+				writeAPIError(w, http.StatusInternalServerError, "无法恢复登录配置")
+				return
+			}
+			if err := platforms.save(); err != nil {
+				auth.Lock()
+				auth.Username, auth.PasswordHash = previousUsername, previousHash
+				auth.Unlock()
+				platforms.Lock()
+				platforms.config = previousPlatforms
+				platforms.Unlock()
+				_ = auth.save()
+				writeAPIError(w, http.StatusInternalServerError, "无法恢复平台配置")
+				return
+			}
+			writeJSON(w, map[string]string{"status": "restored", "message": "配置已恢复"})
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}
+}
+
 func (s *SessionStore) create() (string, error) {
 	bytes := make([]byte, 32)
 	if _, err := rand.Read(bytes); err != nil {
@@ -774,6 +847,10 @@ func demoStore() *Store {
 	}
 }
 
+func emptyStore() *Store {
+	return &Store{posts: []Post{}, feeds: []SourceConfig{}}
+}
+
 func loadStore() (*Store, error) {
 	if value := strings.TrimSpace(os.Getenv("LUMIC_CONTENT_FILE")); value != "" {
 		contentFile = value
@@ -799,7 +876,7 @@ func loadStoreFile(path string) (*Store, error) {
 	if !os.IsNotExist(err) {
 		return nil, err
 	}
-	store := demoStore()
+	store := emptyStore()
 	store.file = path
 	store.Lock()
 	err = store.saveLocked()
@@ -3749,6 +3826,7 @@ func main() {
 	mux.HandleFunc("/api/bilibili/search", bilibili.searchHandler)
 	mux.HandleFunc("/api/bilibili/subscriptions", bilibili.subscriptionsHandler)
 	mux.HandleFunc("/api/project/settings", bilibili.projectSettingsHandler)
+	mux.HandleFunc("/api/configuration/backup", configurationBackupHandler(auth, bilibili))
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, map[string]string{"status": "ok"}) })
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")

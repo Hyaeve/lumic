@@ -13,7 +13,7 @@ import twitterLineIcon from '../icon/推特-1.png'
 const authenticated = ref(false)
 const loginError = ref('')
 const showSettings = ref(false)
-const settingsTab = ref('sources')
+const settingsTab = ref('settings')
 const settingsError = ref('')
 const settingsBusy = ref(false)
 const settingsForm = ref({ username: '', currentPassword: '', newPassword: '' })
@@ -86,14 +86,6 @@ let postResizeObserver = null
 const lightbox = ref({ open: false, media: [], index: 0, author: '', scale: 1, x: 0, y: 0, dragging: false })
 let lightboxDrag = null
 
-const fallbackPosts = [
-  { id: 'wb-001', source: 'weibo', author: '林间拾光', avatar: 'https://i.pravatar.cc/96?img=47', caption: '把黄昏收藏进今天的相册里。风经过树梢，带来一点夏天的回声。', tags: ['日常', '摄影'], published: new Date(Date.now() - 42 * 60000), liked: true },
-  { id: 'px-002', source: 'pixiv', author: 'Aoi Sora', avatar: 'https://i.pravatar.cc/96?img=32', caption: '新作｜雨后的玻璃温室，想画出潮湿空气里柔软的光。', tags: ['原创', '插画', '光影'], published: new Date(Date.now() - 2 * 3600000), media: ['https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=900&q=80'] },
-  { id: 'bl-003', source: 'bilibili', author: '慢慢生活研究所', avatar: 'https://i.pravatar.cc/96?img=12', caption: '一期关于城市散步的记录，和你分享最近发现的三家小店。', tags: ['VLOG', '城市漫游'], published: new Date(Date.now() - 5 * 3600000) },
-  { id: 'wb-004', source: 'weibo', author: '山茶花开时', avatar: 'https://i.pravatar.cc/96?img=5', caption: '今日份蓝色时刻。愿我们都能留住一些不被打扰的浪漫。', tags: ['随手拍', '生活'], published: new Date(Date.now() - 8 * 3600000), liked: true },
-  { id: 'px-005', source: 'pixiv', author: 'Mori', avatar: 'https://i.pravatar.cc/96?img=20', caption: '夏日习作 #sketch #summer', tags: ['sketch', 'summer'], published: new Date(Date.now() - 24 * 3600000) }
-]
-
 const sourceMeta = {
   bilibili: { label: '哔哩哔哩', icon: 'bl', image: bilibiliIcon, lineImage: bilibiliLineIcon, color: 'blue' },
   weibo: { label: '微博', icon: 'wb', image: weiboIcon, lineImage: weiboLineIcon, color: 'coral' },
@@ -101,7 +93,6 @@ const sourceMeta = {
   twitter: { label: '推特', icon: 'tw', image: twitterIcon, lineImage: twitterLineIcon, color: 'twitter' }
 }
 const validSources = new Set(Object.keys(sourceMeta))
-const validSettingsTabs = new Set(['sources', 'platforms', 'network', 'security'])
 const likedCount = computed(() => posts.value.filter(post => post.liked).length)
 const selectedPostCount = computed(() => selectedPostIds.value.length)
 const filteredPosts = computed(() => {
@@ -155,16 +146,16 @@ async function loadData() {
     if (!postResponse.ok || !feedResponse.ok || !biliFeedResponse.ok || !weiboFeedResponse.ok) throw new Error('api unavailable')
     posts.value = await postResponse.json()
     feeds.value = [...await feedResponse.json(), ...await biliFeedResponse.json(), ...await weiboFeedResponse.json()]
-  } catch { posts.value = fallbackPosts; feeds.value = [] }
+  } catch { posts.value = []; feeds.value = [] }
 }
 async function syncNow() {
   syncing.value = true
   try { await fetch('/api/sync', { method: 'POST' }) } catch {}
   setTimeout(() => { syncing.value = false }, 900)
 }
-async function openSettings(tab = 'sources', updateHistory = true) {
-  settingsTab.value = tab; showSettings.value = true; activeNav.value = 'settings'; settingsError.value = ''; proxyMessage.value = ''; pixivError.value = ''; weiboError.value = ''
-  if (updateHistory) updateRoute(`/settings/${tab}`)
+async function openSettings(_section = 'settings', updateHistory = true) {
+  settingsTab.value = 'settings'; showSettings.value = true; activeNav.value = 'settings'; settingsError.value = ''; proxyMessage.value = ''; pixivError.value = ''; weiboError.value = ''
+  if (updateHistory) updateRoute('/settings')
   try {
     const [projectResponse, biliResponse, pixivResponse, weiboResponse] = await Promise.all([fetch('/api/project/settings'), fetch('/api/bilibili/account'), fetch('/api/pixiv/account'), fetch('/api/weibo/account')])
     if (projectResponse.ok) proxyStatus.value = await projectResponse.json()
@@ -283,6 +274,34 @@ async function saveWeiboAccount() {
     weiboCredentials.value = { cookie: '', userId: '' }
   } catch (error) { weiboError.value = error.message } finally { weiboBusy.value = false }
 }
+async function downloadConfigurationBackup() {
+  settingsBusy.value = true; settingsError.value = ''; proxyMessage.value = ''
+  try {
+    const response = await fetch('/api/configuration/backup')
+    if (!response.ok) throw new Error(await responseError(response, '配置备份失败'))
+    const blob = await response.blob()
+    const link = document.createElement('a')
+    link.href = URL.createObjectURL(blob)
+    link.download = `lumic-config-${new Date().toISOString().slice(0, 10)}.json`
+    link.click()
+    URL.revokeObjectURL(link.href)
+    proxyMessage.value = '配置备份已下载'
+  } catch (error) { settingsError.value = error.message } finally { settingsBusy.value = false }
+}
+async function restoreConfiguration(event) {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  if (!file) return
+  const confirmed = await askConfirm({ title: '恢复配置', message: '恢复将覆盖当前登录账号、平台凭证、代理和订阅来源。动态记录与图片不会改变，确定继续吗？', confirmText: '恢复配置' })
+  if (!confirmed) return
+  settingsBusy.value = true; settingsError.value = ''; proxyMessage.value = ''
+  try {
+    const response = await fetch('/api/configuration/backup', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: await file.text() })
+    if (!response.ok) throw new Error(await responseError(response, '配置恢复失败'))
+    proxyMessage.value = '配置已恢复，请使用备份中的账号信息重新登录'
+    await loadData()
+  } catch (error) { settingsError.value = error.message } finally { settingsBusy.value = false }
+}
 function postDateTime(date) {
   return new Date(date).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
 }
@@ -377,7 +396,7 @@ function openPlatformSettings(platform) {
 }
 function managePlatformCredentials(platformKey) {
   selectedPlatform.value = null
-  selectSettingsTab('platforms')
+  openSettings()
   if (platformKey === 'bilibili' && !biliAccount.value.configured) startBilibiliQR()
   if (platformKey === 'weibo' && !weiboAccount.value.configured) startWeiboQR()
 }
@@ -709,9 +728,8 @@ function applyRoute() {
     return
   }
   if (segments[0] === 'settings') {
-    const tab = validSettingsTabs.has(segments[1]) ? segments[1] : 'sources'
-    activeNav.value = 'settings'; showSettings.value = true; settingsTab.value = tab
-    openSettings(tab, false)
+    activeNav.value = 'settings'; showSettings.value = true; settingsTab.value = 'settings'
+    openSettings('settings', false)
     return
   }
   if (segments[0] === 'author' && validSources.has(segments[1]) && segments[2]) {
@@ -720,11 +738,6 @@ function applyRoute() {
   }
   activeNav.value = 'all'; activeSource.value = 'all'
   if (segments.length) updateRoute('/', true)
-}
-function selectSettingsTab(tab) {
-  settingsTab.value = tab
-  settingsError.value = ''
-  updateRoute(`/settings/${tab}`)
 }
 function formatFans(count) { return count >= 10000 ? `${(count / 10000).toFixed(1)}万` : count }
 function platformEmptyMessage(platformKey) {
@@ -791,7 +804,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
 <span class="nav-line-symbol">♡</span> 我的点赞 <b>{{ likedCount }}</b>
 </button>
         <button :class="{ active: activeNav === 'pulls' }" @click="navigateTo('pulls')">
-<span class="nav-line-symbol">↻</span> 拉取列表 <b>{{ feeds.length }}</b>
+<span class="nav-line-symbol">▦</span> 订阅平台 <b>{{ feeds.length }}</b>
 </button>
       </nav>
       <div class="sidebar-bottom">
@@ -896,8 +909,20 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
 </section>
     </main>
     <main v-if="!showSettings && activeNav === 'pulls'" class="content pulls-page">
-      <header class="topbar"><div><p class="eyebrow">SOURCE PULLS · {{ feeds.length }} SOURCES</p><h1>拉取列表</h1><p class="subtitle">管理订阅作者，并按来源拉取最新动态。</p></div><div class="header-actions"><button class="sync-button" :disabled="syncing" @click="runFullSync"><span :class="{ spin: syncing }">↻</span>{{ syncing ? '拉取中' : '全部拉取' }}</button></div></header>
+      <header class="topbar"><div><p class="eyebrow">SUBSCRIPTION PLATFORMS · {{ feeds.length }} SOURCES</p><h1>订阅平台</h1><p class="subtitle">集中管理平台连接、订阅作者和动态拉取。</p></div><div class="header-actions"><button class="sync-button" :disabled="syncing" @click="runFullSync"><span :class="{ spin: syncing }">↻</span>{{ syncing ? '拉取中' : '全部拉取' }}</button></div></header>
       <p v-if="timelineMessage" class="timeline-message">{{ timelineMessage }}</p>
+      <section class="subscription-platforms">
+        <div class="section-heading"><div><h2>平台来源</h2><p>查看账号连接状态与订阅数量。</p></div><span>{{ platformCards.filter(platform => platform.configured).length }} / 4 已连接</span></div>
+        <div class="platform-source-grid">
+          <article v-for="platform in platformCards" :key="platform.key" :class="['platform-source-card', platform.key]" @contextmenu.prevent="openPlatformSettings(platform)">
+            <div class="platform-card-head"><img class="source-icon" :src="platform.image" :alt="`${platform.label}图标`"><span :class="['connection-dot', { online: platform.configured }]">{{ platform.configured ? '已连接' : '未连接' }}</span></div>
+            <h4>{{ platform.label }}</h4><p>{{ platform.description }}</p>
+            <dl><div><dt>账号</dt><dd>{{ platform.account }}</dd></div><div><dt>订阅来源</dt><dd>{{ platform.feeds.length }} 个</dd></div><div><dt>内容目录</dt><dd>{{ platform.path }}</dd></div></dl>
+            <button @click="openPlatformSettings(platform)">管理平台 <span>→</span></button>
+          </article>
+        </div>
+      </section>
+      <div class="section-heading subscription-list-heading"><div><h2>订阅作者</h2><p>查看同步状态并手动拉取内容。</p></div><span>{{ feeds.length }} 个来源</span></div>
       <section class="pull-list">
         <article v-for="feed in feeds" :key="feed.id" class="pull-card">
           <img class="pull-avatar" :src="feed.avatar || sourceMeta[feed.source]?.image || '/favicon.ico'" :alt="feed.name" @error="$event.target.src = sourceMeta[feed.source]?.image || '/favicon.ico'">
@@ -970,19 +995,8 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
     </div>
     <main v-if="showSettings" class="settings-page">
       <div class="settings-page-inner">
-        <nav class="settings-tabs" aria-label="设置分类">
-          <button :class="{ active: settingsTab === 'sources' }" @click="selectSettingsTab('sources')">来源管理</button>
-          <button :class="{ active: settingsTab === 'platforms' }" @click="selectSettingsTab('platforms')">平台凭证</button>
-          <button :class="{ active: settingsTab === 'network' }" @click="selectSettingsTab('network')">网络代理</button>
-          <button :class="{ active: settingsTab === 'security' }" @click="selectSettingsTab('security')">登录安全</button>
-        </nav>
-        <section v-if="settingsTab === 'network'" class="settings-pane compact-settings-pane">
-          <div class="pane-heading"><div><h3>网络代理</h3><p>统一配置后端访问外部平台时使用的 HTTP、HTTPS 或 SOCKS5 代理。</p></div><span>{{ proxyStatus.proxyEnabled ? '已启用' : '未启用' }}</span></div>
-          <div v-if="proxyStatus.proxyEnabled" class="setting-status">当前代理：{{ proxyStatus.proxyUrl }}</div>
-          <form class="settings-form" @submit.prevent="saveProxy" autocomplete="off"><label>代理地址</label><input v-model="proxyForm.proxyUrl" placeholder="socks5://host.docker.internal:7890"><p class="credential-note">Docker 中的 127.0.0.1 指向容器自身；访问宿主机代理请使用 host.docker.internal。</p><div class="form-actions"><button type="button" class="secondary-button" @click="testProxy" :disabled="settingsBusy">测试连接</button><button class="login-button" :disabled="settingsBusy">保存代理</button><button type="button" class="danger-link" @click="proxyForm.proxyUrl = ''; saveProxy()">关闭代理</button></div></form>
-          <p v-if="proxyMessage" class="success-message">{{ proxyMessage }}</p>
-        </section>
-        <section v-if="settingsTab === 'platforms'" class="settings-pane platform-credentials-pane">
+        <header class="settings-workspace-header"><div><p class="eyebrow">PROJECT SETTINGS</p><h2>设置</h2><p>管理平台凭证、网络连接、登录安全和配置备份。</p></div></header>
+        <section class="settings-pane platform-credentials-pane">
           <div class="pane-heading"><div><h3>平台凭证</h3><p>各平台凭证仅由服务端验证，并加密保存在本地数据目录。</p></div><span>4 个平台</span></div>
           <div class="platform-auth-grid">
             <article class="platform-auth-card bilibili">
@@ -1009,18 +1023,23 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
             </article>
           </div>
         </section>
-        <section v-if="settingsTab === 'sources'" class="settings-pane source-platform-pane">
-          <div class="pane-heading"><div><h3>来源管理</h3><p>集中查看平台连接状态、订阅作者和内容存储位置。</p></div><span>4 个平台</span></div>
-          <div class="platform-source-grid">
-            <article v-for="platform in platformCards" :key="platform.key" :class="['platform-source-card', platform.key]" @contextmenu.prevent="openPlatformSettings(platform)">
-              <div class="platform-card-head"><img class="source-icon" :src="platform.image" :alt="`${platform.label}图标`"><span :class="['connection-dot', { online: platform.configured }]">{{ platform.configured ? '已连接' : '未连接' }}</span></div>
-              <h4>{{ platform.label }}</h4><p>{{ platform.description }}</p>
-              <dl><div><dt>账号</dt><dd>{{ platform.account }}</dd></div><div><dt>已配置来源</dt><dd>{{ platform.feeds.length }} 个</dd></div><div><dt>内容目录</dt><dd>{{ platform.path }}</dd></div></dl>
-              <button @click="openPlatformSettings(platform)">详细设置 <span>→</span></button>
-            </article>
+        <div class="settings-window-grid">
+          <section class="settings-pane compact-settings-pane">
+            <div class="pane-heading"><div><h3>网络代理</h3><p>配置后端访问外部平台时使用的代理。</p></div><span>{{ proxyStatus.proxyEnabled ? '已启用' : '未启用' }}</span></div>
+            <div v-if="proxyStatus.proxyEnabled" class="setting-status">当前代理：{{ proxyStatus.proxyUrl }}</div>
+            <form class="settings-form" @submit.prevent="saveProxy" autocomplete="off"><label>代理地址</label><input v-model="proxyForm.proxyUrl" placeholder="socks5://host.docker.internal:7890"><div class="form-actions"><button type="button" class="secondary-button" @click="testProxy" :disabled="settingsBusy">测试</button><button class="login-button" :disabled="settingsBusy">保存代理</button><button type="button" class="danger-link" @click="proxyForm.proxyUrl = ''; saveProxy()">关闭</button></div></form>
+            <p v-if="proxyMessage" class="success-message">{{ proxyMessage }}</p>
+          </section>
+          <section class="settings-pane compact-settings-pane"><div class="pane-heading"><div><h3>账号管理</h3><p>更新 Lumic 本地管理账号和密码。</p></div><span>密码至少 8 位</span></div><form class="settings-form" @submit.prevent="saveSettings" autocomplete="off"><label>新账号</label><input v-model="settingsForm.username" required minlength="3" autocomplete="off"><label>当前密码</label><input v-model="settingsForm.currentPassword" type="password" required autocomplete="current-password"><label>新密码</label><input v-model="settingsForm.newPassword" type="password" required minlength="8" autocomplete="new-password"><button class="login-button" type="submit" :disabled="settingsBusy">{{ settingsBusy ? '保存中…' : '保存账号' }}</button></form></section>
+        </div>
+        <section class="settings-pane backup-settings-pane">
+          <div class="pane-heading"><div><h3>备份与恢复</h3><p>备份登录设置、平台凭证、代理和订阅来源，不包含动态记录及图片文件。</p></div><span>JSON</span></div>
+          <div class="backup-action-grid">
+            <article><h4>备份配置</h4><p>下载当前项目配置。文件中包含账号凭证，请妥善保管。</p><button class="secondary-button" type="button" :disabled="settingsBusy" @click="downloadConfigurationBackup">下载备份</button></article>
+            <article><h4>恢复配置</h4><p>选择 Lumic 配置备份并覆盖当前设置，不会删除已有动态和图片。</p><label class="restore-file-button" :class="{ disabled: settingsBusy }"><input type="file" accept="application/json,.json" :disabled="settingsBusy" @change="restoreConfiguration"><span>选择备份文件</span></label></article>
           </div>
+          <p v-if="proxyMessage" class="success-message">{{ proxyMessage }}</p>
         </section>
-        <section v-if="settingsTab === 'security'" class="settings-pane compact-settings-pane"><div class="pane-heading"><div><h3>登录安全</h3><p>更新本地管理账号。保存后请使用新的账号和密码登录。</p></div><span>密码至少 8 位</span></div><form class="settings-form" @submit.prevent="saveSettings" autocomplete="off"><label>新账号</label><input v-model="settingsForm.username" required minlength="3" autocomplete="off"><label>当前密码</label><input v-model="settingsForm.currentPassword" type="password" required autocomplete="current-password"><label>新密码</label><input v-model="settingsForm.newPassword" type="password" required minlength="8" autocomplete="new-password"><button class="login-button" type="submit" :disabled="settingsBusy">{{ settingsBusy ? '保存中…' : '保存设置' }}</button></form></section>
         <p v-if="settingsError" class="login-error settings-page-error">{{ settingsError }}</p>
       </div>
     </main>

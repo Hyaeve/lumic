@@ -718,3 +718,47 @@ func TestWeiboLikesSubscriptionCanBeAddedAndDeleted(t *testing.T) {
 		t.Fatalf("delete likes source failed: status=%d feeds=%#v", remove.Code, store.config.WeiboSubscriptions)
 	}
 }
+
+func TestLoadStoreFileInitializesEmptyContent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "content.json")
+	store, err := loadStoreFile(path)
+	if err != nil {
+		t.Fatalf("initialize content store: %v", err)
+	}
+	if len(store.posts) != 0 || len(store.feeds) != 0 {
+		t.Fatalf("new content store must be empty: posts=%#v feeds=%#v", store.posts, store.feeds)
+	}
+	reloaded, err := loadStoreFile(path)
+	if err != nil {
+		t.Fatalf("reload content store: %v", err)
+	}
+	if len(reloaded.posts) != 0 || len(reloaded.feeds) != 0 {
+		t.Fatalf("persisted empty store loaded demo content: posts=%#v feeds=%#v", reloaded.posts, reloaded.feeds)
+	}
+}
+
+func TestConfigurationBackupExportAndRestore(t *testing.T) {
+	tempDir := t.TempDir()
+	oldAuthFile, oldBilibiliFile := authFile, bilibiliFile
+	authFile, bilibiliFile = filepath.Join(tempDir, "auth.json"), filepath.Join(tempDir, "platform.enc")
+	t.Cleanup(func() { authFile, bilibiliFile = oldAuthFile, oldBilibiliFile })
+	auth := &AuthConfig{Username: "backup-user", PasswordHash: "backup-hash"}
+	platforms := &BilibiliStore{key: make([]byte, 32), config: BilibiliConfig{ProxyURL: "http://127.0.0.1:7890", WeiboSubscriptions: []SourceConfig{{ID: "weibo-42", Source: SourceWeibo, Name: "作者"}}, Subscriptions: []SourceConfig{}}}
+	handler := configurationBackupHandler(auth, platforms)
+	exportResponse := httptest.NewRecorder()
+	handler(exportResponse, httptest.NewRequest(http.MethodGet, "/api/configuration/backup", nil))
+	if exportResponse.Code != http.StatusOK {
+		t.Fatalf("export failed: status=%d body=%s", exportResponse.Code, exportResponse.Body.String())
+	}
+	var backup ConfigurationBackup
+	if err := json.Unmarshal(exportResponse.Body.Bytes(), &backup); err != nil || backup.Version != 1 || backup.Auth.Username != "backup-user" || len(backup.Platforms.WeiboSubscriptions) != 1 {
+		t.Fatalf("unexpected backup: err=%v backup=%#v", err, backup)
+	}
+	auth.Username, auth.PasswordHash = "changed", "changed-hash"
+	platforms.config = BilibiliConfig{Subscriptions: []SourceConfig{}, WeiboSubscriptions: []SourceConfig{}}
+	restoreResponse := httptest.NewRecorder()
+	handler(restoreResponse, httptest.NewRequest(http.MethodPut, "/api/configuration/backup", bytes.NewReader(exportResponse.Body.Bytes())))
+	if restoreResponse.Code != http.StatusOK || auth.Username != "backup-user" || platforms.config.ProxyURL != "http://127.0.0.1:7890" || len(platforms.config.WeiboSubscriptions) != 1 {
+		t.Fatalf("restore failed: status=%d auth=%#v platforms=%#v body=%s", restoreResponse.Code, auth, platforms.config, restoreResponse.Body.String())
+	}
+}
