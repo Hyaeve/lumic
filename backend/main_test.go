@@ -607,6 +607,35 @@ func TestCollectWeiboPosts(t *testing.T) {
 	}
 }
 
+func TestCollectWeiboPostsPrefersOriginalImages(t *testing.T) {
+	payload := map[string]any{"list": []any{map[string]any{
+		"id": "original-image-test", "created_at": "Mon Aug 12 10:00:00 +0800 2024",
+		"user": map[string]any{"screen_name": "author", "idstr": "123"},
+		"pic_infos": map[string]any{"one": map[string]any{
+			"large":    map[string]any{"url": "https://wx1.sinaimg.cn/large/example.jpg"},
+			"original": map[string]any{"url": "https://wx1.sinaimg.cn/original/example.jpg"},
+		}},
+	}}}
+	posts := make([]Post, 0)
+	collectWeiboPosts(payload, SourceConfig{}, &posts, make(map[string]bool))
+	if len(posts) != 1 || len(posts[0].Media) != 1 || posts[0].Media[0] != "https://wx1.sinaimg.cn/original/example.jpg" {
+		t.Fatalf("original image was not preferred: %#v", posts)
+	}
+}
+
+func TestCollectWeiboPostsUpgradesLargeImageURL(t *testing.T) {
+	payload := map[string]any{"list": []any{map[string]any{
+		"id": "large-image-test", "created_at": "Mon Aug 12 10:00:00 +0800 2024",
+		"user": map[string]any{"screen_name": "author", "idstr": "123"},
+		"pics": []any{map[string]any{"large": map[string]any{"url": "https://wx2.sinaimg.cn/mw690/example.png"}}},
+	}}}
+	posts := make([]Post, 0)
+	collectWeiboPosts(payload, SourceConfig{}, &posts, make(map[string]bool))
+	if len(posts) != 1 || len(posts[0].Media) != 1 || posts[0].Media[0] != "https://wx2.sinaimg.cn/original/example.png" {
+		t.Fatalf("large image URL was not upgraded: %#v", posts)
+	}
+}
+
 func TestBilibiliSubscriptionSyncAndDelete(t *testing.T) {
 	oldFile := bilibiliFile
 	bilibiliFile = filepath.Join(t.TempDir(), "platform.enc")
@@ -740,6 +769,44 @@ func TestWeiboLikesSubscriptionCanBeAddedAndDeleted(t *testing.T) {
 	store.weiboSubscriptionsHandler(remove, httptest.NewRequest(http.MethodDelete, "/api/weibo/subscriptions?id=weibo-likes-42", nil))
 	if remove.Code != http.StatusOK || len(store.config.WeiboSubscriptions) != 0 {
 		t.Fatalf("delete likes source failed: status=%d feeds=%#v", remove.Code, store.config.WeiboSubscriptions)
+	}
+}
+
+func TestReconcileMovesWeiboLikesIntoCanonicalDirectory(t *testing.T) {
+	tempDir := t.TempDir()
+	oldFlowRoot := flowRoot
+	flowRoot = filepath.Join(tempDir, "flow")
+	t.Cleanup(func() { flowRoot = oldFlowRoot })
+
+	oldName := "错误作者目录"
+	oldDirectory := sourceStoragePath(SourceWeibo, oldName)
+	if err := os.MkdirAll(oldDirectory, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(oldDirectory, "image.jpg"), []byte("image"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	content := &Store{file: filepath.Join(tempDir, "content.json"), posts: []Post{{ID: "liked-post", Media: []string{flowPublicPath(SourceWeibo, oldName, "image.jpg")}}}}
+	store := &BilibiliStore{
+		content: content,
+		config: BilibiliConfig{WeiboSubscriptions: []SourceConfig{{
+			ID: "weibo-likes-42", Source: SourceWeibo, Name: oldName, StoragePath: oldDirectory,
+		}}},
+	}
+
+	if err := store.reconcileFlowStorage(); err != nil {
+		t.Fatalf("reconcile likes storage: %v", err)
+	}
+	expectedDirectory := sourceStoragePath(SourceWeibo, "我的点赞")
+	if store.config.WeiboSubscriptions[0].Name != "我的点赞" || store.config.WeiboSubscriptions[0].StoragePath != expectedDirectory {
+		t.Fatalf("likes source was not canonicalized: %#v", store.config.WeiboSubscriptions[0])
+	}
+	if _, err := os.Stat(filepath.Join(expectedDirectory, "image.jpg")); err != nil {
+		t.Fatalf("liked image was not moved: %v", err)
+	}
+	expectedMedia := flowPublicPath(SourceWeibo, "我的点赞", "image.jpg")
+	if content.posts[0].Media[0] != expectedMedia {
+		t.Fatalf("stored media path was not rewritten: %q", content.posts[0].Media[0])
 	}
 }
 

@@ -34,6 +34,8 @@ const credentials = ref({ username: '', password: '' })
 const activeNav = ref('all')
 const activeSource = ref('all')
 const sourcesExpanded = ref(true)
+const mobileMenuOpen = ref(false)
+const phonePortrait = ref(false)
 const selectedAuthor = ref(null)
 const selectedTag = ref('')
 const authorReturnState = ref({ nav: 'all', source: 'all' })
@@ -83,6 +85,7 @@ const timelineHeights = ref({})
 const feedListElement = ref(null)
 const estimatedPostHeight = 560
 const timelineOverscan = 5
+let phonePortraitQuery = null
 let timelineFrame = 0
 let postResizeObserver = null
 const observedPostElements = new Map()
@@ -174,6 +177,7 @@ async function syncNow() {
   scheduleTransient(() => { syncing.value = false }, 900)
 }
 async function openSettings(_section = 'settings', updateHistory = true) {
+  mobileMenuOpen.value = false
   settingsTab.value = 'settings'; showSettings.value = true; activeNav.value = 'settings'; settingsError.value = ''; proxyMessage.value = ''; pixivError.value = ''; weiboError.value = ''
   if (updateHistory) updateRoute('/settings')
   try {
@@ -681,6 +685,7 @@ function navigateTo(nav, source = activeSource.value) {
   activeNav.value = nav
   activeSource.value = source
   selectedAuthor.value = null
+  mobileMenuOpen.value = false
   const path = nav === 'source' ? `/source/${source}` : nav === 'liked' ? '/liked' : nav === 'pulls' ? '/pulls' : '/'
   updateRoute(path)
 }
@@ -725,16 +730,30 @@ function updateTimelineWindow() {
     visibleOffset += (timelineHeights.value[filteredPosts.value[index].id] || estimatedPostHeight) + 15
     if (visibleOffset >= viewportBottom) { last = index + 1; break }
   }
-  timelineStart.value = Math.max(0, first - timelineOverscan)
-  timelineEnd.value = Math.min(filteredPosts.value.length, last + timelineOverscan)
+  const overscan = phonePortrait.value ? 2 : timelineOverscan
+  timelineStart.value = Math.max(0, first - overscan)
+  timelineEnd.value = Math.min(filteredPosts.value.length, last + overscan)
 }
 function scheduleTimelineWindow() {
   if (!timelineFrame) timelineFrame = window.requestAnimationFrame(updateTimelineWindow)
 }
 function resetTimelineWindow() {
   timelineStart.value = 0
-  timelineEnd.value = Math.min(filteredPosts.value.length, 15)
+  timelineEnd.value = Math.min(filteredPosts.value.length, phonePortrait.value ? 7 : 15)
   nextTick(scheduleTimelineWindow)
+}
+function updatePhonePortrait(event) {
+  phonePortrait.value = event.matches
+  if (!event.matches) mobileMenuOpen.value = false
+  resetTimelineWindow()
+}
+function openPhoneDefaultTimeline() {
+  showSettings.value = false
+  activeNav.value = 'all'
+  activeSource.value = 'all'
+  selectedAuthor.value = null
+  selectedTag.value = ''
+  updateRoute('/', true)
 }
 function openAuthor(post) {
   authorReturnState.value = { nav: activeNav.value, source: activeSource.value }
@@ -813,8 +832,8 @@ async function checkSession() {
 }
 watch(filteredPosts, resetTimelineWindow)
 watch(posts, prunePostCaches)
-onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); checkSession(); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', applyRoute); window.addEventListener('scroll', scheduleTimelineWindow, { passive: true }); window.addEventListener('resize', scheduleTimelineWindow) })
-onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserver?.disconnect(); observedPostElements.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); closeLightbox(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', applyRoute); window.removeEventListener('scroll', scheduleTimelineWindow); window.removeEventListener('resize', scheduleTimelineWindow); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
+onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; phonePortraitQuery = window.matchMedia('(max-width: 760px) and (orientation: portrait)'); phonePortrait.value = phonePortraitQuery.matches; phonePortraitQuery.addEventListener('change', updatePhonePortrait); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); if (phonePortrait.value) openPhoneDefaultTimeline(); checkSession(); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', applyRoute); window.addEventListener('scroll', scheduleTimelineWindow, { passive: true }); window.addEventListener('resize', scheduleTimelineWindow) })
+onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); postResizeObserver?.disconnect(); observedPostElements.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); closeLightbox(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', applyRoute); window.removeEventListener('scroll', scheduleTimelineWindow); window.removeEventListener('resize', scheduleTimelineWindow); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
 </script>
 
 <template>
@@ -840,7 +859,11 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
     </div>
   </div>
   <div v-else class="app-shell" :class="{ dark: isDark }">
-    <aside class="sidebar">
+    <button class="mobile-menu-toggle" type="button" :class="{ open: mobileMenuOpen }" :aria-expanded="mobileMenuOpen" title="打开导航" aria-label="打开导航" @click="mobileMenuOpen = !mobileMenuOpen">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h14"/></svg>
+    </button>
+    <button v-if="mobileMenuOpen" class="mobile-menu-scrim" type="button" aria-label="关闭导航" @click="mobileMenuOpen = false"></button>
+    <aside class="sidebar" :class="{ 'mobile-open': mobileMenuOpen }">
       <div class="brand">
 <span class="brand-mark">✦</span>
 <span>Lumic</span>
@@ -960,7 +983,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
           <article v-for="platform in platformCards" :key="platform.key" :class="['platform-source-card', platform.key]" @contextmenu.prevent="openPlatformSettings(platform)">
             <div class="platform-card-head"><img class="source-icon" :src="platform.image" :alt="`${platform.label}图标`"><span :class="['connection-dot', { online: platform.configured }]">{{ platform.configured ? '已连接' : '未连接' }}</span></div>
             <h4>{{ platform.label }}</h4><p>{{ platform.description }}</p>
-            <dl><div><dt>账号</dt><dd>{{ platform.account }}</dd></div><div><dt>订阅来源</dt><dd>{{ platform.feeds.length }} 个</dd></div><div><dt>内容目录</dt><dd>{{ platform.path }}</dd></div></dl>
+            <dl><div><dt>账号</dt><dd>{{ platform.account }}</dd></div><div><dt>订阅来源</dt><dd>{{ platform.feeds.length }} 个</dd></div></dl>
             <button @click="openPlatformSettings(platform)">管理平台 <span>→</span></button>
           </article>
         </div>
@@ -991,12 +1014,12 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); postResizeObserve
 <h2>添加一个新来源</h2>
 <p>连接账号后，Lumic 会帮你把喜欢的内容收进同一条时间线。</p>
 <div class="connect-options">
+<button @click="openBilibili">
+<img class="source-icon" :src="sourceMeta.bilibili.image" alt="哔哩哔哩图标">连接哔哩哔哩</button>
 <button @click="openWeibo">
 <img class="source-icon" :src="sourceMeta.weibo.image" alt="微博图标">添加微博博主</button>
 <button @click="showAdd = false; openSettings('platforms')">
 <img class="source-icon" :src="sourceMeta.pixiv.image" alt="pixiv图标">连接 pixiv</button>
-<button @click="openBilibili">
-<img class="source-icon" :src="sourceMeta.bilibili.image" alt="哔哩哔哩图标">连接哔哩哔哩</button>
 <button @click="showAdd = false; openSettings('platforms')">
 <img class="source-icon" :src="sourceMeta.twitter.image" alt="推特图标">连接推特</button>
 </div>

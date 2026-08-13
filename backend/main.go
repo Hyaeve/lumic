@@ -527,6 +527,13 @@ func sourceStoragePath(source Source, name string) string {
 	return filepath.Join(flowRoot, string(source), safeFlowDirectoryName(name))
 }
 
+func canonicalSourceName(feed SourceConfig) string {
+	if feed.Source == SourceWeibo && strings.HasPrefix(feed.ID, "weibo-likes-") {
+		return "我的点赞"
+	}
+	return feed.Name
+}
+
 func deleteSourceStorage(source Source, author string) error {
 	root, err := filepath.Abs(flowRoot)
 	if err != nil {
@@ -551,6 +558,7 @@ func flowPublicPath(source Source, author, name string) string {
 }
 
 func prepareSourceStorage(feed SourceConfig) (SourceConfig, error) {
+	feed.Name = canonicalSourceName(feed)
 	feed.StoragePath = sourceStoragePath(feed.Source, feed.Name)
 	if err := os.MkdirAll(feed.StoragePath, 0755); err != nil {
 		return feed, err
@@ -587,6 +595,22 @@ func (b *BilibiliStore) reconcileFlowStorage() error {
 	lists := []*[]SourceConfig{&b.config.Subscriptions, &b.config.WeiboSubscriptions}
 	for _, list := range lists {
 		for index, feed := range *list {
+			oldStoragePath := feed.StoragePath
+			oldName := feed.Name
+			if oldStoragePath == "" {
+				oldStoragePath = sourceStoragePath(feed.Source, oldName)
+			}
+			feed.Name = canonicalSourceName(feed)
+			if oldStoragePath != "" && oldStoragePath != sourceStoragePath(feed.Source, feed.Name) {
+				if err := migrateSourceStorage(oldStoragePath, sourceStoragePath(feed.Source, feed.Name)); err != nil {
+					return fmt.Errorf("migrate flow storage for %s: %w", feed.Name, err)
+				}
+				if b.content != nil {
+					if err := b.content.rewriteMediaPrefix(flowPublicPath(feed.Source, oldName, ""), flowPublicPath(feed.Source, feed.Name, "")); err != nil {
+						return fmt.Errorf("rewrite flow paths for %s: %w", feed.Name, err)
+					}
+				}
+			}
 			prepared, err := prepareSourceStorage(feed)
 			if err != nil {
 				return fmt.Errorf("prepare flow storage for %s: %w", feed.Name, err)
@@ -595,6 +619,35 @@ func (b *BilibiliStore) reconcileFlowStorage() error {
 		}
 	}
 	return nil
+}
+
+func migrateSourceStorage(from, to string) error {
+	if from == "" || from == to {
+		return nil
+	}
+	if _, err := os.Stat(from); os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(to, 0755); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(from)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		source := filepath.Join(from, entry.Name())
+		target := filepath.Join(to, entry.Name())
+		if _, err := os.Stat(target); err == nil {
+			target = availableMediaTargetBase(to, strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))) + filepath.Ext(entry.Name())
+		}
+		if err := os.Rename(source, target); err != nil {
+			return err
+		}
+	}
+	return os.Remove(from)
 }
 
 func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
@@ -954,6 +1007,27 @@ func (s *Store) mergePosts(incoming []Post) (int, error) {
 		return 0, err
 	}
 	return added, nil
+}
+
+func (s *Store) rewriteMediaPrefix(oldPrefix, newPrefix string) error {
+	if oldPrefix == newPrefix {
+		return nil
+	}
+	s.Lock()
+	defer s.Unlock()
+	changed := false
+	for postIndex := range s.posts {
+		for mediaIndex, media := range s.posts[postIndex].Media {
+			if strings.HasPrefix(media, oldPrefix) {
+				s.posts[postIndex].Media[mediaIndex] = newPrefix + strings.TrimPrefix(media, oldPrefix)
+				changed = true
+			}
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return s.saveLocked()
 }
 
 func (s *Store) setPostLiked(id string, liked bool) (Post, error) {
@@ -1724,6 +1798,25 @@ func normalizeRemoteImage(value string) string {
 	return value
 }
 
+func normalizeWeiboOriginalImage(value string) string {
+	value = normalizeRemoteImage(value)
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Host == "" {
+		return value
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if !strings.HasSuffix(host, ".sinaimg.cn") && host != "sinaimg.cn" {
+		return value
+	}
+	segments := strings.Split(parsed.Path, "/")
+	if len(segments) > 2 && segments[1] != "" {
+		segments[1] = "original"
+		parsed.Path = strings.Join(segments, "/")
+		parsed.RawPath = ""
+	}
+	return parsed.String()
+}
+
 func cleanRemoteText(value string) string {
 	value = htmlLineBreakPattern.ReplaceAllString(value, "\n")
 	value = html.UnescapeString(htmlTagPattern.ReplaceAllString(value, ""))
@@ -1888,18 +1981,55 @@ func downloadRemoteImage(client *http.Client, remoteURL, targetBase, referer, co
 	if !strings.HasPrefix(strings.ToLower(contentType), "image/") {
 		return "", fmt.Errorf("unexpected content type %s", contentType)
 	}
-	data, err := io.ReadAll(io.LimitReader(response.Body, 32<<20))
+	target := targetBase + mediaFileExtension(remoteURL, contentType)
+	if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
+		return "", err
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(target), ".lumic-image-*.tmp")
 	if err != nil {
 		return "", err
 	}
-	if len(data) == 0 {
+	temporaryName := temporary.Name()
+	defer os.Remove(temporaryName)
+	written, copyErr := io.CopyBuffer(temporary, response.Body, make([]byte, 64<<10))
+	if copyErr != nil || written == 0 {
+		temporary.Close()
+		if copyErr != nil {
+			return "", copyErr
+		}
 		return "", errors.New("empty image")
 	}
-	target := targetBase + mediaFileExtension(remoteURL, contentType)
-	if err := atomicWriteFile(target, data, 0644); err != nil {
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return "", err
+	}
+	if err := temporary.Close(); err != nil {
+		return "", err
+	}
+	if err := replaceFile(temporaryName, target); err != nil {
 		return "", err
 	}
 	return target, nil
+}
+
+func replaceFile(temporaryName, target string) error {
+	if err := os.Rename(temporaryName, target); err == nil {
+		return nil
+	}
+	if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return os.Rename(temporaryName, target)
+}
+
+func imageDownloadDelay() time.Duration {
+	delay := 180 * time.Millisecond
+	if raw := strings.TrimSpace(os.Getenv("LUMIC_IMAGE_DOWNLOAD_DELAY_MS")); raw != "" {
+		if milliseconds, err := strconv.Atoi(raw); err == nil && milliseconds >= 0 && milliseconds <= 5000 {
+			delay = time.Duration(milliseconds) * time.Millisecond
+		}
+	}
+	return delay
 }
 
 func postMediaBaseName(post Post, mediaIndex int) string {
@@ -1964,6 +2094,9 @@ func (b *BilibiliStore) archiveSourceContent(feed SourceConfig, posts []Post) (S
 				return feed, posts, fmt.Errorf("下载动态 %s 的第 %d 张图片失败: %w", posts[postIndex].ID, mediaIndex+1, downloadErr)
 			}
 			localMedia = append(localMedia, flowPublicPath(prepared.Source, prepared.Name, filepath.Base(localPath)))
+			if delay := imageDownloadDelay(); delay > 0 {
+				time.Sleep(delay)
+			}
 		}
 		posts[postIndex].Media = localMedia
 	}
@@ -2182,8 +2315,15 @@ func collectWeiboPosts(value any, feed SourceConfig, posts *[]Post, seen map[str
 			if pictures, ok := mblog["pics"].([]any); ok {
 				for _, rawPicture := range pictures {
 					picture, _ := rawPicture.(map[string]any)
+					original, _ := picture["original"].(map[string]any)
+					image := normalizeWeiboOriginalImage(jsonValueString(original["url"]))
 					large, _ := picture["large"].(map[string]any)
-					image := normalizeRemoteImage(fmt.Sprint(large["url"]))
+					if image == "" {
+						image = normalizeWeiboOriginalImage(jsonValueString(large["url"]))
+					}
+					if image == "" {
+						image = normalizeWeiboOriginalImage(jsonValueString(picture["url"]))
+					}
 					if image != "" && image != "<nil>" {
 						media = append(media, image)
 					}
@@ -2192,11 +2332,11 @@ func collectWeiboPosts(value any, feed SourceConfig, posts *[]Post, seen map[str
 			if picInfos, ok := mblog["pic_infos"].(map[string]any); ok {
 				for _, rawPicture := range picInfos {
 					picture, _ := rawPicture.(map[string]any)
-					large, _ := picture["large"].(map[string]any)
-					image := normalizeRemoteImage(jsonValueString(large["url"]))
+					original, _ := picture["original"].(map[string]any)
+					image := normalizeWeiboOriginalImage(jsonValueString(original["url"]))
 					if image == "" {
-						original, _ := picture["original"].(map[string]any)
-						image = normalizeRemoteImage(jsonValueString(original["url"]))
+						large, _ := picture["large"].(map[string]any)
+						image = normalizeWeiboOriginalImage(jsonValueString(large["url"]))
 					}
 					if image != "" {
 						media = append(media, image)
@@ -2414,7 +2554,7 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 			posts = postsAfter(posts, feed.LastSyncedAt)
 		}
 		posts = filterSourcePosts(posts, feed)
-		if len(posts) > 0 {
+		if len(posts) > 0 && !strings.HasPrefix(feed.ID, "weibo-likes-") {
 			if strings.TrimSpace(posts[0].Author) != "" {
 				feed.Name = posts[0].Author
 			}
@@ -2422,6 +2562,7 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 				feed.Avatar = posts[0].Avatar
 			}
 		}
+		feed.Name = canonicalSourceName(feed)
 		b.RLock()
 		feed, posts, err = b.archiveSourceContent(feed, posts)
 		b.RUnlock()
