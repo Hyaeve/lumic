@@ -978,7 +978,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
       </form>
     </div>
   </div>
-  <div v-else class="app-shell" :class="{ dark: isDark }">
+  <div v-else class="app-shell" :class="{ dark: isDark, 'lightbox-active': lightbox.open }">
     <button class="mobile-menu-toggle" type="button" :class="{ open: mobileMenuOpen }" :aria-expanded="mobileMenuOpen" title="打开导航" aria-label="打开导航" @click="mobileMenuOpen = !mobileMenuOpen">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h14"/></svg>
     </button>

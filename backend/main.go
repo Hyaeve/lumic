@@ -1169,6 +1169,7 @@ func deletePostMedia(media []string) error {
 			continue
 		}
 		preview, hasPreview := mediaPreviewCachePath(root, absolute)
+		legacyPreview, hasLegacyPreview := legacyMediaPreviewCachePath(root, absolute)
 		if info, err := os.Stat(absolute); err == nil {
 			if info.IsDir() {
 				continue
@@ -1184,16 +1185,32 @@ func deletePostMedia(media []string) error {
 				return err
 			}
 		}
+		if hasLegacyPreview {
+			if err := os.Remove(legacyPreview); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		}
 	}
 	return nil
 }
 
-const mediaPreviewMaxDimension = 640
+const mediaPreviewMaxDimension = 720
 
 var mediaPreviewLocks sync.Map
 var mediaPreviewGenerationSlots = make(chan struct{}, 2)
 
 func mediaPreviewCachePath(root, source string) (string, bool) {
+	relative, err := filepath.Rel(root, source)
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	if relative == ".previews" || strings.HasPrefix(relative, ".previews"+string(filepath.Separator)) {
+		return "", false
+	}
+	return filepath.Join(root, ".previews", relative) + ".v2.jpg", true
+}
+
+func legacyMediaPreviewCachePath(root, source string) (string, bool) {
 	relative, err := filepath.Rel(root, source)
 	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		return "", false
@@ -1257,7 +1274,7 @@ func generateMediaPreview(sourcePath, previewPath string) error {
 	}
 	temporaryName := temporary.Name()
 	defer os.Remove(temporaryName)
-	if err := jpeg.Encode(temporary, resizeMediaPreview(decoded, width, height), &jpeg.Options{Quality: 70}); err != nil {
+	if err := jpeg.Encode(temporary, resizeMediaPreview(decoded, width, height), &jpeg.Options{Quality: 78}); err != nil {
 		temporary.Close()
 		return err
 	}
@@ -1313,6 +1330,9 @@ func mediaPreviewHandler(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Cache-Control", "public, max-age=3600")
 			http.ServeFile(w, r, sourcePath)
 			return
+		}
+		if legacyPreview, ok := legacyMediaPreviewCachePath(root, sourcePath); ok {
+			_ = os.Remove(legacyPreview)
 		}
 	}
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
