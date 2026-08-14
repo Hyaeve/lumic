@@ -139,6 +139,33 @@ const platformCards = computed(() => [
   { key: 'pixiv', label: 'Pixiv', short: 'P', ...sourceMeta.pixiv, configured: pixivAccount.value.configured, account: pixivAccount.value.configured ? (pixivAccount.value.userName || `UID ${pixivAccount.value.userId}`) : '尚未连接', avatar: pixivAccount.value.avatar, path: '/flow/pixiv', description: '画师作品与插画媒体', feeds: feeds.value.filter(feed => feed.source === 'pixiv') },
   { key: 'twitter', label: '推特', short: '推', ...sourceMeta.twitter, configured: false, account: '暂未开放', avatar: '', path: '/flow/twitter', description: '推文、图片与媒体动态', feeds: feeds.value.filter(feed => feed.source === 'twitter') }
 ])
+function captionSegments(post) {
+  const caption = String(post?.caption || '')
+  const emojis = Array.isArray(post?.emojis)
+    ? post.emojis.filter(emoji => emoji && emoji.text && emoji.url).sort((left, right) => right.text.length - left.text.length)
+    : []
+  if (!caption || !emojis.length) return [{ type: 'text', value: caption }]
+  const segments = []
+  let cursor = 0
+  while (cursor < caption.length) {
+    let match = null
+    for (const emoji of emojis) {
+      if (caption.startsWith(emoji.text, cursor)) { match = emoji; break }
+    }
+    if (match) {
+      segments.push({ type: 'emoji', text: match.text, url: match.url })
+      cursor += match.text.length
+      continue
+    }
+    const next = emojis.reduce((position, emoji) => {
+      const candidate = caption.indexOf(emoji.text, cursor + 1)
+      return candidate >= 0 && candidate < position ? candidate : position
+    }, caption.length)
+    if (next > cursor) segments.push({ type: 'text', value: caption.slice(cursor, next) })
+    cursor = next
+  }
+  return segments.length ? segments : [{ type: 'text', value: caption }]
+}
 const hasWeiboLikesSource = computed(() => feeds.value.some(feed => feed.id?.startsWith('weibo-likes-')))
 const localGreeting = computed(() => {
   const hour = new Date().getHours()
@@ -1112,7 +1139,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
 <span :class="['source-pill', 'post-source-pill', sourceMeta[post.source].color]">
 <img class="source-icon" :src="sourceMeta[post.source].image" :alt="`${sourceMeta[post.source].label}图标`">{{ sourceMeta[post.source].label }}</span>
 </div>
-<p v-if="post.caption" class="caption">{{ post.caption }}</p>
+<p v-if="post.caption" class="caption"><template v-for="(segment, segmentIndex) in captionSegments(post)" :key="`${post.id}-caption-${segmentIndex}`"><span v-if="segment.type === 'emoji'" class="caption-emoji" role="img" :aria-label="segment.text" :title="segment.text"><img :src="segment.url" alt="" loading="lazy" decoding="async" @error="$event.currentTarget.parentElement.classList.add('failed')"><span>{{ segment.text }}</span></span><span v-else>{{ segment.value }}</span></template></p>
 <div v-if="post.media?.length" :class="['media-grid', `media-count-${Math.min(post.media.length, 9)}`]">
 <button v-for="(media, mediaIndex) in post.media.slice(0, 9)" :key="media" :class="['media-frame', mediaShape(post, mediaIndex)]" type="button" :aria-label="`查看 ${post.author} 的第 ${mediaIndex + 1} 张图片`" @click="openLightbox(post, mediaIndex)"><img :src="previewMedia(media)" alt="" loading="lazy" decoding="async" fetchpriority="low" @load="setMediaShape(post, mediaIndex, $event); scheduleTimelineWindow()"><span v-if="post.liveMedia?.[mediaIndex]" class="media-live-badge"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10-6.5z"/></svg>LIVE</span><span v-if="mediaIndex === 8 && post.media.length > 9" class="media-more-count">+{{ post.media.length - 9 }}</span></button>
 </div>

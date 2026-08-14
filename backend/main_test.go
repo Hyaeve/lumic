@@ -198,6 +198,32 @@ func TestBilibiliCaptionPreservesText(t *testing.T) {
 	}
 }
 
+func TestCleanRemoteTextPreservesUnicodeAndHTMLEmojiLabels(t *testing.T) {
+	input := `今天很开心😄<img alt="[笑cry]" src="//h5.sinaimg.cn/emoji.gif">继续出发✨`
+	if got := cleanRemoteText(input); got != "今天很开心😄[笑cry]继续出发✨" {
+		t.Fatalf("emoji text was lost: %q", got)
+	}
+	emojis := weiboCaptionEmojis(input)
+	if len(emojis) != 1 || emojis[0].Text != "[笑cry]" || emojis[0].URL != "https://h5.sinaimg.cn/emoji.gif" {
+		t.Fatalf("unexpected Weibo emoji metadata: %#v", emojis)
+	}
+}
+
+func TestCollectBilibiliEmojisSupportsNestedEmojiObject(t *testing.T) {
+	value := map[string]any{
+		"type":      "RICH_TEXT_NODE_TYPE_EMOJI",
+		"orig_text": "[doge]",
+		"emoji": map[string]any{
+			"icon_url": "//i0.hdslb.com/bfs/emote/doge.png",
+		},
+	}
+	emojis := make([]PostEmoji, 0)
+	collectBilibiliEmojis(value, &emojis)
+	if len(emojis) != 1 || emojis[0].Text != "[doge]" || emojis[0].URL != "https://i0.hdslb.com/bfs/emote/doge.png" {
+		t.Fatalf("unexpected Bilibili emoji metadata: %#v", emojis)
+	}
+}
+
 func TestAllowedBilibiliDynamicTypeIncludesTextButNotVideo(t *testing.T) {
 	for _, dynamicType := range []string{"DYNAMIC_TYPE_WORD", "DYNAMIC_TYPE_DRAW", "DYNAMIC_TYPE_ARTICLE", "DYNAMIC_TYPE_OPUS"} {
 		if !allowedBilibiliDynamicType(dynamicType) {

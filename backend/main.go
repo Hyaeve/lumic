@@ -15,7 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
+	stdhtml "html"
 	"image"
 	"image/color"
 	"image/draw"
@@ -40,6 +40,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/argon2"
+	xhtml "golang.org/x/net/html"
 	xproxy "golang.org/x/net/proxy"
 )
 
@@ -53,19 +54,25 @@ const (
 )
 
 type Post struct {
-	ID               string    `json:"id"`
-	Source           Source    `json:"source"`
-	FeedIDs          []string  `json:"feedIds,omitempty"`
-	Author           string    `json:"author"`
-	Avatar           string    `json:"avatar"`
-	Caption          string    `json:"caption"`
-	Tags             []string  `json:"tags"`
-	Media            []string  `json:"media"`
-	LiveMedia        []string  `json:"liveMedia,omitempty"`
-	OriginalURL      string    `json:"originalUrl,omitempty"`
-	Published        time.Time `json:"published"`
-	Liked            bool      `json:"liked"`
-	FavoriteExplicit bool      `json:"favoriteExplicit,omitempty"`
+	ID               string      `json:"id"`
+	Source           Source      `json:"source"`
+	FeedIDs          []string    `json:"feedIds,omitempty"`
+	Author           string      `json:"author"`
+	Avatar           string      `json:"avatar"`
+	Caption          string      `json:"caption"`
+	Emojis           []PostEmoji `json:"emojis,omitempty"`
+	Tags             []string    `json:"tags"`
+	Media            []string    `json:"media"`
+	LiveMedia        []string    `json:"liveMedia,omitempty"`
+	OriginalURL      string      `json:"originalUrl,omitempty"`
+	Published        time.Time   `json:"published"`
+	Liked            bool        `json:"liked"`
+	FavoriteExplicit bool        `json:"favoriteExplicit,omitempty"`
+}
+
+type PostEmoji struct {
+	Text string `json:"text"`
+	URL  string `json:"url"`
 }
 
 type SourceConfig struct {
@@ -1067,6 +1074,7 @@ func (s *Store) mergePosts(incoming []Post) (int, error) {
 		}
 		if index, exists := indexes[post.ID]; exists {
 			stored := s.posts[index]
+			post.Emojis = mergePostEmojis(stored.Emojis, post.Emojis)
 			post.FeedIDs = mergeUniqueStrings(stored.FeedIDs, post.FeedIDs)
 			post.Tags = mergeUniqueStrings(stored.Tags, post.Tags)
 			post.FavoriteExplicit = stored.FavoriteExplicit
@@ -1114,6 +1122,12 @@ func (s *Store) rewriteMediaPrefix(oldPrefix, newPrefix string) error {
 		for mediaIndex, media := range s.posts[postIndex].LiveMedia {
 			if strings.HasPrefix(media, oldPrefix) {
 				s.posts[postIndex].LiveMedia[mediaIndex] = newPrefix + strings.TrimPrefix(media, oldPrefix)
+				changed = true
+			}
+		}
+		for emojiIndex, emoji := range s.posts[postIndex].Emojis {
+			if strings.HasPrefix(emoji.URL, oldPrefix) {
+				s.posts[postIndex].Emojis[emojiIndex].URL = newPrefix + strings.TrimPrefix(emoji.URL, oldPrefix)
 				changed = true
 			}
 		}
@@ -1295,7 +1309,11 @@ func (s *Store) deletePosts(ids []string, source Source, author string) (int, er
 		return 0, os.ErrNotExist
 	}
 	for _, post := range removed {
-		if err := deletePostMedia(append(append([]string(nil), post.Media...), post.LiveMedia...)); err != nil {
+		media := append(append([]string(nil), post.Media...), post.LiveMedia...)
+		for _, emoji := range post.Emojis {
+			media = append(media, emoji.URL)
+		}
+		if err := deletePostMedia(media); err != nil {
 			return 0, err
 		}
 	}
@@ -2199,6 +2217,8 @@ func allowedBilibiliDynamicType(dynamicType string) bool {
 
 var htmlTagPattern = regexp.MustCompile(`<[^>]+>`)
 var htmlLineBreakPattern = regexp.MustCompile(`(?i)<br\s*/?>|</p\s*>|</div\s*>|</li\s*>`)
+var htmlImagePattern = regexp.MustCompile(`(?is)<img\b[^>]*>`)
+var htmlImageAltPattern = regexp.MustCompile(`(?is)\b(?:alt|title|data-alt)\s*=\s*[\"']([^\"']*)[\"']`)
 
 func normalizeRemoteImage(value string) string {
 	value = strings.TrimSpace(value)
@@ -2307,7 +2327,15 @@ func weiboPictureLivePhoto(picture map[string]any, fallbackFID string) string {
 
 func cleanRemoteText(value string) string {
 	value = htmlLineBreakPattern.ReplaceAllString(value, "\n")
-	value = html.UnescapeString(htmlTagPattern.ReplaceAllString(value, ""))
+	// Preserve platform emoji labels from HTML image nodes instead of dropping them with other tags.
+	value = htmlImagePattern.ReplaceAllStringFunc(value, func(tag string) string {
+		matches := htmlImageAltPattern.FindStringSubmatch(tag)
+		if len(matches) > 1 {
+			return matches[1]
+		}
+		return ""
+	})
+	value = stdhtml.UnescapeString(htmlTagPattern.ReplaceAllString(value, ""))
 	lines := strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n")
 	cleaned := make([]string, 0, len(lines))
 	for _, line := range lines {
@@ -2318,6 +2346,63 @@ func cleanRemoteText(value string) string {
 		cleaned = append(cleaned, line)
 	}
 	return strings.TrimSpace(strings.Join(cleaned, "\n"))
+}
+
+func appendUniquePostEmoji(emojis []PostEmoji, emoji PostEmoji) []PostEmoji {
+	emoji.Text = cleanRemoteText(emoji.Text)
+	emoji.URL = normalizeRemoteImage(emoji.URL)
+	if emoji.Text == "" || emoji.URL == "" {
+		return emojis
+	}
+	for _, existing := range emojis {
+		if existing.Text == emoji.Text && existing.URL == emoji.URL {
+			return emojis
+		}
+	}
+	return append(emojis, emoji)
+}
+
+func mergePostEmojis(groups ...[]PostEmoji) []PostEmoji {
+	merged := make([]PostEmoji, 0)
+	for _, group := range groups {
+		for _, emoji := range group {
+			merged = appendUniquePostEmoji(merged, emoji)
+		}
+	}
+	return merged
+}
+
+func htmlNodeAttribute(node *xhtml.Node, key string) string {
+	for _, attribute := range node.Attr {
+		if strings.EqualFold(attribute.Key, key) {
+			return strings.TrimSpace(attribute.Val)
+		}
+	}
+	return ""
+}
+
+func weiboCaptionEmojis(value string) []PostEmoji {
+	if !strings.Contains(strings.ToLower(value), "<img") {
+		return nil
+	}
+	document, err := xhtml.Parse(strings.NewReader(value))
+	if err != nil {
+		return nil
+	}
+	emojis := make([]PostEmoji, 0)
+	var walk func(*xhtml.Node)
+	walk = func(node *xhtml.Node) {
+		if node.Type == xhtml.ElementNode && strings.EqualFold(node.Data, "img") {
+			text := firstNonEmptyRemoteText(htmlNodeAttribute(node, "alt"), htmlNodeAttribute(node, "title"), htmlNodeAttribute(node, "data-alt"))
+			url := firstNonEmptyRemoteText(htmlNodeAttribute(node, "src"), htmlNodeAttribute(node, "data-src"), htmlNodeAttribute(node, "data-original"))
+			emojis = appendUniquePostEmoji(emojis, PostEmoji{Text: text, URL: url})
+		}
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+	}
+	walk(document)
+	return emojis
 }
 
 func firstNonEmptyRemoteText(values ...string) string {
@@ -2370,6 +2455,16 @@ func bilibiliDirectText(value map[string]any) string {
 			}
 		}
 	}
+	typeName := strings.ToUpper(jsonValueString(value["type"]))
+	if strings.Contains(typeName, "EMOJI") {
+		for _, key := range []string{"emoji_text", "emoji", "name", "label", "alt_text"} {
+			if text, ok := value[key].(string); ok {
+				if text = cleanRemoteText(text); text != "" {
+					return text
+				}
+			}
+		}
+	}
 	return ""
 }
 
@@ -2387,6 +2482,40 @@ func bilibiliInlineText(value any) string {
 		return bilibiliDirectText(typed)
 	default:
 		return ""
+	}
+}
+
+func collectBilibiliEmojis(value any, emojis *[]PostEmoji) {
+	switch typed := value.(type) {
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+			var nested any
+			decoder := json.NewDecoder(strings.NewReader(trimmed))
+			decoder.UseNumber()
+			if decoder.Decode(&nested) == nil {
+				collectBilibiliEmojis(nested, emojis)
+			}
+		}
+	case []any:
+		for _, item := range typed {
+			collectBilibiliEmojis(item, emojis)
+		}
+	case map[string]any:
+		typeName := strings.ToUpper(jsonValueString(typed["type"]))
+		emojiObject, hasEmojiObject := typed["emoji"].(map[string]any)
+		if strings.Contains(typeName, "EMOJI") || hasEmojiObject {
+			text := firstNonEmptyRemoteText(jsonValueString(typed["orig_text"]), jsonValueString(typed["text"]), jsonValueString(typed["emoji_text"]), jsonValueString(typed["name"]), jsonValueString(typed["label"]), jsonValueString(typed["alt_text"]))
+			imageURL := firstNonEmptyRemoteText(jsonValueString(typed["url"]), jsonValueString(typed["icon_url"]), jsonValueString(typed["iconUrl"]), jsonValueString(typed["src"]), jsonValueString(typed["image"]))
+			if hasEmojiObject {
+				text = firstNonEmptyRemoteText(text, jsonValueString(emojiObject["text"]), jsonValueString(emojiObject["name"]), jsonValueString(emojiObject["label"]), jsonValueString(emojiObject["alt_text"]))
+				imageURL = firstNonEmptyRemoteText(imageURL, jsonValueString(emojiObject["url"]), jsonValueString(emojiObject["icon_url"]), jsonValueString(emojiObject["iconUrl"]), jsonValueString(emojiObject["src"]), jsonValueString(emojiObject["image"]))
+			}
+			*emojis = appendUniquePostEmoji(*emojis, PostEmoji{Text: text, URL: imageURL})
+		}
+		for _, item := range typed {
+			collectBilibiliEmojis(item, emojis)
+		}
 	}
 }
 
@@ -2779,6 +2908,26 @@ func (b *BilibiliStore) archiveSourceContent(feed SourceConfig, posts []Post) (S
 		} else {
 			posts[postIndex].LiveMedia = nil
 		}
+		localEmojis := make([]PostEmoji, 0, len(posts[postIndex].Emojis))
+		for emojiIndex, emoji := range posts[postIndex].Emojis {
+			if strings.HasPrefix(emoji.URL, "/flow/") {
+				localEmojis = append(localEmojis, emoji)
+				continue
+			}
+			targetBase := filepath.Join(prepared.StoragePath, fmt.Sprintf("emoji-%x", sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%s", posts[postIndex].ID, emojiIndex, emoji.Text)))))
+			localPath, downloadErr := downloadRemoteImage(client, emoji.URL, targetBase, referer, cookie)
+			if downloadErr != nil {
+				// An emoji CDN may reject archival while the post itself remains valid.
+				localEmojis = append(localEmojis, emoji)
+				continue
+			}
+			localEmojis = append(localEmojis, PostEmoji{Text: emoji.Text, URL: flowPublicPath(prepared.Source, prepared.Name, filepath.Base(localPath))})
+		}
+		if len(localEmojis) > 0 {
+			posts[postIndex].Emojis = localEmojis
+		} else {
+			posts[postIndex].Emojis = nil
+		}
 	}
 	prepared, err = prepareSourceStorage(prepared)
 	return prepared, posts, err
@@ -2907,6 +3056,7 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 				continue
 			}
 			captionParts := make([]string, 0, 4)
+			emojis := make([]PostEmoji, 0)
 			if item.Modules.Dynamic.Desc != nil {
 				captionParts = append(captionParts, item.Modules.Dynamic.Desc.Text)
 				if nodes, err := json.Marshal(item.Modules.Dynamic.Desc.RichTextNodes); err == nil {
@@ -2938,6 +3088,7 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 				}
 			}
 			captionParts = append(captionParts, bilibiliCaptionFromRaw(rawItem))
+			collectBilibiliEmojis(rawItem, &emojis)
 			caption := combineRemoteText(captionParts...)
 			if shouldFetchBilibiliDynamicDetail(item.Type, caption) {
 				detailCaption := b.fetchBilibiliDynamicCaption(item.ID, credentials, proxyURL)
@@ -2955,7 +3106,7 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 			if avatar == "" {
 				avatar = feed.Avatar
 			}
-			posts = append(posts, Post{ID: "bili-dynamic-" + item.ID, Source: SourceBilibili, FeedIDs: []string{feed.ID}, Author: name, Avatar: avatar, Caption: caption, Tags: append([]string(nil), feed.Tags...), Media: media, OriginalURL: "https://t.bilibili.com/" + url.PathEscape(item.ID), Published: published})
+			posts = append(posts, Post{ID: "bili-dynamic-" + item.ID, Source: SourceBilibili, FeedIDs: []string{feed.ID}, Author: name, Avatar: avatar, Caption: caption, Emojis: emojis, Tags: append([]string(nil), feed.Tags...), Media: media, OriginalURL: "https://t.bilibili.com/" + url.PathEscape(item.ID), Published: published})
 			if !full && !feed.LastSyncedAt.IsZero() && !published.After(feed.LastSyncedAt) {
 				reachedBoundary = true
 			}
@@ -3057,9 +3208,11 @@ func collectWeiboPosts(value any, feed SourceConfig, posts *[]Post, seen map[str
 			if !hasLiveMedia {
 				liveMedia = nil
 			}
+			rawCaption := jsonValueString(mblog["text"])
+			captionEmojis := weiboCaptionEmojis(rawCaption)
 			caption := jsonValueString(mblog["text_raw"])
 			if caption == "" {
-				caption = cleanRemoteText(jsonValueString(mblog["text"]))
+				caption = cleanRemoteText(rawCaption)
 			}
 			profileID := jsonValueString(user["idstr"])
 			if profileID == "" {
@@ -3069,7 +3222,7 @@ func collectWeiboPosts(value any, feed SourceConfig, posts *[]Post, seen map[str
 			if profileID != "" {
 				originalURL = "https://weibo.com/" + url.PathEscape(profileID) + "/" + url.PathEscape(id)
 			}
-			*posts = append(*posts, Post{ID: "weibo-status-" + id, Source: SourceWeibo, FeedIDs: []string{feed.ID}, Author: name, Avatar: avatar, Caption: caption, Tags: append([]string(nil), feed.Tags...), Media: media, LiveMedia: liveMedia, OriginalURL: originalURL, Published: published})
+			*posts = append(*posts, Post{ID: "weibo-status-" + id, Source: SourceWeibo, FeedIDs: []string{feed.ID}, Author: name, Avatar: avatar, Caption: caption, Emojis: captionEmojis, Tags: append([]string(nil), feed.Tags...), Media: media, LiveMedia: liveMedia, OriginalURL: originalURL, Published: published})
 		}
 		for _, child := range object {
 			collectWeiboPosts(child, feed, posts, seen)
@@ -3236,7 +3389,8 @@ func (s *Store) postsAfterOrCaptionRepair(posts []Post, boundary time.Time) []Po
 		stored, ok := existing[post.ID]
 		incomingCaption := cleanRemoteText(post.Caption)
 		storedCaption := cleanRemoteText(stored.Caption)
-		if !ok || incomingCaption == "" || incomingCaption == storedCaption || (storedCaption != "" && len([]rune(incomingCaption)) <= len([]rune(storedCaption))) {
+		emojisNeedRepair := len(post.Emojis) > 0 && len(stored.Emojis) == 0
+		if !ok || incomingCaption == "" || (incomingCaption == storedCaption && !emojisNeedRepair) || (storedCaption != "" && len([]rune(incomingCaption)) <= len([]rune(storedCaption)) && !emojisNeedRepair) {
 			continue
 		}
 		if len(stored.Media) > 0 {
@@ -3245,6 +3399,7 @@ func (s *Store) postsAfterOrCaptionRepair(posts []Post, boundary time.Time) []Po
 		if len(stored.LiveMedia) > 0 {
 			post.LiveMedia = append([]string(nil), stored.LiveMedia...)
 		}
+		post.Emojis = mergePostEmojis(stored.Emojis, post.Emojis)
 		if strings.HasPrefix(stored.Avatar, "/flow/") {
 			post.Avatar = stored.Avatar
 		}
@@ -3282,6 +3437,7 @@ func (s *Store) postsAfterOrSourceMembership(posts []Post, boundary time.Time, f
 		if len(stored.LiveMedia) > 0 {
 			post.LiveMedia = append([]string(nil), stored.LiveMedia...)
 		}
+		post.Emojis = mergePostEmojis(stored.Emojis, post.Emojis)
 		if strings.HasPrefix(stored.Avatar, "/flow/") {
 			post.Avatar = stored.Avatar
 		}
