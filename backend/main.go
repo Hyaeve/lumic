@@ -1242,10 +1242,10 @@ func (s *Store) setSourceTags(feed SourceConfig, feeds []SourceConfig) error {
 	changed := false
 	for index := range s.posts {
 		post := &s.posts[index]
-		belongsToSource := containsString(post.FeedIDs, feed.ID)
-		if !belongsToSource && len(post.FeedIDs) == 0 && !strings.HasPrefix(feed.ID, "weibo-likes-") && post.Source == feed.Source && post.Author == feed.Name {
-			post.FeedIDs = []string{feed.ID}
-			belongsToSource = true
+		hasFeedID := containsString(post.FeedIDs, feed.ID)
+		belongsToSource := postBelongsToSource(post, feed)
+		if !hasFeedID && belongsToSource {
+			post.FeedIDs = mergeUniqueStrings(post.FeedIDs, []string{feed.ID})
 			changed = true
 		}
 		if !belongsToSource {
@@ -1268,6 +1268,58 @@ func (s *Store) setSourceTags(feed SourceConfig, feeds []SourceConfig) error {
 		return err
 	}
 	return nil
+}
+
+func sameSourceAuthor(left, right string) bool {
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	return left != "" && right != "" && (left == right || strings.EqualFold(left, right) || safeFlowDirectoryName(left) == safeFlowDirectoryName(right))
+}
+
+func postBelongsToSource(post *Post, feed SourceConfig) bool {
+	if post == nil {
+		return false
+	}
+	if containsString(post.FeedIDs, feed.ID) {
+		return true
+	}
+	return postBelongsToSourcePath(post, feed)
+}
+
+func postBelongsToSourcePath(post *Post, feed SourceConfig) bool {
+	if post == nil {
+		return false
+	}
+	if strings.HasPrefix(feed.ID, "weibo-likes-") {
+		prefix := flowPublicPath(SourceWeibo, canonicalSourceName(feed), "")
+		for _, media := range append(append(append([]string(nil), post.Media...), post.LiveMedia...), postEmojiURLs(post.Emojis)...) {
+			if strings.HasPrefix(media, prefix) {
+				return true
+			}
+		}
+		return false
+	}
+	if post.Source != feed.Source {
+		return false
+	}
+	if sameSourceAuthor(post.Author, feed.Name) {
+		return true
+	}
+	prefix := flowPublicPath(feed.Source, feed.Name, "")
+	for _, media := range append(append(append([]string(nil), post.Media...), post.LiveMedia...), postEmojiURLs(post.Emojis)...) {
+		if strings.HasPrefix(media, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func postEmojiURLs(emojis []PostEmoji) []string {
+	urls := make([]string, 0, len(emojis))
+	for _, emoji := range emojis {
+		urls = append(urls, emoji.URL)
+	}
+	return urls
 }
 
 func stringSlicesEqual(left, right []string) bool {

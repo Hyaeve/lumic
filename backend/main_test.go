@@ -446,6 +446,23 @@ func TestSetSourceTagsAppliesToEverySourcePost(t *testing.T) {
 	}
 }
 
+func TestSetSourceTagsMatchesAuthorEvenWhenPostAlreadyHasAnotherFeed(t *testing.T) {
+	store := &Store{posts: []Post{
+		{ID: "same-author", Source: SourceBilibili, Author: "UP主", FeedIDs: []string{"bili-old"}, Tags: []string{"旧"}},
+		{ID: "different-author", Source: SourceBilibili, Author: "另一个UP主", FeedIDs: []string{"bili-old"}, Tags: []string{"保留"}},
+	}}
+	feed := SourceConfig{ID: "bili-new", Source: SourceBilibili, Name: "UP主", Tags: []string{"新标签"}}
+	if err := store.setSourceTags(feed, []SourceConfig{feed, {ID: "bili-old", Source: SourceBilibili, Name: "旧来源", Tags: []string{"旧来源标签"}}}); err != nil {
+		t.Fatalf("apply source tags: %v", err)
+	}
+	if !containsString(store.posts[0].FeedIDs, "bili-new") || !stringSlicesEqual(store.posts[0].Tags, []string{"旧来源标签", "新标签"}) {
+		t.Fatalf("matching author was not tagged: %#v", store.posts[0])
+	}
+	if containsString(store.posts[1].FeedIDs, "bili-new") || !stringSlicesEqual(store.posts[1].Tags, []string{"保留"}) {
+		t.Fatalf("different author was unexpectedly tagged: %#v", store.posts[1])
+	}
+}
+
 func TestPostsAfterUsesStrictIncrementalBoundary(t *testing.T) {
 	boundary := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
 	posts := []Post{

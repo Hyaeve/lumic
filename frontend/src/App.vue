@@ -706,6 +706,12 @@ async function deletePost(post) {
 function togglePostSelection(post) {
   selectedPostIds.value = selectedPostIds.value.includes(post.id) ? selectedPostIds.value.filter(id => id !== post.id) : [...selectedPostIds.value, post.id]
 }
+function handlePostSelectionClick(event, post) {
+  if (!selectionMode.value) return
+  event.preventDefault()
+  event.stopPropagation()
+  togglePostSelection(post)
+}
 function stopSelection() { selectionMode.value = false; selectionAction.value = 'delete'; selectedPostIds.value = [] }
 function closeContextMenu() { contextMenu.value = { open: false, x: 0, y: 0, post: null } }
 function openContextMenu(event, post = null) {
@@ -1114,22 +1120,22 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
 </div>
 </section>
       <div class="section-heading">
-<div v-if="!authorProfile" class="filters">
-<button :class="{ selected: activeSource === 'all' }" @click="activeSource = 'all'"><span>✦</span>全部</button>
+<div class="filters">
+<button v-if="!authorProfile" :class="{ selected: activeSource === 'all' }" @click="activeSource = 'all'"><span>✦</span>全部</button>
 <button class="timeline-sort-button" type="button" :title="timelineSort === 'newest' ? '当前最新优先，点击切换为最早优先' : '当前最早优先，点击切换为最新优先'" :aria-label="timelineSort === 'newest' ? '最新优先，切换为最早优先' : '最早优先，切换为最新优先'" @click="timelineSort = timelineSort === 'newest' ? 'oldest' : 'newest'">
   <svg v-if="timelineSort === 'newest'" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h7M5 10h5M5 14h3"/><path d="M17 5v14M13.5 15.5 17 19l3.5-3.5"/></svg>
   <svg v-else viewBox="0 0 24 24" aria-hidden="true"><path d="M5 18h7M5 14h5M5 10h3"/><path d="M17 19V5M13.5 8.5 17 5l3.5 3.5"/></svg>
 </button>
 </div>
-<div v-if="!authorProfile" class="timeline-tools">
+<div class="timeline-tools">
   <label class="timeline-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><input v-model="timelineSearch" type="search" placeholder="搜索动态内容" aria-label="搜索动态内容"></label>
 </div>
 </div>
       <p v-if="timelineMessage" class="timeline-message">{{ timelineMessage }}</p>
       <section ref="feedListElement" class="feed-list">
 <div v-if="timelineTopSpace" class="timeline-spacer" :style="{ height: `${timelineTopSpace}px` }" aria-hidden="true"></div>
-<article v-for="post in visiblePosts" :key="post.id" :ref="element => setPostCard(post, element)" :class="['post-card', { selected: selectedPostIds.includes(post.id) }]" :data-post-id="post.id" @contextmenu.stop.prevent="openContextMenu($event, post)">
-<label v-if="selectionMode" class="post-select-control" :title="`选择 ${post.author} 的这条动态`"><input type="checkbox" :checked="selectedPostIds.includes(post.id)" @change="togglePostSelection(post)"><span></span></label>
+<article v-for="post in visiblePosts" :key="post.id" :ref="element => setPostCard(post, element)" :class="['post-card', { selected: selectedPostIds.includes(post.id), selectable: selectionMode }]" :data-post-id="post.id" @click.capture="handlePostSelectionClick($event, post)" @contextmenu.stop.prevent="openContextMenu($event, post)">
+<label v-if="selectionMode" class="post-select-control" :title="`选择 ${post.author} 的这条动态`" @click.prevent><input type="checkbox" :checked="selectedPostIds.includes(post.id)" tabindex="-1"><span></span></label>
 <div class="post-head">
 <button class="post-author-avatar" type="button" :title="`查看 ${post.author} 的动态`" @click="openAuthor(post)"><img :src="post.avatar" :alt="post.author"></button>
 <div class="author">
