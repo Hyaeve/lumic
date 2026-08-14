@@ -7,7 +7,6 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
@@ -39,7 +38,6 @@ import (
 	"time"
 
 	"golang.org/x/crypto/argon2"
-	xhtml "golang.org/x/net/html"
 	xproxy "golang.org/x/net/proxy"
 )
 
@@ -59,7 +57,7 @@ type Post struct {
 	Author           string      `json:"author"`
 	Avatar           string      `json:"avatar"`
 	Caption          string      `json:"caption"`
-	Emojis           []PostEmoji `json:"emojis,omitempty"`
+	Emojis           []PostEmoji `json:"emojis,omitempty"` // Legacy image metadata, removed while loading.
 	Tags             []string    `json:"tags"`
 	Media            []string    `json:"media"`
 	OriginalURL      string      `json:"originalUrl,omitempty"`
@@ -1091,7 +1089,20 @@ func loadStoreFile(path string) (*Store, error) {
 		if content.Feeds == nil {
 			content.Feeds = []SourceConfig{}
 		}
-		return &Store{posts: content.Posts, feeds: content.Feeds, file: path}, nil
+		store := &Store{posts: content.Posts, feeds: content.Feeds, file: path}
+		changed, cleanupErr := store.removeLegacyEmojiImages()
+		if cleanupErr != nil {
+			return nil, fmt.Errorf("remove legacy emoji images: %w", cleanupErr)
+		}
+		if changed {
+			store.Lock()
+			cleanupErr = store.saveLocked()
+			store.Unlock()
+			if cleanupErr != nil {
+				return nil, fmt.Errorf("persist text-only emoji migration: %w", cleanupErr)
+			}
+		}
+		return store, nil
 	}
 	if !os.IsNotExist(err) {
 		return nil, err
@@ -1105,6 +1116,23 @@ func loadStoreFile(path string) (*Store, error) {
 		return nil, err
 	}
 	return store, nil
+}
+
+func (s *Store) removeLegacyEmojiImages() (bool, error) {
+	changed := false
+	for index := range s.posts {
+		if len(s.posts[index].Emojis) == 0 {
+			continue
+		}
+		for _, emoji := range s.posts[index].Emojis {
+			if err := deletePostMedia([]string{emoji.URL}); err != nil {
+				return false, err
+			}
+		}
+		s.posts[index].Emojis = nil
+		changed = true
+	}
+	return changed, nil
 }
 
 func (s *Store) saveLocked() error {
@@ -1134,9 +1162,9 @@ func (s *Store) mergePosts(incoming []Post) (int, error) {
 		if post.ID == "" {
 			continue
 		}
+		post.Emojis = nil
 		if index, exists := indexes[post.ID]; exists {
 			stored := s.posts[index]
-			post.Emojis = mergePostEmojis(stored.Emojis, post.Emojis)
 			post.FeedIDs = mergeUniqueStrings(stored.FeedIDs, post.FeedIDs)
 			post.Tags = mergeUniqueStrings(stored.Tags, post.Tags)
 			post.FavoriteExplicit = stored.FavoriteExplicit
@@ -1178,12 +1206,6 @@ func (s *Store) rewriteMediaPrefix(oldPrefix, newPrefix string) error {
 		for mediaIndex, media := range s.posts[postIndex].Media {
 			if strings.HasPrefix(media, oldPrefix) {
 				s.posts[postIndex].Media[mediaIndex] = newPrefix + strings.TrimPrefix(media, oldPrefix)
-				changed = true
-			}
-		}
-		for emojiIndex, emoji := range s.posts[postIndex].Emojis {
-			if strings.HasPrefix(emoji.URL, oldPrefix) {
-				s.posts[postIndex].Emojis[emojiIndex].URL = newPrefix + strings.TrimPrefix(emoji.URL, oldPrefix)
 				changed = true
 			}
 		}
@@ -1348,7 +1370,7 @@ func postBelongsToSourcePath(post *Post, feed SourceConfig) bool {
 	}
 	if strings.HasPrefix(feed.ID, "weibo-likes-") {
 		prefix := flowPublicPath(SourceWeibo, canonicalSourceName(feed), "")
-		for _, media := range append(append([]string(nil), post.Media...), postEmojiURLs(post.Emojis)...) {
+		for _, media := range post.Media {
 			if strings.HasPrefix(media, prefix) {
 				return true
 			}
@@ -1362,20 +1384,12 @@ func postBelongsToSourcePath(post *Post, feed SourceConfig) bool {
 		return true
 	}
 	prefix := flowPublicPath(feed.Source, feed.Name, "")
-	for _, media := range append(append([]string(nil), post.Media...), postEmojiURLs(post.Emojis)...) {
+	for _, media := range post.Media {
 		if strings.HasPrefix(media, prefix) {
 			return true
 		}
 	}
 	return false
-}
-
-func postEmojiURLs(emojis []PostEmoji) []string {
-	urls := make([]string, 0, len(emojis))
-	for _, emoji := range emojis {
-		urls = append(urls, emoji.URL)
-	}
-	return urls
 }
 
 func stringSlicesEqual(left, right []string) bool {
@@ -2384,63 +2398,6 @@ func cleanRemoteText(value string) string {
 	return strings.TrimSpace(strings.Join(cleaned, "\n"))
 }
 
-func appendUniquePostEmoji(emojis []PostEmoji, emoji PostEmoji) []PostEmoji {
-	emoji.Text = cleanRemoteText(emoji.Text)
-	emoji.URL = normalizeRemoteImage(emoji.URL)
-	if emoji.Text == "" || emoji.URL == "" {
-		return emojis
-	}
-	for _, existing := range emojis {
-		if existing.Text == emoji.Text && existing.URL == emoji.URL {
-			return emojis
-		}
-	}
-	return append(emojis, emoji)
-}
-
-func mergePostEmojis(groups ...[]PostEmoji) []PostEmoji {
-	merged := make([]PostEmoji, 0)
-	for _, group := range groups {
-		for _, emoji := range group {
-			merged = appendUniquePostEmoji(merged, emoji)
-		}
-	}
-	return merged
-}
-
-func htmlNodeAttribute(node *xhtml.Node, key string) string {
-	for _, attribute := range node.Attr {
-		if strings.EqualFold(attribute.Key, key) {
-			return strings.TrimSpace(attribute.Val)
-		}
-	}
-	return ""
-}
-
-func weiboCaptionEmojis(value string) []PostEmoji {
-	if !strings.Contains(strings.ToLower(value), "<img") {
-		return nil
-	}
-	document, err := xhtml.Parse(strings.NewReader(value))
-	if err != nil {
-		return nil
-	}
-	emojis := make([]PostEmoji, 0)
-	var walk func(*xhtml.Node)
-	walk = func(node *xhtml.Node) {
-		if node.Type == xhtml.ElementNode && strings.EqualFold(node.Data, "img") {
-			text := firstNonEmptyRemoteText(htmlNodeAttribute(node, "alt"), htmlNodeAttribute(node, "title"), htmlNodeAttribute(node, "data-alt"))
-			url := firstNonEmptyRemoteText(htmlNodeAttribute(node, "src"), htmlNodeAttribute(node, "data-src"), htmlNodeAttribute(node, "data-original"))
-			emojis = appendUniquePostEmoji(emojis, PostEmoji{Text: text, URL: url})
-		}
-		for child := node.FirstChild; child != nil; child = child.NextSibling {
-			walk(child)
-		}
-	}
-	walk(document)
-	return emojis
-}
-
 func firstNonEmptyRemoteText(values ...string) string {
 	for _, value := range values {
 		value = cleanRemoteText(value)
@@ -2518,40 +2475,6 @@ func bilibiliInlineText(value any) string {
 		return bilibiliDirectText(typed)
 	default:
 		return ""
-	}
-}
-
-func collectBilibiliEmojis(value any, emojis *[]PostEmoji) {
-	switch typed := value.(type) {
-	case string:
-		trimmed := strings.TrimSpace(typed)
-		if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
-			var nested any
-			decoder := json.NewDecoder(strings.NewReader(trimmed))
-			decoder.UseNumber()
-			if decoder.Decode(&nested) == nil {
-				collectBilibiliEmojis(nested, emojis)
-			}
-		}
-	case []any:
-		for _, item := range typed {
-			collectBilibiliEmojis(item, emojis)
-		}
-	case map[string]any:
-		typeName := strings.ToUpper(jsonValueString(typed["type"]))
-		emojiObject, hasEmojiObject := typed["emoji"].(map[string]any)
-		if strings.Contains(typeName, "EMOJI") || hasEmojiObject {
-			text := firstNonEmptyRemoteText(jsonValueString(typed["orig_text"]), jsonValueString(typed["text"]), jsonValueString(typed["emoji_text"]), jsonValueString(typed["name"]), jsonValueString(typed["label"]), jsonValueString(typed["alt_text"]))
-			imageURL := firstNonEmptyRemoteText(jsonValueString(typed["url"]), jsonValueString(typed["icon_url"]), jsonValueString(typed["iconUrl"]), jsonValueString(typed["src"]), jsonValueString(typed["image"]))
-			if hasEmojiObject {
-				text = firstNonEmptyRemoteText(text, jsonValueString(emojiObject["text"]), jsonValueString(emojiObject["name"]), jsonValueString(emojiObject["label"]), jsonValueString(emojiObject["alt_text"]))
-				imageURL = firstNonEmptyRemoteText(imageURL, jsonValueString(emojiObject["url"]), jsonValueString(emojiObject["icon_url"]), jsonValueString(emojiObject["iconUrl"]), jsonValueString(emojiObject["src"]), jsonValueString(emojiObject["image"]))
-			}
-			*emojis = appendUniquePostEmoji(*emojis, PostEmoji{Text: text, URL: imageURL})
-		}
-		for _, item := range typed {
-			collectBilibiliEmojis(item, emojis)
-		}
 	}
 }
 
@@ -2833,26 +2756,7 @@ func (b *BilibiliStore) archiveSourceContent(feed SourceConfig, posts []Post) (S
 			}
 		}
 		posts[postIndex].Media = localMedia
-		localEmojis := make([]PostEmoji, 0, len(posts[postIndex].Emojis))
-		for emojiIndex, emoji := range posts[postIndex].Emojis {
-			if strings.HasPrefix(emoji.URL, "/flow/") {
-				localEmojis = append(localEmojis, emoji)
-				continue
-			}
-			targetBase := filepath.Join(prepared.StoragePath, fmt.Sprintf("emoji-%x", sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%s", posts[postIndex].ID, emojiIndex, emoji.Text)))))
-			localPath, downloadErr := downloadRemoteImage(client, emoji.URL, targetBase, referer, cookie)
-			if downloadErr != nil {
-				// An emoji CDN may reject archival while the post itself remains valid.
-				localEmojis = append(localEmojis, emoji)
-				continue
-			}
-			localEmojis = append(localEmojis, PostEmoji{Text: emoji.Text, URL: flowPublicPath(prepared.Source, prepared.Name, filepath.Base(localPath))})
-		}
-		if len(localEmojis) > 0 {
-			posts[postIndex].Emojis = localEmojis
-		} else {
-			posts[postIndex].Emojis = nil
-		}
+		posts[postIndex].Emojis = nil
 	}
 	prepared, err = prepareSourceStorage(prepared)
 	return prepared, posts, err
@@ -2981,7 +2885,6 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 				continue
 			}
 			captionParts := make([]string, 0, 4)
-			emojis := make([]PostEmoji, 0)
 			if item.Modules.Dynamic.Desc != nil {
 				captionParts = append(captionParts, item.Modules.Dynamic.Desc.Text)
 				if nodes, err := json.Marshal(item.Modules.Dynamic.Desc.RichTextNodes); err == nil {
@@ -3013,7 +2916,6 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 				}
 			}
 			captionParts = append(captionParts, bilibiliCaptionFromRaw(rawItem))
-			collectBilibiliEmojis(rawItem, &emojis)
 			caption := combineRemoteText(captionParts...)
 			if shouldFetchBilibiliDynamicDetail(item.Type, caption) {
 				detailCaption := b.fetchBilibiliDynamicCaption(item.ID, credentials, proxyURL)
@@ -3031,7 +2933,7 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 			if avatar == "" {
 				avatar = feed.Avatar
 			}
-			posts = append(posts, Post{ID: "bili-dynamic-" + item.ID, Source: SourceBilibili, FeedIDs: []string{feed.ID}, Author: name, Avatar: avatar, Caption: caption, Emojis: emojis, Tags: append([]string(nil), feed.Tags...), Media: media, OriginalURL: "https://t.bilibili.com/" + url.PathEscape(item.ID), Published: published})
+			posts = append(posts, Post{ID: "bili-dynamic-" + item.ID, Source: SourceBilibili, FeedIDs: []string{feed.ID}, Author: name, Avatar: avatar, Caption: caption, Tags: append([]string(nil), feed.Tags...), Media: media, OriginalURL: "https://t.bilibili.com/" + url.PathEscape(item.ID), Published: published})
 			if !full && !feed.LastSyncedAt.IsZero() && !published.After(feed.LastSyncedAt) {
 				reachedBoundary = true
 			}
@@ -3121,7 +3023,6 @@ func collectWeiboPosts(value any, feed SourceConfig, posts *[]Post, seen map[str
 				}
 			}
 			rawCaption := jsonValueString(mblog["text"])
-			captionEmojis := weiboCaptionEmojis(rawCaption)
 			caption := jsonValueString(mblog["text_raw"])
 			if caption == "" {
 				caption = cleanRemoteText(rawCaption)
@@ -3134,7 +3035,7 @@ func collectWeiboPosts(value any, feed SourceConfig, posts *[]Post, seen map[str
 			if profileID != "" {
 				originalURL = "https://weibo.com/" + url.PathEscape(profileID) + "/" + url.PathEscape(id)
 			}
-			*posts = append(*posts, Post{ID: "weibo-status-" + id, Source: SourceWeibo, FeedIDs: []string{feed.ID}, Author: name, Avatar: avatar, Caption: caption, Emojis: captionEmojis, Tags: append([]string(nil), feed.Tags...), Media: media, OriginalURL: originalURL, Published: published})
+			*posts = append(*posts, Post{ID: "weibo-status-" + id, Source: SourceWeibo, FeedIDs: []string{feed.ID}, Author: name, Avatar: avatar, Caption: caption, Tags: append([]string(nil), feed.Tags...), Media: media, OriginalURL: originalURL, Published: published})
 		}
 		for _, child := range object {
 			collectWeiboPosts(child, feed, posts, seen)
@@ -3301,14 +3202,13 @@ func (s *Store) postsAfterOrCaptionRepair(posts []Post, boundary time.Time) []Po
 		stored, ok := existing[post.ID]
 		incomingCaption := cleanRemoteText(post.Caption)
 		storedCaption := cleanRemoteText(stored.Caption)
-		emojisNeedRepair := len(post.Emojis) > 0 && len(stored.Emojis) == 0
-		if !ok || incomingCaption == "" || (incomingCaption == storedCaption && !emojisNeedRepair) || (storedCaption != "" && len([]rune(incomingCaption)) <= len([]rune(storedCaption)) && !emojisNeedRepair) {
+		if !ok || incomingCaption == "" || incomingCaption == storedCaption || (storedCaption != "" && len([]rune(incomingCaption)) <= len([]rune(storedCaption))) {
 			continue
 		}
 		if len(stored.Media) > 0 {
 			post.Media = append([]string(nil), stored.Media...)
 		}
-		post.Emojis = mergePostEmojis(stored.Emojis, post.Emojis)
+		post.Emojis = nil
 		if strings.HasPrefix(stored.Avatar, "/flow/") {
 			post.Avatar = stored.Avatar
 		}
@@ -3343,7 +3243,7 @@ func (s *Store) postsAfterOrSourceMembership(posts []Post, boundary time.Time, f
 		if len(stored.Media) > 0 {
 			post.Media = append([]string(nil), stored.Media...)
 		}
-		post.Emojis = mergePostEmojis(stored.Emojis, post.Emojis)
+		post.Emojis = nil
 		if strings.HasPrefix(stored.Avatar, "/flow/") {
 			post.Avatar = stored.Avatar
 		}

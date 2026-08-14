@@ -322,12 +322,6 @@ body, button, input, textarea, select { font-size: 14px; }
 .media-count-2, .media-count-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); width: min(100%, 540px); }
 .media-count-3, .media-count-5, .media-count-6, .media-count-7, .media-count-8, .media-count-9 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .media-more-count { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; background: #18211dcc; font-size: 28px; font-weight: 600; }
-.caption-emoji { display: inline-flex; align-items: center; justify-content: center; width: 1.45em; height: 1.45em; margin: 0 .08em; vertical-align: -.34em; }
-.caption-emoji img { display: block; width: 100%; height: 100%; object-fit: contain; }
-.caption-emoji > span { display: none; }
-.caption-emoji.failed { width: auto; height: auto; margin: 0; vertical-align: baseline; }
-.caption-emoji.failed img { display: none; }
-.caption-emoji.failed > span { display: inline; }
 @media (max-width: 620px) {
   .media-grid { gap: 5px; width: 100%; }
   .media-count-2, .media-count-4 { width: 100%; }

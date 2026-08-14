@@ -181,13 +181,9 @@ func TestCleanRemoteTextPreservesUnicodeAndHTMLEmojiLabels(t *testing.T) {
 	if got := cleanRemoteText(input); got != "今天很开心😄[笑cry]继续出发✨" {
 		t.Fatalf("emoji text was lost: %q", got)
 	}
-	emojis := weiboCaptionEmojis(input)
-	if len(emojis) != 1 || emojis[0].Text != "[笑cry]" || emojis[0].URL != "https://h5.sinaimg.cn/emoji.gif" {
-		t.Fatalf("unexpected Weibo emoji metadata: %#v", emojis)
-	}
 }
 
-func TestCollectBilibiliEmojisSupportsNestedEmojiObject(t *testing.T) {
+func TestBilibiliEmojiRemainsText(t *testing.T) {
 	value := map[string]any{
 		"type":      "RICH_TEXT_NODE_TYPE_EMOJI",
 		"orig_text": "[doge]",
@@ -195,10 +191,8 @@ func TestCollectBilibiliEmojisSupportsNestedEmojiObject(t *testing.T) {
 			"icon_url": "//i0.hdslb.com/bfs/emote/doge.png",
 		},
 	}
-	emojis := make([]PostEmoji, 0)
-	collectBilibiliEmojis(value, &emojis)
-	if len(emojis) != 1 || emojis[0].Text != "[doge]" || emojis[0].URL != "https://i0.hdslb.com/bfs/emote/doge.png" {
-		t.Fatalf("unexpected Bilibili emoji metadata: %#v", emojis)
+	if got := bilibiliInlineText(value); got != "[doge]" {
+		t.Fatalf("Bilibili emoji text was lost: %q", got)
 	}
 }
 
@@ -1287,6 +1281,53 @@ func TestLoadStoreFileInitializesEmptyContent(t *testing.T) {
 	}
 	if len(reloaded.posts) != 0 || len(reloaded.feeds) != 0 {
 		t.Fatalf("persisted empty store loaded demo content: posts=%#v feeds=%#v", reloaded.posts, reloaded.feeds)
+	}
+}
+
+func TestLoadStoreFileRemovesLegacyEmojiImagesButKeepsCaptionText(t *testing.T) {
+	root := t.TempDir()
+	oldFlowRoot := flowRoot
+	flowRoot = filepath.Join(root, "flow")
+	t.Cleanup(func() { flowRoot = oldFlowRoot })
+	emojiPath := filepath.Join(flowRoot, "weibo", "author", "emoji-old.png")
+	if err := os.MkdirAll(filepath.Dir(emojiPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(emojiPath, []byte("legacy emoji"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "content.json")
+	legacy := ContentData{Posts: []Post{{
+		ID:      "legacy-emoji",
+		Source:  SourceWeibo,
+		Author:  "author",
+		Caption: "今天很开心😄[笑cry]",
+		Emojis:  []PostEmoji{{Text: "[笑cry]", URL: "/flow/weibo/author/emoji-old.png"}},
+	}}, Feeds: []SourceConfig{}}
+	data, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := loadStoreFile(path)
+	if err != nil {
+		t.Fatalf("load legacy content: %v", err)
+	}
+	if len(store.posts) != 1 || store.posts[0].Caption != "今天很开心😄[笑cry]" || len(store.posts[0].Emojis) != 0 {
+		t.Fatalf("legacy emoji migration changed text or kept metadata: %#v", store.posts)
+	}
+	if _, err := os.Stat(emojiPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy emoji image was not removed: %v", err)
+	}
+	persisted, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(persisted, []byte(`"emojis"`)) {
+		t.Fatalf("legacy emoji metadata was persisted: %s", persisted)
 	}
 }
 
