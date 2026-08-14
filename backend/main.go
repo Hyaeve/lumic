@@ -154,6 +154,30 @@ func containsString(values []string, target string) bool {
 	return false
 }
 
+func normalizeBilibiliContentTypes(values []string, legacyDefault bool) []string {
+	if len(values) == 0 && legacyDefault {
+		return []string{"DRAW", "ARTICLE"}
+	}
+	result := []string{"DRAW"}
+	for _, value := range values {
+		if strings.EqualFold(strings.TrimSpace(value), "ARTICLE") {
+			result = append(result, "ARTICLE")
+			break
+		}
+	}
+	return result
+}
+
+func bilibiliDynamicTypeEnabled(dynamicType string, contentTypes []string) bool {
+	if !allowedBilibiliDynamicType(dynamicType) {
+		return false
+	}
+	if dynamicType == "DYNAMIC_TYPE_ARTICLE" {
+		return containsString(normalizeBilibiliContentTypes(contentTypes, true), "ARTICLE")
+	}
+	return true
+}
+
 func hasWeiboLikesFeed(values []string) bool {
 	for _, value := range values {
 		if strings.HasPrefix(value, "weibo-likes-") {
@@ -552,6 +576,9 @@ func loadBilibiliStore() (*BilibiliStore, error) {
 	}
 	if store.config.Subscriptions == nil {
 		store.config.Subscriptions = []SourceConfig{}
+	}
+	for index := range store.config.Subscriptions {
+		store.config.Subscriptions[index].ContentTypes = normalizeBilibiliContentTypes(store.config.Subscriptions[index].ContentTypes, true)
 	}
 	if store.config.WeiboSubscriptions == nil {
 		store.config.WeiboSubscriptions = []SourceConfig{}
@@ -2124,7 +2151,7 @@ func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Requ
 				b.config.Subscriptions[index].Enabled = input.Enabled
 				b.config.Subscriptions[index].IncludePast = input.IncludePast
 				b.config.Subscriptions[index].Schedule = input.Schedule
-				b.config.Subscriptions[index].ContentTypes = []string{"DRAW", "ARTICLE"}
+				b.config.Subscriptions[index].ContentTypes = normalizeBilibiliContentTypes(input.ContentTypes, false)
 				b.config.Subscriptions[index].Tags = normalizeTags(input.Tags)
 				b.config.Subscriptions[index].OnlyWithImages = input.OnlyWithImages
 				b.config.Subscriptions[index].IncludeKeywords = normalizeKeywords(input.IncludeKeywords)
@@ -2176,7 +2203,7 @@ func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "invalid subscription", http.StatusBadRequest)
 		return
 	}
-	feed := SourceConfig{ID: "bili-" + userID, Source: SourceBilibili, Name: strings.TrimSpace(input.Name), Handle: "UID " + userID, Avatar: strings.TrimSpace(input.Avatar), Enabled: true, IncludePast: input.IncludePast, Schedule: input.Schedule, ContentTypes: []string{"DRAW", "ARTICLE"}, Tags: normalizeTags(input.Tags), OnlyWithImages: true}
+	feed := SourceConfig{ID: "bili-" + userID, Source: SourceBilibili, Name: strings.TrimSpace(input.Name), Handle: "UID " + userID, Avatar: strings.TrimSpace(input.Avatar), Enabled: true, IncludePast: input.IncludePast, Schedule: input.Schedule, ContentTypes: []string{"DRAW"}, Tags: normalizeTags(input.Tags), OnlyWithImages: true}
 	var storageErr error
 	feed, storageErr = prepareSourceStorage(feed)
 	if storageErr != nil {
@@ -3104,7 +3131,7 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 			if json.Unmarshal(rawItem, &item) != nil {
 				continue
 			}
-			if item.ID == "" || !allowedBilibiliDynamicType(item.Type) {
+			if item.ID == "" || !bilibiliDynamicTypeEnabled(item.Type, feed.ContentTypes) {
 				continue
 			}
 			captionParts := make([]string, 0, 4)

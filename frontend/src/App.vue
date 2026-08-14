@@ -115,8 +115,12 @@ const filteredPosts = computed(() => {
   let result = sourceTimeline
   if (selectedTag.value) result = result.filter(post => post.tags?.includes(selectedTag.value))
   else if (selectedAuthor.value) result = result.filter(post => post.source === selectedAuthor.value.source && post.author === selectedAuthor.value.name)
-  const keyword = timelineSearch.value.trim().toLocaleLowerCase()
-  if (keyword) result = result.filter(post => [post.caption, post.author, ...(post.tags || [])].some(value => String(value || '').toLocaleLowerCase().includes(keyword)))
+  const keywords = timelineSearch.value.trim().normalize('NFKC').toLocaleLowerCase().split(/\s+/).filter(Boolean)
+  if (keywords.length) result = result.filter(post => {
+    const tags = Array.isArray(post.tags) ? post.tags : []
+    const searchable = [post.caption, post.author, ...tags, ...tags.map(tag => `#${tag}`)].map(value => String(value || '').normalize('NFKC').toLocaleLowerCase())
+    return keywords.every(keyword => searchable.some(value => value.includes(keyword)))
+  })
   return [...result].sort((left, right) => {
     const difference = new Date(right.published).getTime() - new Date(left.published).getTime()
     return timelineSort.value === 'newest' ? difference : -difference
@@ -507,7 +511,8 @@ function managePlatformCredentials(platformKey) {
 }
 function openFeedSettings(feed) {
   cronEditing.value = false
-  selectedFeed.value = { ...feed, contentTypes: [...(feed.contentTypes || [])], tags: [...(feed.tags || [])], tagInput: formatTagInput(feed.tags), includeKeywordInput: formatKeywordInput(feed.includeKeywords), excludeKeywordInput: formatKeywordInput(feed.excludeKeywords) }
+  const contentTypes = feed.source === 'bilibili' && (!feed.contentTypes || feed.contentTypes.length === 0) ? ['DRAW', 'ARTICLE'] : [...(feed.contentTypes || [])]
+  selectedFeed.value = { ...feed, contentTypes, tags: [...(feed.tags || [])], tagInput: formatTagInput(feed.tags), includeKeywordInput: formatKeywordInput(feed.includeKeywords), excludeKeywordInput: formatKeywordInput(feed.excludeKeywords) }
   showFeedSettings.value = true
 }
 async function saveFeedSettings() {
@@ -1065,11 +1070,11 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
 <span class="nav-line-symbol">♡</span> 收藏
 </button>
         <button :class="{ active: activeNav === 'pulls' }" @click="navigateTo('pulls')">
-<span class="nav-line-symbol">▦</span> 订阅平台
+<svg class="nav-line-symbol" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="18" r="1.4" fill="currentColor" stroke="none"/><path d="M5 11a8 8 0 0 1 8 8M5 5a14 14 0 0 1 14 14"/></svg> 订阅平台
 </button>
       </nav>
       <div class="sidebar-bottom">
-        <button :class="{ active: activeNav === 'settings' }" @click="openSettings()"><span class="nav-line-symbol">⚙</span> 设置</button>
+        <button :class="{ active: activeNav === 'settings' }" @click="openSettings()"><svg class="nav-line-symbol" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h5M15 7h5M4 17h9M19 17h1"/><circle cx="12" cy="7" r="3"/><circle cx="16" cy="17" r="3"/></svg> 设置</button>
         <button class="sidebar-theme-button" type="button" @click="setDarkMode(!isDark)" :title="isDark ? '切换日间主题' : '切换夜间主题'" :aria-label="isDark ? '切换日间主题' : '切换夜间主题'">{{ isDark ? '☀' : '☾' }}</button>
       </div>
     </aside>
@@ -1128,7 +1133,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
 </button>
 </div>
 <div class="timeline-tools">
-  <label class="timeline-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><input v-model="timelineSearch" type="search" placeholder="搜索动态内容" aria-label="搜索动态内容"></label>
+  <label class="timeline-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><input v-model="timelineSearch" type="search" placeholder="搜索内容、作者或标签" aria-label="搜索动态内容、作者或标签"></label>
 </div>
 </div>
       <p v-if="timelineMessage" class="timeline-message">{{ timelineMessage }}</p>
@@ -1248,7 +1253,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
         <button class="modal-close" @click="showBilibili = false">×</button>
         <p class="eyebrow">BILIBILI SOURCE</p>
         <h2>订阅 UP 主图文</h2>
-        <p>仅收集图文动态与专栏，视频动态和转发视频不会进入时间线。账号凭证请在设置页面管理。</p>
+        <p>仅收集图文动态，专栏可在来源设置中单独开启。视频动态和转发视频不会进入时间线。账号凭证请在设置页面管理。</p>
         <div class="bili-account"><span>已连接 B 站账号 · UID {{ biliAccount.userId }}</span><button @click="showBilibili = false; openSettings('platforms')">管理凭证</button></div>
         <form class="bili-search" @submit.prevent="searchBilibili"><input v-model="biliKeyword" placeholder="搜索 UP 主昵称" maxlength="40" required><button :disabled="biliBusy">⌕ 搜索</button></form>
         <label class="subscription-tag-field"><span>作者标签</span><input v-model="biliSubscriptionTags" placeholder="#标签1 #标签2" maxlength="120"><small>订阅搜索结果中的作者时，会同时保存这些标签。</small></label>
@@ -1382,7 +1387,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
             <label><input v-model="selectedFeed.includePast" type="checkbox"><span>首次拉取历史动态</span></label>
             <label><input v-model="selectedFeed.enabled" type="checkbox"><span>启用自动同步</span></label>
           </div>
-          <div v-if="selectedFeed.source === 'bilibili'" class="content-scope"><strong>内容范围</strong><span>图文动态（DRAW）</span><span>专栏（ARTICLE）</span><small>视频及转发视频始终过滤，无法在此开启。</small></div>
+          <div v-if="selectedFeed.source === 'bilibili'" class="content-scope"><strong>内容范围</strong><span>图文动态（DRAW）</span><label><input v-model="selectedFeed.contentTypes" type="checkbox" value="ARTICLE"><span>专栏（ARTICLE）</span></label><small>专栏默认关闭；视频及转发视频始终过滤。</small></div>
           <p v-if="settingsError" class="login-error">{{ settingsError }}</p><button class="login-button" :disabled="settingsBusy">保存来源设置</button>
         </form>
       </div>

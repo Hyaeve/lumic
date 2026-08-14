@@ -237,6 +237,31 @@ func TestAllowedBilibiliDynamicTypeIncludesTextButNotVideo(t *testing.T) {
 	}
 }
 
+func TestBilibiliArticleContentTypeIsOptional(t *testing.T) {
+	if bilibiliDynamicTypeEnabled("DYNAMIC_TYPE_ARTICLE", []string{"DRAW"}) {
+		t.Fatal("article dynamic should be filtered when ARTICLE is not enabled")
+	}
+	if !bilibiliDynamicTypeEnabled("DYNAMIC_TYPE_ARTICLE", []string{"DRAW", "ARTICLE"}) {
+		t.Fatal("article dynamic should be collected when ARTICLE is enabled")
+	}
+	for _, dynamicType := range []string{"DYNAMIC_TYPE_WORD", "DYNAMIC_TYPE_DRAW", "DYNAMIC_TYPE_OPUS"} {
+		if !bilibiliDynamicTypeEnabled(dynamicType, []string{"DRAW"}) {
+			t.Fatalf("expected %s to remain enabled without ARTICLE", dynamicType)
+		}
+	}
+}
+
+func TestNormalizeBilibiliContentTypesPreservesLegacyArticles(t *testing.T) {
+	legacy := normalizeBilibiliContentTypes(nil, true)
+	if !containsString(legacy, "DRAW") || !containsString(legacy, "ARTICLE") {
+		t.Fatalf("legacy content types were not preserved: %#v", legacy)
+	}
+	newFeed := normalizeBilibiliContentTypes(nil, false)
+	if !containsString(newFeed, "DRAW") || containsString(newFeed, "ARTICLE") {
+		t.Fatalf("new content types should default to DRAW only: %#v", newFeed)
+	}
+}
+
 func TestBilibiliRichTextExtractsOpusCaption(t *testing.T) {
 	raw := json.RawMessage(`{"rich_text_nodes":[{"type":"RICH_TEXT_NODE_TYPE_EMOJI","text":""},{"type":"RICH_TEXT_NODE_TYPE_TEXT","text":"非常好灵梦画了"}]}`)
 	if got := bilibiliRichText(raw); got != "非常好灵梦画了" {

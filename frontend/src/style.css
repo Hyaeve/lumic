@@ -337,6 +337,9 @@ body, button, input, textarea, select { font-size: 14px; }
   .media-count-2, .media-count-4 { width: 100%; }
 }
 .feed-settings-form .content-scope { margin: 2px 0 4px; padding: 10px 12px; }
+.feed-settings-form .content-scope > label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.feed-settings-form .content-scope > label input { width: 15px; height: 15px; margin: 0; accent-color: #668d73; }
+.feed-settings-form .content-scope > label span { cursor: pointer; }
 .feed-settings-form .login-button { margin-top: 5px; }
 @media (max-width: 620px) {
   .feed-settings-modal { width: min(470px, calc(100vw - 32px)); padding: 24px 20px; }
@@ -498,4 +501,83 @@ body, button, input, textarea, select { font-size: 14px; }
 .dark .main-nav button.active .sidebar-source-icon { filter: grayscale(1) brightness(1.75) contrast(1.08) drop-shadow(0 0 5px #dce7ff) drop-shadow(0 0 10px #7898e8); }
 .dark .sidebar { box-shadow: inset -1px 0 #ffffff05, 18px 0 48px #0004; }
 .dark .media-grid .media-frame { background: #111319; border-color: #282b33; }
+.dark .selection-cancel-button:hover, .dark .selection-select-all-button:hover { background: #24272f; }
+
+/* Complete night palette: black panels, cool starlight, and no legacy mint surfaces */
+svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.app-shell.dark {
+  --ink: #f2f3f6;
+  --muted: #989ca8;
+  --line: #2a2d35;
+  --card: #17191e;
+  --sidebar: #0b0d12;
+  background: #080a0e;
+}
+.dark .sidebar { background: #0b0d12; border-color: #252831; }
+.dark .brand-mark { color: #fff0b2; text-shadow: 0 0 4px #fff8dc, 0 0 12px #f4cf72dd, 0 0 25px #dcae45aa, 0 0 40px #ba852755; }
+.dark .sidebar .brand > span:not(.brand-mark) { color: #f5f6f9; text-shadow: 0 0 9px #fff2bd38, 0 0 18px #d5b45b24; }
+.dark .sidebar .brand small { color: #afb3bf; text-shadow: 0 0 8px #e5c76d3d; }
+.dark .main-nav button, .dark .sidebar-bottom > button, .dark .nav-line-symbol { color: #999eaa; }
+.dark .main-nav button:hover, .dark .sidebar-bottom > button:hover { color: #dfe3ed; background: #151820; }
+.dark .main-nav button.active, .dark .sidebar-bottom > button.active { color: #f4f6fb; background: #1b1e27; text-shadow: 0 0 8px #dce6ff52; }
+.dark .main-nav button.active .nav-line-symbol, .dark .sidebar-bottom > button.active .nav-line-symbol { color: #f7e7ad; filter: drop-shadow(0 0 4px #f7dc84cc) drop-shadow(0 0 9px #c99b42aa); }
+.dark .sidebar-bottom .sidebar-theme-button { color: #b4bac8; background: #121419; border-color: #2a2d35; }
+.dark .sidebar-bottom .sidebar-theme-button:hover { color: #f7e7ad; background: #1b1e27; border-color: #484334; }
+.dark :is(.post-card, .stat-card, .pull-card, .modal, .settings-page .settings-pane, .platform-auth-card, .timeline-search, .timeline-context-menu, .selection-dock) { background: #17191e; border-color: #2a2d35; }
+.dark :is(.settings-page, .settings-page .settings-tabs) { background: #080a0e; }
+.dark .modal-backdrop { background: #020307b8; }
+.dark .stat-icon.mint { color: #d8e3ff; background: #232936; }
+.dark .stat-icon.rose { color: #f0c4cc; background: #31242a; }
+.dark .stat-icon.sand { color: #efd49d; background: #302b22; }
+.dark .stat-card em { color: #aabce5; }
+.dark .filters button { color: #999eaa; }
+.dark .filters button:hover { color: #e3e8f4; background: #1b1e27; }
+.dark .filters button.selected { color: #eef3ff; background: #202530; }
+.dark .filters .timeline-sort-button { color: #aab1c0; background: #17191e; border-color: #2d3039; }
+.dark .filters .timeline-sort-button:hover { color: #f3df9e; background: #22252d; border-color: #4a4434; }
+.dark .timeline-search input::placeholder { color: #727784; }
+.dark .source-pill.coral { color: #efb1aa; background: #302225; }
+.dark .source-pill.violet { color: #c7c3f2; background: #252538; }
+.dark .source-pill.blue { color: #afd3ed; background: #1e2a34; }
+.dark .source-pill.twitter { color: #c2d0dc; background: #202932; }
+.dark .tag-row span, .dark .tag-row button { color: #b8c2d8; background: #20232c; border-color: transparent; }
+.dark .tag-row button:hover, .dark .tag-row button.active { color: #f1f4fb; background: #292e3b; border-color: #46516b; }
+.dark .source-tag-preview b { color: #bbc5db; background: #20232c; }
+.dark :is(.settings-form input, .settings-form select, .bili-credentials textarea, .credential-config-body .pixiv-browser-form textarea, .bili-search input) { color: #eef0f5; background: #111318; border-color: #2c3039; }
+.dark :is(.settings-form input, .bili-credentials textarea, .credential-config-body .pixiv-browser-form textarea, .bili-search input):focus { border-color: #59647d; box-shadow: 0 0 0 3px #59647d26; }
+.dark :is(.settings-page .settings-form input, .settings-page .settings-form select, .settings-page .bili-credentials textarea, .credential-config-body .pixiv-browser-form textarea, .backup-action-grid article) { background: #111318; }
+.dark :is(.setting-status, .bili-account, .content-scope, .timeline-message, .source-action-message) { color: #c6d0e5; background: #1c2029; border-color: #343947; }
+.dark .content-scope span { color: #c1cbe0; background: #151820; border-color: #303541; }
+.dark .feed-settings-form .content-scope > label input { accent-color: #c2a65b; }
+.dark .settings-page .pane-heading > span { color: #b8bfcd; background: #1c1f27; }
+.dark .settings-page .settings-tabs button.active { color: #f2dfa0; }
+.dark .settings-page .settings-tabs button.active::after { background: #d0ae55; }
+.dark :is(.secondary-button, .sync-latest-icon, .pull-action.secondary) { color: #c3c9d6; background: #15171c; border-color: #30343e; }
+.dark :is(.secondary-button, .sync-latest-icon, .pull-action.secondary):hover { color: #f3dfa0; background: #20232b; border-color: #4a4434; }
+.dark :is(.login-button, .sync-button, .restore-file-button, .add-fab, .pull-action:not(.secondary)) { color: #f4f6fb; background: #3a4358; box-shadow: none; }
+.dark :is(.login-button, .sync-button, .restore-file-button, .add-fab, .pull-action:not(.secondary)):hover { background: #46516b; }
+.dark .success-message { color: #b9c8e6!important; }
+.dark .connection-dot.online { color: #c7d2e9; }
+.dark .connection-dot.online::before { background: #9caed4; box-shadow: 0 0 0 4px #9caed422, 0 0 10px #8da2d2aa; }
+.dark .platform-source-card, .dark .settings-page .platform-source-card { background: #15171c; border-color: #2a2d35; }
+.dark .platform-source-card:hover, .dark .settings-page .platform-source-card:hover { border-color: #434957; box-shadow: 0 14px 30px #0006; }
+.dark .platform-source-card > button { color: #cbd3e3; background: #1e222b; border-color: #343946; }
+.dark .platform-source-card > button:hover { color: #f2dfa0; background: #262a34; border-color: #4a4434; }
+.dark .platform-empty { color: #9298a6; background: #111318; border-color: #30343e; }
+.dark .platform-detail-summary > div { background: #121419; border-color: #2c3039; }
+.dark .platform-auth-card:hover, .dark .platform-auth-card:focus-visible { border-color: #454b59; box-shadow: 0 10px 24px #0005; }
+.dark .connect-options button:hover, .dark .timeline-context-menu button:hover { background: #21242c; }
+.dark .configured-source-list article .source-row-actions .source-icon-action:hover { color: #e5eaf5; background: #22252d; border-color: #454a57; }
+.dark .configured-source-list article .source-row-actions .source-icon-action { color: #aeb5c4; border-color: #30343e; }
+.dark .configured-source-list article small, .dark .pull-info small { color: #9097a7; }
+.dark .configured-source-list article em { color: #c5d0e7; background: #202530; }
+.dark .configured-source-list article em.disabled { color: #b49a98; background: #2b2224; }
+.dark .pull-dot.success { background: #9caed4; box-shadow: 0 0 8px #8da2d277; }
+.dark .source-card:hover { border-color: #454b59; }
+.dark .source-card small, .dark .source-card > button { color: #aeb8cf; }
+.dark .settings-back { color: #c3c9d6; background: #15171c; border-color: #30343e; }
+.dark :is(.feed-toggle-row input, .history-option input, .switch-row input) { accent-color: #c2a65b; }
+.dark .eyebrow, .dark .post-foot { color: #999eaa; }
+.dark :is(.pull-avatar, .configured-source-avatar, .liked-account-avatar, .author-profile-main > img) { background: #111318; }
+.dark .media-grid .media-frame, .dark .media-grid button { background: #101217; border-color: #282b33; }
 .dark .selection-cancel-button:hover, .dark .selection-select-all-button:hover { background: #24272f; }
