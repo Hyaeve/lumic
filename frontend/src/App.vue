@@ -996,7 +996,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
             <button class="source-nav-toggle" type="button" :title="sourcesExpanded ? '收起平台来源' : '展开平台来源'" :aria-expanded="sourcesExpanded" @click="sourcesExpanded = !sourcesExpanded"><span :class="{ collapsed: !sourcesExpanded }">⌄</span></button>
           </div>
           <div v-show="sourcesExpanded" class="source-nav-children">
-            <button v-for="(meta, key) in sourceMeta" :key="key" :class="{ active: activeNav === 'source' && activeSource === key }" @click="navigateTo('source', key)"><img class="sidebar-source-icon" :src="meta.lineImage" :alt="`${meta.label}线条图标`">{{ meta.label }}</button>
+            <button v-for="(meta, key) in sourceMeta" :key="key" :class="{ active: activeNav === 'source' && activeSource === key }" @click="navigateTo('source', key)"><img :class="['sidebar-source-icon', { 'twitter-sidebar-icon': key === 'twitter' }]" :src="meta.lineImage" :alt="`${meta.label}线条图标`">{{ meta.label }}</button>
           </div>
         </div>
         <button :class="{ active: activeNav === 'liked' }" @click="navigateTo('liked', 'all')">
@@ -1061,8 +1061,8 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
 <div v-if="!authorProfile" class="filters">
 <button :class="{ selected: activeSource === 'all' }" @click="activeSource = 'all'"><span>✦</span>全部</button>
 <button class="timeline-sort-button" type="button" :title="timelineSort === 'newest' ? '当前最新优先，点击切换为最早优先' : '当前最早优先，点击切换为最新优先'" :aria-label="timelineSort === 'newest' ? '最新优先，切换为最早优先' : '最早优先，切换为最新优先'" @click="timelineSort = timelineSort === 'newest' ? 'oldest' : 'newest'">
-  <svg v-if="timelineSort === 'newest'" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v15M7.5 14.5 12 19l4.5-4.5"/><path d="M5 5h4M5 9h4M5 13h2"/></svg>
-  <svg v-else viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V5M7.5 9.5 12 5l4.5 4.5"/><path d="M5 19h4M5 15h4M5 11h2"/></svg>
+  <svg v-if="timelineSort === 'newest'" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h7M5 10h5M5 14h3"/><path d="M17 5v14M13.5 15.5 17 19l3.5-3.5"/></svg>
+  <svg v-else viewBox="0 0 24 24" aria-hidden="true"><path d="M5 18h7M5 14h5M5 10h3"/><path d="M17 19V5M13.5 8.5 17 5l3.5 3.5"/></svg>
 </button>
 </div>
 <div v-if="!authorProfile" class="timeline-tools">

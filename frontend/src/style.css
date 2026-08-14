@@ -216,6 +216,8 @@ body, button, input, textarea, select { font-size: 14px; }
 .nav-line-symbol { display: inline-grid; place-items: center; width: 24px!important; height: 24px; flex: none; color: #77847e; font-size: 22px!important; line-height: 1; }
 .sidebar-source-icon { display: block; width: 24px; height: 24px; flex: none; object-fit: contain; opacity: .72; filter: grayscale(1) saturate(0) contrast(.88); }
 .source-nav-children button:nth-child(3) .sidebar-source-icon { transform: scale(.82); }
+.sidebar-source-icon.twitter-sidebar-icon { opacity: .94; filter: grayscale(1) brightness(.5) contrast(1.45); }
+.dark .sidebar-source-icon.twitter-sidebar-icon { opacity: .95; filter: grayscale(1) brightness(1.55) contrast(1.2); }
 .main-nav button.active .sidebar-source-icon { opacity: 1; }
 .subtitle, .caption, .modal p:not(.eyebrow) { font-size: 15px; }
 .author strong, .pull-title strong { font-size: 15px; }

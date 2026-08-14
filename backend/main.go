@@ -1169,7 +1169,7 @@ func deletePostMedia(media []string) error {
 			continue
 		}
 		preview, hasPreview := mediaPreviewCachePath(root, absolute)
-		legacyPreview, hasLegacyPreview := legacyMediaPreviewCachePath(root, absolute)
+		obsoletePreviews := obsoleteMediaPreviewCachePaths(root, absolute)
 		if info, err := os.Stat(absolute); err == nil {
 			if info.IsDir() {
 				continue
@@ -1185,8 +1185,8 @@ func deletePostMedia(media []string) error {
 				return err
 			}
 		}
-		if hasLegacyPreview {
-			if err := os.Remove(legacyPreview); err != nil && !os.IsNotExist(err) {
+		for _, obsoletePreview := range obsoletePreviews {
+			if err := os.Remove(obsoletePreview); err != nil && !os.IsNotExist(err) {
 				return err
 			}
 		}
@@ -1194,7 +1194,7 @@ func deletePostMedia(media []string) error {
 	return nil
 }
 
-const mediaPreviewMaxDimension = 720
+const mediaPreviewMaxDimension = 760
 
 var mediaPreviewLocks sync.Map
 var mediaPreviewGenerationSlots = make(chan struct{}, 2)
@@ -1207,18 +1207,19 @@ func mediaPreviewCachePath(root, source string) (string, bool) {
 	if relative == ".previews" || strings.HasPrefix(relative, ".previews"+string(filepath.Separator)) {
 		return "", false
 	}
-	return filepath.Join(root, ".previews", relative) + ".v2.jpg", true
+	return filepath.Join(root, ".previews", relative) + ".v3.jpg", true
 }
 
-func legacyMediaPreviewCachePath(root, source string) (string, bool) {
+func obsoleteMediaPreviewCachePaths(root, source string) []string {
 	relative, err := filepath.Rel(root, source)
 	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return "", false
+		return nil
 	}
 	if relative == ".previews" || strings.HasPrefix(relative, ".previews"+string(filepath.Separator)) {
-		return "", false
+		return nil
 	}
-	return filepath.Join(root, ".previews", relative) + ".jpg", true
+	base := filepath.Join(root, ".previews", relative)
+	return []string{base + ".v2.jpg", base + ".jpg"}
 }
 
 func resizeMediaPreview(source image.Image, width, height int) *image.RGBA {
@@ -1274,7 +1275,7 @@ func generateMediaPreview(sourcePath, previewPath string) error {
 	}
 	temporaryName := temporary.Name()
 	defer os.Remove(temporaryName)
-	if err := jpeg.Encode(temporary, resizeMediaPreview(decoded, width, height), &jpeg.Options{Quality: 78}); err != nil {
+	if err := jpeg.Encode(temporary, resizeMediaPreview(decoded, width, height), &jpeg.Options{Quality: 82}); err != nil {
 		temporary.Close()
 		return err
 	}
@@ -1331,8 +1332,8 @@ func mediaPreviewHandler(w http.ResponseWriter, r *http.Request) {
 			http.ServeFile(w, r, sourcePath)
 			return
 		}
-		if legacyPreview, ok := legacyMediaPreviewCachePath(root, sourcePath); ok {
-			_ = os.Remove(legacyPreview)
+		for _, obsoletePreview := range obsoleteMediaPreviewCachePaths(root, sourcePath) {
+			_ = os.Remove(obsoletePreview)
 		}
 	}
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
