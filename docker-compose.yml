@@ -9,6 +9,9 @@ services:
       - ./data:/data
       # 平台动态、图文、专栏正文及媒体文件。
       - ./flow:/flow
+      # 浏览动态时按需生成的压缩预览图，可独立清理和挂载。
+      - ./previews:/previews
     environment:
       TZ: Asia/Shanghai
+      LUMIC_PREVIEW_ROOT: /previews
     restart: unless-stopped

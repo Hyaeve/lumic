@@ -7,6 +7,7 @@ backend/*.exe
 backend/package-lock.json
 data
 flow
+previews
 *.log
 .env
 .env.*

@@ -47,11 +47,67 @@ func TestDownloadRemoteImageAndFlowPath(t *testing.T) {
 	}
 }
 
+func TestDownloadRemoteLiveMedia(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Referer") != "https://weibo.com/" || !strings.Contains(r.Header.Get("Cookie"), "SUB=test") {
+			http.Error(w, "missing weibo headers", http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "video/quicktime")
+		_, _ = w.Write([]byte("live-photo-video"))
+	}))
+	defer server.Close()
+	target, err := downloadRemoteLiveMedia(server.Client(), server.URL+"/live", filepath.Join(t.TempDir(), "author20260814-1"), "https://weibo.com/", "SUB=test")
+	if err != nil {
+		t.Fatalf("download live media: %v", err)
+	}
+	if filepath.Ext(target) != ".mov" {
+		t.Fatalf("unexpected live media extension: %s", target)
+	}
+	if data, err := os.ReadFile(target); err != nil || string(data) != "live-photo-video" {
+		t.Fatalf("downloaded live media mismatch: data=%q err=%v", data, err)
+	}
+}
+
+func TestInitializeFlowStorageCreatesPreviewRootAndRemovesLegacyCache(t *testing.T) {
+	root := t.TempDir()
+	configuredFlowRoot := filepath.Join(root, "flow")
+	configuredPreviewRoot := filepath.Join(root, "previews")
+	legacyPreviewRoot := filepath.Join(configuredFlowRoot, ".previews")
+	if err := os.MkdirAll(legacyPreviewRoot, 0755); err != nil {
+		t.Fatalf("create legacy preview directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyPreviewRoot, "stale.jpg"), []byte("stale"), 0600); err != nil {
+		t.Fatalf("seed legacy preview: %v", err)
+	}
+
+	oldFlowRoot, oldPreviewRoot := flowRoot, previewRoot
+	t.Cleanup(func() { flowRoot, previewRoot = oldFlowRoot, oldPreviewRoot })
+	t.Setenv("LUMIC_FLOW_ROOT", configuredFlowRoot)
+	t.Setenv("LUMIC_PREVIEW_ROOT", configuredPreviewRoot)
+
+	if err := initializeFlowStorage(); err != nil {
+		t.Fatalf("initialize flow storage: %v", err)
+	}
+	if _, err := os.Stat(configuredPreviewRoot); err != nil {
+		t.Fatalf("preview root was not created: %v", err)
+	}
+	if _, err := os.Stat(legacyPreviewRoot); !os.IsNotExist(err) {
+		t.Fatalf("legacy preview root still exists: %v", err)
+	}
+	for _, source := range []Source{SourceBilibili, SourcePixiv, SourceWeibo, SourceTwitter} {
+		if _, err := os.Stat(filepath.Join(configuredFlowRoot, string(source))); err != nil {
+			t.Fatalf("%s flow directory was not created: %v", source, err)
+		}
+	}
+}
+
 func TestMediaPreviewHandlerCompressesAndCleansCache(t *testing.T) {
 	root := t.TempDir()
-	oldFlowRoot := flowRoot
-	flowRoot = root
-	t.Cleanup(func() { flowRoot = oldFlowRoot })
+	oldFlowRoot, oldPreviewRoot := flowRoot, previewRoot
+	flowRoot, previewRoot = filepath.Join(root, "flow"), filepath.Join(root, "previews")
+	t.Cleanup(func() { flowRoot, previewRoot = oldFlowRoot, oldPreviewRoot })
+	root = flowRoot
 	sourcePath := filepath.Join(root, "weibo", "author", "post.png")
 	if err := os.MkdirAll(filepath.Dir(sourcePath), 0755); err != nil {
 		t.Fatal(err)
@@ -166,6 +222,13 @@ func TestBilibiliRichTextExtractsOpusCaption(t *testing.T) {
 	}
 }
 
+func TestBilibiliRichTextExtractsOrigTextNodes(t *testing.T) {
+	raw := json.RawMessage(`{"rich_text_nodes":[{"type":"RICH_TEXT_NODE_TYPE_EMOJI","orig_text":"[灵魂出窍]"},{"type":"RICH_TEXT_NODE_TYPE_TEXT","orig_text":"非常好灵梦画了"}]}`)
+	if got := bilibiliRichText(raw); got != "[灵魂出窍]非常好灵梦画了" {
+		t.Fatalf("orig_text caption was not extracted in order: %q", got)
+	}
+}
+
 func TestBilibiliRichTextExtractsNestedDrawCaption(t *testing.T) {
 	raw := json.RawMessage(`{"major":{"draw":{"desc":{"rich_text_nodes":[{"text":"图文动态正文"}]}}}}`)
 	if got := bilibiliRichText(raw); got != "图文动态正文" {
@@ -193,6 +256,36 @@ func TestBilibiliDetailCaptionPrefersFullText(t *testing.T) {
 	}
 	if !shouldFetchBilibiliDynamicDetail("DYNAMIC_TYPE_OPUS", "preview") || shouldFetchBilibiliDynamicDetail("DYNAMIC_TYPE_DRAW", "complete draw caption") {
 		t.Fatal("unexpected Bilibili detail request decision")
+	}
+}
+
+func TestCollectWeiboPostsExtractsLivePhoto(t *testing.T) {
+	payload := map[string]any{
+		"id":         "123",
+		"created_at": "Fri Aug 14 12:00:00 +0800 2026",
+		"text_raw":   "Live Photo 动态",
+		"pic_video":  "picture-id:live-photo-fid",
+		"user": map[string]any{
+			"idstr":       "42",
+			"screen_name": "作者",
+			"avatar_hd":   "https://example.com/avatar.jpg",
+		},
+		"pic_infos": map[string]any{
+			"picture-id": map[string]any{
+				"type": "livephoto",
+				"original": map[string]any{
+					"url": "https://wx1.sinaimg.cn/large/picture.jpg",
+				},
+			},
+		},
+	}
+	posts := make([]Post, 0)
+	collectWeiboPosts(payload, SourceConfig{ID: "weibo-42", Source: SourceWeibo, Name: "作者"}, &posts, make(map[string]bool))
+	if len(posts) != 1 || len(posts[0].Media) != 1 || len(posts[0].LiveMedia) != 1 {
+		t.Fatalf("live photo was not collected: %#v", posts)
+	}
+	if !strings.Contains(posts[0].LiveMedia[0], "live-photo-fid.mov") || !strings.Contains(posts[0].Media[0], "/original/") {
+		t.Fatalf("unexpected live photo resources: media=%q live=%q", posts[0].Media[0], posts[0].LiveMedia[0])
 	}
 }
 
@@ -283,6 +376,50 @@ func TestMergePostsUpdatesArchivedMedia(t *testing.T) {
 	}
 }
 
+func TestWeiboLikesSourceDoesNotBecomeFavorite(t *testing.T) {
+	store := &Store{posts: []Post{
+		{ID: "legacy-like", Source: SourceWeibo, Liked: true},
+		{ID: "manual-favorite", Source: SourceWeibo, Liked: true, FavoriteExplicit: true},
+	}}
+	incoming := []Post{
+		{ID: "legacy-like", Source: SourceWeibo, FeedIDs: []string{"weibo-likes-42"}},
+		{ID: "manual-favorite", Source: SourceWeibo, FeedIDs: []string{"weibo-likes-42"}},
+	}
+	if _, err := store.mergePosts(incoming); err != nil {
+		t.Fatalf("merge weibo likes source: %v", err)
+	}
+	if store.posts[0].Liked || !containsString(store.posts[0].FeedIDs, "weibo-likes-42") {
+		t.Fatalf("imported weibo like was treated as an app favorite: %#v", store.posts[0])
+	}
+	if !store.posts[1].Liked || !store.posts[1].FavoriteExplicit {
+		t.Fatalf("explicit app favorite was not preserved: %#v", store.posts[1])
+	}
+}
+
+func TestSetSourceTagsAppliesToEverySourcePost(t *testing.T) {
+	store := &Store{posts: []Post{
+		{ID: "like-a", Source: SourceWeibo, FeedIDs: []string{"weibo-likes-42"}, Author: "作者甲", Tags: []string{"旧标签"}},
+		{ID: "like-b", Source: SourceWeibo, FeedIDs: []string{"weibo-likes-42", "weibo-7"}, Author: "作者乙", Tags: []string{"旧标签"}},
+		{ID: "legacy-bili", Source: SourceBilibili, Author: "UP主", Tags: []string{"旧标签"}},
+	}}
+	likesFeed := SourceConfig{ID: "weibo-likes-42", Source: SourceWeibo, Name: "我的点赞", Tags: []string{"点赞来源"}}
+	weiboFeed := SourceConfig{ID: "weibo-7", Source: SourceWeibo, Name: "作者乙", Tags: []string{"关注作者"}}
+	biliFeed := SourceConfig{ID: "bili-8", Source: SourceBilibili, Name: "UP主", Tags: []string{"绘画"}}
+	feeds := []SourceConfig{likesFeed, weiboFeed, biliFeed}
+	if err := store.setSourceTags(likesFeed, feeds); err != nil {
+		t.Fatalf("apply likes source tags: %v", err)
+	}
+	if !stringSlicesEqual(store.posts[0].Tags, []string{"点赞来源"}) || !stringSlicesEqual(store.posts[1].Tags, []string{"点赞来源", "关注作者"}) {
+		t.Fatalf("source tags were not applied to all source posts: %#v", store.posts)
+	}
+	if err := store.setSourceTags(biliFeed, feeds); err != nil {
+		t.Fatalf("apply legacy source tags: %v", err)
+	}
+	if !containsString(store.posts[2].FeedIDs, "bili-8") || !stringSlicesEqual(store.posts[2].Tags, []string{"绘画"}) {
+		t.Fatalf("legacy author membership was not backfilled: %#v", store.posts[2])
+	}
+}
+
 func TestPostsAfterUsesStrictIncrementalBoundary(t *testing.T) {
 	boundary := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
 	posts := []Post{
@@ -297,6 +434,45 @@ func TestPostsAfterUsesStrictIncrementalBoundary(t *testing.T) {
 	all := postsAfter(posts, time.Time{})
 	if len(all) != len(posts) {
 		t.Fatalf("full sync boundary unexpectedly filtered posts: %#v", all)
+	}
+}
+
+func TestPostsAfterOrCaptionRepairReusesArchivedMedia(t *testing.T) {
+	boundary := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	store := &Store{posts: []Post{{
+		ID:        "bili-dynamic-1",
+		Source:    SourceBilibili,
+		Caption:   "",
+		Avatar:    "/flow/bilibili/author/avatar.jpg",
+		Media:     []string{"/flow/bilibili/author/post.jpg"},
+		Published: boundary.Add(-24 * time.Hour),
+		Liked:     true,
+	}}}
+	incoming := []Post{{
+		ID:        "bili-dynamic-1",
+		Source:    SourceBilibili,
+		Caption:   "非常好灵梦画了",
+		Avatar:    "https://example.com/avatar.jpg",
+		Media:     []string{"https://example.com/post.jpg"},
+		Published: boundary.Add(-24 * time.Hour),
+	}}
+
+	filtered := store.postsAfterOrCaptionRepair(incoming, boundary)
+	if len(filtered) != 1 {
+		t.Fatalf("caption repair was filtered out: %#v", filtered)
+	}
+	if filtered[0].Caption != "非常好灵梦画了" || filtered[0].Media[0] != "/flow/bilibili/author/post.jpg" || filtered[0].Avatar != "/flow/bilibili/author/avatar.jpg" || !filtered[0].Liked {
+		t.Fatalf("caption repair did not preserve archived state: %#v", filtered[0])
+	}
+}
+
+func TestPostsAfterOrSourceMembershipMigratesExistingWeiboLikes(t *testing.T) {
+	boundary := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	store := &Store{posts: []Post{{ID: "weibo-status-1", Source: SourceWeibo, Media: []string{"/flow/weibo/我的点赞/post.jpg"}, Published: boundary.Add(-time.Hour), Liked: true}}}
+	incoming := []Post{{ID: "weibo-status-1", Source: SourceWeibo, FeedIDs: []string{"weibo-likes-42"}, Media: []string{"https://example.com/post.jpg"}, Published: boundary.Add(-time.Hour)}}
+	filtered := store.postsAfterOrSourceMembership(incoming, boundary, "weibo-likes-42")
+	if len(filtered) != 1 || filtered[0].Media[0] != "/flow/weibo/我的点赞/post.jpg" || !containsString(filtered[0].FeedIDs, "weibo-likes-42") {
+		t.Fatalf("existing weibo likes membership was not migrated: %#v", filtered)
 	}
 }
 
@@ -320,7 +496,7 @@ func TestServeFrontendFallsBackForRoutesButNotMissingAssets(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(oldWorkingDirectory) })
 
-	for _, route := range []string{"/liked", "/source/bilibili", "/settings/platforms", "/author/bilibili/%E6%B5%8B%E8%AF%95"} {
+	for _, route := range []string{"/liked", "/favorites", "/source/bilibili", "/settings/platforms", "/author/bilibili/%E6%B5%8B%E8%AF%95"} {
 		response := httptest.NewRecorder()
 		serveFrontend(response, httptest.NewRequest(http.MethodGet, route, nil))
 		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "spa-index") {
@@ -401,6 +577,45 @@ func TestWeiboAccountHandlerRequiresCompletePasswordLogin(t *testing.T) {
 	}
 }
 
+func TestWeiboAccountHandlerReturnsValidatedAvatar(t *testing.T) {
+	tempDir := t.TempDir()
+	oldFile, oldValidator := bilibiliFile, validateWeiboLoginSession
+	bilibiliFile = filepath.Join(tempDir, "platform.enc")
+	validateWeiboLoginSession = func(cookie, userID, proxyURL string) (WeiboCredentials, error) {
+		return WeiboCredentials{Cookie: "SUB=session", UserID: "42", UserName: "登录账号", Avatar: "https://example.com/avatar.jpg"}, nil
+	}
+	t.Cleanup(func() {
+		bilibiliFile = oldFile
+		validateWeiboLoginSession = oldValidator
+	})
+	store := &BilibiliStore{config: BilibiliConfig{}, key: make([]byte, 32)}
+	request := httptest.NewRequest(http.MethodPut, "/api/weibo/account", strings.NewReader(`{"cookie":"SUB=session","userId":"42"}`))
+	response := httptest.NewRecorder()
+	store.weiboAccountHandler(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"avatar":"https://example.com/avatar.jpg"`) {
+		t.Fatalf("validated account avatar was not returned: status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestWeiboAccountHandlerRefreshesMissingProfile(t *testing.T) {
+	tempDir := t.TempDir()
+	oldFile, oldFetcher := bilibiliFile, fetchWeiboAccountProfile
+	bilibiliFile = filepath.Join(tempDir, "platform.enc")
+	fetchWeiboAccountProfile = func(userID string, credentials WeiboCredentials, proxyURL string) (WeiboUser, error) {
+		return WeiboUser{UserID: userID, Name: "当前微博账号", Avatar: "https://example.com/current.jpg"}, nil
+	}
+	t.Cleanup(func() {
+		bilibiliFile = oldFile
+		fetchWeiboAccountProfile = oldFetcher
+	})
+	store := &BilibiliStore{config: BilibiliConfig{Weibo: WeiboCredentials{Cookie: "SUB=session", UserID: "42"}}, key: make([]byte, 32)}
+	response := httptest.NewRecorder()
+	store.weiboAccountHandler(response, httptest.NewRequest(http.MethodGet, "/api/weibo/account", nil))
+	if response.Code != http.StatusOK || store.config.Weibo.UserName != "当前微博账号" || store.config.Weibo.Avatar != "https://example.com/current.jpg" {
+		t.Fatalf("missing weibo profile was not refreshed: status=%d account=%#v body=%s", response.Code, store.config.Weibo, response.Body.String())
+	}
+}
+
 func TestLoginWeiboWithPasswordExplainsPlatformSystemError(t *testing.T) {
 	privateKey, err := rsa.GenerateKey(rand.Reader, 1024)
 	if err != nil {
@@ -430,7 +645,7 @@ func TestPostsHandlerPersistsLikedState(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPatch, "/api/posts?id=post-1", strings.NewReader(`{"liked":true}`))
 	recorder := httptest.NewRecorder()
 	store.postsHandler(recorder, request)
-	if recorder.Code != http.StatusOK || !store.posts[0].Liked {
+	if recorder.Code != http.StatusOK || !store.posts[0].Liked || !store.posts[0].FavoriteExplicit {
 		t.Fatalf("like request failed: status=%d post=%#v body=%s", recorder.Code, store.posts[0], recorder.Body.String())
 	}
 	data, err := os.ReadFile(path)
@@ -438,7 +653,7 @@ func TestPostsHandlerPersistsLikedState(t *testing.T) {
 		t.Fatalf("read persisted content: %v", err)
 	}
 	var content ContentData
-	if err := json.Unmarshal(data, &content); err != nil || len(content.Posts) != 1 || !content.Posts[0].Liked {
+	if err := json.Unmarshal(data, &content); err != nil || len(content.Posts) != 1 || !content.Posts[0].Liked || !content.Posts[0].FavoriteExplicit {
 		t.Fatalf("liked state was not persisted: err=%v content=%#v", err, content)
 	}
 
@@ -447,6 +662,21 @@ func TestPostsHandlerPersistsLikedState(t *testing.T) {
 	store.postsHandler(missingRecorder, missingRequest)
 	if missingRecorder.Code != http.StatusNotFound {
 		t.Fatalf("missing post returned status %d", missingRecorder.Code)
+	}
+}
+
+func TestPostsHandlerBatchRemovesFavorites(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "content.json")
+	store := &Store{posts: []Post{
+		{ID: "one", Liked: true, FavoriteExplicit: true},
+		{ID: "two", Liked: true, FavoriteExplicit: true},
+		{ID: "three", Liked: true, FavoriteExplicit: true},
+	}, feeds: []SourceConfig{}, file: path}
+	request := httptest.NewRequest(http.MethodPatch, "/api/posts", strings.NewReader(`{"ids":["one","three"],"liked":false}`))
+	response := httptest.NewRecorder()
+	store.postsHandler(response, request)
+	if response.Code != http.StatusOK || store.posts[0].Liked || !store.posts[1].Liked || store.posts[2].Liked {
+		t.Fatalf("batch unfavorite failed: status=%d posts=%#v body=%s", response.Code, store.posts, response.Body.String())
 	}
 }
 
@@ -899,7 +1129,7 @@ func TestReconcileMovesWeiboLikesIntoCanonicalDirectory(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(oldDirectory, "image.jpg"), []byte("image"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	content := &Store{file: filepath.Join(tempDir, "content.json"), posts: []Post{{ID: "liked-post", Media: []string{flowPublicPath(SourceWeibo, oldName, "image.jpg")}}}}
+	content := &Store{file: filepath.Join(tempDir, "content.json"), posts: []Post{{ID: "liked-post", Source: SourceWeibo, Media: []string{flowPublicPath(SourceWeibo, oldName, "image.jpg")}, Liked: true}}}
 	store := &BilibiliStore{
 		content: content,
 		config: BilibiliConfig{WeiboSubscriptions: []SourceConfig{{
@@ -920,6 +1150,9 @@ func TestReconcileMovesWeiboLikesIntoCanonicalDirectory(t *testing.T) {
 	expectedMedia := flowPublicPath(SourceWeibo, "我的点赞", "image.jpg")
 	if content.posts[0].Media[0] != expectedMedia {
 		t.Fatalf("stored media path was not rewritten: %q", content.posts[0].Media[0])
+	}
+	if content.posts[0].Liked || !containsString(content.posts[0].FeedIDs, "weibo-likes-42") {
+		t.Fatalf("weibo likes post was not separated from app favorites: %#v", content.posts[0])
 	}
 }
 

@@ -78,6 +78,7 @@ const feeds = ref([])
 const postActionBusy = ref('')
 const timelineMessage = ref('')
 const selectionMode = ref(false)
+const selectionAction = ref('delete')
 const selectedPostIds = ref([])
 const contextMenu = ref({ open: false, x: 0, y: 0, post: null })
 const timelineSort = ref('newest')
@@ -94,7 +95,7 @@ let timelineFrame = 0
 let postResizeObserver = null
 const observedPostElements = new Map()
 const transientTimers = new Set()
-const lightbox = ref({ open: false, media: [], index: 0, author: '', scale: 1, rotation: 0, fit: true, x: 0, y: 0, dragging: false, motion: 'enter' })
+const lightbox = ref({ open: false, media: [], liveMedia: [], index: 0, author: '', scale: 1, rotation: 0, fit: true, x: 0, y: 0, dragging: false, motion: 'enter' })
 let lightboxDrag = null
 
 const sourceMeta = {
@@ -106,6 +107,7 @@ const sourceMeta = {
 const validSources = new Set(Object.keys(sourceMeta))
 const likedCount = computed(() => posts.value.filter(post => post.liked).length)
 const selectedPostCount = computed(() => selectedPostIds.value.length)
+const currentLightboxLive = computed(() => lightbox.value.liveMedia?.[lightbox.value.index] || '')
 const filteredPosts = computed(() => {
   const allPosts = Array.isArray(posts.value) ? posts.value : []
   const timeline = activeNav.value === 'liked' ? allPosts.filter(post => post.liked) : allPosts
@@ -121,6 +123,7 @@ const filteredPosts = computed(() => {
   })
 })
 const visiblePosts = computed(() => filteredPosts.value.slice(timelineStart.value, timelineEnd.value))
+const allFilteredPostsSelected = computed(() => filteredPosts.value.length > 0 && filteredPosts.value.every(post => selectedPostIds.value.includes(post.id)))
 const timelineTopSpace = computed(() => filteredPosts.value.slice(0, timelineStart.value).reduce((height, post) => height + (timelineHeights.value[post.id] || estimatedPostHeight) + 15, 0))
 const timelineBottomSpace = computed(() => filteredPosts.value.slice(timelineEnd.value).reduce((height, post) => height + (timelineHeights.value[post.id] || estimatedPostHeight) + 15, 0))
 const authorProfile = computed(() => {
@@ -492,7 +495,7 @@ async function saveFeedSettings() {
       if (!response.ok) throw new Error(await responseError(response, '来源设置保存失败'))
       const saved = await response.json(); const index = feeds.value.findIndex(feed => feed.id === saved.id)
       if (index >= 0) feeds.value[index] = saved
-      posts.value = posts.value.map(post => post.source === saved.source && post.author === saved.name ? { ...post, tags: [...(saved.tags || [])] } : post)
+      await loadData()
       if (selectedPlatform.value) {
         const platformFeedIndex = selectedPlatform.value.feeds.findIndex(feed => feed.id === saved.id)
         if (platformFeedIndex >= 0) selectedPlatform.value.feeds[platformFeedIndex] = saved
@@ -550,10 +553,10 @@ function resetLightboxView() {
   lightboxDrag = null
 }
 function openLightbox(post, index) {
-  lightbox.value = { open: true, media: post.media || [], index, author: post.author, scale: 1, rotation: 0, fit: true, x: 0, y: 0, dragging: false, motion: 'enter' }
+  lightbox.value = { open: true, media: post.media || [], liveMedia: post.liveMedia || [], index, author: post.author, scale: 1, rotation: 0, fit: true, x: 0, y: 0, dragging: false, motion: 'enter' }
 }
 function closeLightbox() {
-  lightbox.value = { open: false, media: [], index: 0, author: '', scale: 1, rotation: 0, fit: true, x: 0, y: 0, dragging: false, motion: 'enter' }
+  lightbox.value = { open: false, media: [], liveMedia: [], index: 0, author: '', scale: 1, rotation: 0, fit: true, x: 0, y: 0, dragging: false, motion: 'enter' }
   lightboxDrag = null
 }
 function moveLightbox(step) {
@@ -676,7 +679,7 @@ async function deletePost(post) {
 function togglePostSelection(post) {
   selectedPostIds.value = selectedPostIds.value.includes(post.id) ? selectedPostIds.value.filter(id => id !== post.id) : [...selectedPostIds.value, post.id]
 }
-function stopSelection() { selectionMode.value = false; selectedPostIds.value = [] }
+function stopSelection() { selectionMode.value = false; selectionAction.value = 'delete'; selectedPostIds.value = [] }
 function closeContextMenu() { contextMenu.value = { open: false, x: 0, y: 0, post: null } }
 function openContextMenu(event, post = null) {
   const width = 218
@@ -684,14 +687,25 @@ function openContextMenu(event, post = null) {
   contextMenu.value = { open: true, x: Math.min(event.clientX, window.innerWidth - width - 12), y: Math.min(event.clientY, window.innerHeight - height - 12), post }
 }
 function startMultiSelectMode() {
+  const unfavoriteMode = activeNav.value === 'liked'
   closeContextMenu()
-  navigateTo('all', 'all')
+  if (!unfavoriteMode) navigateTo('all', 'all')
+  selectionAction.value = unfavoriteMode ? 'unfavorite' : 'delete'
+  selectedPostIds.value = []
   selectionMode.value = true
+}
+function toggleSelectAllPosts() {
+  selectedPostIds.value = allFilteredPostsSelected.value ? [] : filteredPosts.value.map(post => post.id)
 }
 function deleteContextPost() {
   const post = contextMenu.value.post
   closeContextMenu()
   if (post) deletePost(post)
+}
+async function unfavoriteContextPost() {
+  const post = contextMenu.value.post
+  closeContextMenu()
+  if (post) await updatePostFavorite(post, false)
 }
 async function deleteSelectedPosts() {
   if (!selectedPostCount.value) return
@@ -704,6 +718,19 @@ async function deleteSelectedPosts() {
     const removed = new Set(selectedPostIds.value)
     posts.value = posts.value.filter(post => !removed.has(post.id))
     timelineMessage.value = `已删除 ${removed.size} 条动态`
+    stopSelection()
+  } catch (error) { timelineMessage.value = error.message } finally { postActionBusy.value = '' }
+}
+async function unfavoriteSelectedPosts() {
+  if (!selectedPostCount.value) return
+  postActionBusy.value = 'batch-unfavorite'
+  timelineMessage.value = ''
+  try {
+    const response = await fetch('/api/posts', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: selectedPostIds.value, liked: false }) })
+    if (!response.ok) throw new Error(await responseError(response, '批量取消收藏失败'))
+    const selected = new Set(selectedPostIds.value)
+    posts.value = posts.value.map(post => selected.has(post.id) ? { ...post, liked: false, favoriteExplicit: true } : post)
+    timelineMessage.value = `已取消收藏 ${selected.size} 条动态`
     stopSelection()
   } catch (error) { timelineMessage.value = error.message } finally { postActionBusy.value = '' }
 }
@@ -773,15 +800,16 @@ function prunePostCaches() {
   timelineHeights.value = Object.fromEntries(Object.entries(timelineHeights.value).filter(([id]) => activeIds.has(id)))
   mediaShapes.value = Object.fromEntries(Object.entries(mediaShapes.value).filter(([key]) => activeIds.has(key.split(':', 1)[0])))
 }
-async function togglePostLike(post) {
-  if (postActionBusy.value) return
-  const previous = Boolean(post.liked)
-  post.liked = !previous
-  postActionBusy.value = `like:${post.id}`
+async function updatePostFavorite(post, liked) {
+	if (postActionBusy.value) return
+	const previous = Boolean(post.liked)
+	if (previous === Boolean(liked)) return
+	post.liked = Boolean(liked)
+	postActionBusy.value = `like:${post.id}`
   timelineMessage.value = ''
   try {
     const response = await fetch(`/api/posts?id=${encodeURIComponent(post.id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ liked: post.liked }) })
-    if (!response.ok) throw new Error(await responseError(response, '点赞状态保存失败'))
+    if (!response.ok) throw new Error(await responseError(response, '收藏状态保存失败'))
     const updated = await response.json()
     post.liked = Boolean(updated.liked)
   } catch (error) {
@@ -789,8 +817,9 @@ async function togglePostLike(post) {
     timelineMessage.value = error.message
   } finally {
     postActionBusy.value = ''
-  }
+	}
 }
+function togglePostLike(post) { return updatePostFavorite(post, !post.liked) }
 function navigateTo(nav, source = activeSource.value) {
   stopSelection()
   selectedTag.value = ''
@@ -801,7 +830,7 @@ function navigateTo(nav, source = activeSource.value) {
   activeSource.value = source
   selectedAuthor.value = null
   mobileMenuOpen.value = false
-  const path = nav === 'source' ? `/source/${source}` : nav === 'liked' ? '/liked' : nav === 'pulls' ? '/pulls' : '/'
+  const path = nav === 'source' ? `/source/${source}` : nav === 'liked' ? '/favorites' : nav === 'pulls' ? '/pulls' : '/'
   updateRoute(path)
   if (nav === 'pulls') void Promise.all([loadFeeds(), loadPlatformAccounts()])
 }
@@ -896,7 +925,7 @@ function applyRoute() {
     activeNav.value = 'source'; activeSource.value = segments[1]
     return
   }
-  if (segments[0] === 'liked') {
+  if (segments[0] === 'liked' || segments[0] === 'favorites') {
     activeNav.value = 'liked'; activeSource.value = 'all'
     return
   }
@@ -1000,7 +1029,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
           </div>
         </div>
         <button :class="{ active: activeNav === 'liked' }" @click="navigateTo('liked', 'all')">
-<span class="nav-line-symbol">♡</span> 我的点赞
+<span class="nav-line-symbol">♡</span> 收藏
 </button>
         <button :class="{ active: activeNav === 'pulls' }" @click="navigateTo('pulls')">
 <span class="nav-line-symbol">▦</span> 订阅平台
@@ -1042,7 +1071,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
 <div class="stat-card">
 <div class="stat-icon rose">♡</div>
 <div>
-<span>我的点赞</span>
+<span>收藏</span>
 <strong>{{ likedCount }}</strong>
 </div>
 <small>持续增长中</small>
@@ -1085,18 +1114,18 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
 </div>
 <p v-if="post.caption" class="caption">{{ post.caption }}</p>
 <div v-if="post.media?.length" :class="['media-grid', `media-count-${Math.min(post.media.length, 9)}`]">
-<button v-for="(media, mediaIndex) in post.media.slice(0, 9)" :key="media" :class="['media-frame', mediaShape(post, mediaIndex)]" type="button" :aria-label="`查看 ${post.author} 的第 ${mediaIndex + 1} 张图片`" @click="openLightbox(post, mediaIndex)"><img :src="previewMedia(media)" alt="" loading="lazy" decoding="async" fetchpriority="low" @load="setMediaShape(post, mediaIndex, $event); scheduleTimelineWindow()"><span v-if="mediaIndex === 8 && post.media.length > 9" class="media-more-count">+{{ post.media.length - 9 }}</span></button>
+<button v-for="(media, mediaIndex) in post.media.slice(0, 9)" :key="media" :class="['media-frame', mediaShape(post, mediaIndex)]" type="button" :aria-label="`查看 ${post.author} 的第 ${mediaIndex + 1} 张图片`" @click="openLightbox(post, mediaIndex)"><img :src="previewMedia(media)" alt="" loading="lazy" decoding="async" fetchpriority="low" @load="setMediaShape(post, mediaIndex, $event); scheduleTimelineWindow()"><span v-if="post.liveMedia?.[mediaIndex]" class="media-live-badge"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10-6.5z"/></svg>LIVE</span><span v-if="mediaIndex === 8 && post.media.length > 9" class="media-more-count">+{{ post.media.length - 9 }}</span></button>
 </div>
 <div class="post-foot">
 <div class="tag-row"><button v-for="tag in post.tags" :key="tag" type="button" :class="{ active: selectedTag === tag }" @click="openTag(tag)">#{{ tag }}</button></div>
 <div class="post-foot-actions">
-<button :class="['post-like-button', { liked: post.liked }]" :disabled="postActionBusy === `like:${post.id}`" :title="post.liked ? '取消点赞' : '点赞'" :aria-label="post.liked ? '取消点赞' : '点赞'" @click="togglePostLike(post)">{{ post.liked ? '♥' : '♡' }}</button>
+<button :class="['post-like-button', { liked: post.liked }]" :disabled="postActionBusy === `like:${post.id}`" :title="post.liked ? '取消收藏' : '收藏'" :aria-label="post.liked ? '取消收藏' : '收藏'" @click="togglePostLike(post)">{{ post.liked ? '♥' : '♡' }}</button>
 <button :disabled="!post.originalUrl" :title="post.originalUrl ? '打开原动态' : '旧动态暂无原始链接，请重新拉取'" aria-label="打开原动态" @click="openOriginalPost(post)">↗</button>
 </div>
 </div>
 </article>
 <div v-if="timelineBottomSpace" class="timeline-spacer" :style="{ height: `${timelineBottomSpace}px` }" aria-hidden="true"></div>
-<div v-if="!filteredPosts.length" class="empty">{{ authorProfile ? '还没有拉取到这个作者的动态' : activeNav === 'liked' ? '还没有点赞的动态' : '还没有这个来源的动态' }}</div>
+<div v-if="!filteredPosts.length" class="empty">{{ authorProfile ? '还没有拉取到这个作者的动态' : activeNav === 'liked' ? '还没有收藏的动态' : '还没有这个来源的动态' }}</div>
 </section>
     </main>
     <main v-if="!showSettings && activeNav === 'pulls'" class="content pulls-page">
@@ -1124,19 +1153,24 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
       </section>
     </main>
     <div v-if="contextMenu.open" class="timeline-context-menu" :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }" role="menu" @click.stop>
-      <button type="button" role="menuitem" @click="startMultiSelectMode"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 12h8M8 15h5"/></svg><span>多选删除</span></button>
-      <button v-if="contextMenu.post" type="button" class="danger" role="menuitem" @click="deleteContextPost"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg><span>删除这条动态</span></button>
+      <button type="button" role="menuitem" @click="startMultiSelectMode"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="m8 12 2.3 2.3L16 8.7"/></svg><span>{{ activeNav === 'liked' ? '多选取消收藏' : '多选删除' }}</span></button>
+      <button v-if="contextMenu.post && activeNav === 'liked'" type="button" class="danger" role="menuitem" @click="unfavoriteContextPost"><svg viewBox="0 0 24 24"><path d="M12 20.5S4.5 16.2 4.5 10.2A4.2 4.2 0 0 1 12 7.6a4.2 4.2 0 0 1 7.5 2.6c0 6-7.5 10.3-7.5 10.3Z"/><path d="M8.5 11.5h7"/></svg><span>取消收藏</span></button>
+      <button v-else-if="contextMenu.post" type="button" class="danger" role="menuitem" @click="deleteContextPost"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg><span>删除这条动态</span></button>
     </div>
     <div v-if="selectionMode" class="selection-dock">
       <button type="button" class="selection-cancel-button" title="取消多选" aria-label="取消多选" @click="stopSelection"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+      <button v-if="selectionAction === 'unfavorite'" type="button" class="selection-select-all-button" :title="allFilteredPostsSelected ? '取消全选' : '全选'" :aria-label="allFilteredPostsSelected ? '取消全选' : '全选'" @click="toggleSelectAllPosts"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path v-if="allFilteredPostsSelected" d="M8 12h8"/><path v-else d="m8 12 2.3 2.3L16 8.7"/></svg><b>{{ allFilteredPostsSelected ? '取消全选' : '全选' }}</b></button>
       <span>已选择 {{ selectedPostCount }} 条</span>
-      <button type="button" class="selection-delete-button" :disabled="!selectedPostCount || postActionBusy === 'batch-delete'" title="删除所选动态" aria-label="删除所选动态" @click="deleteSelectedPosts"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg><b>删除</b></button>
+      <button v-if="selectionAction === 'unfavorite'" type="button" class="selection-delete-button selection-unfavorite-button" :disabled="!selectedPostCount || postActionBusy === 'batch-unfavorite'" title="取消收藏所选动态" aria-label="取消收藏所选动态" @click="unfavoriteSelectedPosts"><svg viewBox="0 0 24 24"><path d="M12 20.5S4.5 16.2 4.5 10.2A4.2 4.2 0 0 1 12 7.6a4.2 4.2 0 0 1 7.5 2.6c0 6-7.5 10.3-7.5 10.3Z"/><path d="M8.5 11.5h7"/></svg><b>取消收藏</b></button>
+      <button v-else type="button" class="selection-delete-button" :disabled="!selectedPostCount || postActionBusy === 'batch-delete'" title="删除所选动态" aria-label="删除所选动态" @click="deleteSelectedPosts"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg><b>删除</b></button>
     </div>
-    <div v-if="lightbox.open" class="lightbox-layer" role="dialog" aria-modal="true" :aria-label="`${lightbox.author} 的动态图片`" @click.self="closeLightbox" @wheel.prevent="zoomLightbox">
+    <div v-if="lightbox.open" class="lightbox-layer" role="dialog" aria-modal="true" :aria-label="`${lightbox.author} 的动态媒体`" @click.self="closeLightbox" @wheel.prevent="zoomLightbox">
       <button class="lightbox-close" type="button" title="关闭大图" aria-label="关闭大图" @click="closeLightbox">×</button>
       <figure @click.self="closeLightbox">
         <div :key="`${lightbox.media[lightbox.index]}:${lightbox.motion}`" :class="['lightbox-image-stage', `motion-${lightbox.motion}`]">
-          <img :src="lightbox.media[lightbox.index]" :alt="`${lightbox.author} 的动态图片 ${lightbox.index + 1}`" :class="{ dragging: lightbox.dragging, 'original-size': !lightbox.fit }" :style="{ transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) rotate(${lightbox.rotation}deg) scale(${lightbox.scale})` }" draggable="false" @pointerdown.prevent="startLightboxDrag" @pointermove.prevent="moveLightboxDrag" @pointerup="stopLightboxDrag" @pointercancel="stopLightboxDrag">
+          <video v-if="currentLightboxLive" :key="currentLightboxLive" :src="currentLightboxLive" :poster="lightbox.media[lightbox.index]" :class="{ dragging: lightbox.dragging, 'original-size': !lightbox.fit }" :style="{ transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) rotate(${lightbox.rotation}deg) scale(${lightbox.scale})` }" autoplay muted loop playsinline draggable="false" @pointerdown.prevent="startLightboxDrag" @pointermove.prevent="moveLightboxDrag" @pointerup="stopLightboxDrag" @pointercancel="stopLightboxDrag"></video>
+          <img v-else :src="lightbox.media[lightbox.index]" :alt="`${lightbox.author} 的动态图片 ${lightbox.index + 1}`" :class="{ dragging: lightbox.dragging, 'original-size': !lightbox.fit }" :style="{ transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) rotate(${lightbox.rotation}deg) scale(${lightbox.scale})` }" draggable="false" @pointerdown.prevent="startLightboxDrag" @pointermove.prevent="moveLightboxDrag" @pointerup="stopLightboxDrag" @pointercancel="stopLightboxDrag">
+          <span v-if="currentLightboxLive" class="lightbox-live-badge"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10-6.5z"/></svg>LIVE</span>
         </div>
       </figure>
       <div class="lightbox-dock" role="toolbar" aria-label="图片查看工具">

@@ -53,16 +53,19 @@ const (
 )
 
 type Post struct {
-	ID          string    `json:"id"`
-	Source      Source    `json:"source"`
-	Author      string    `json:"author"`
-	Avatar      string    `json:"avatar"`
-	Caption     string    `json:"caption"`
-	Tags        []string  `json:"tags"`
-	Media       []string  `json:"media"`
-	OriginalURL string    `json:"originalUrl,omitempty"`
-	Published   time.Time `json:"published"`
-	Liked       bool      `json:"liked"`
+	ID               string    `json:"id"`
+	Source           Source    `json:"source"`
+	FeedIDs          []string  `json:"feedIds,omitempty"`
+	Author           string    `json:"author"`
+	Avatar           string    `json:"avatar"`
+	Caption          string    `json:"caption"`
+	Tags             []string  `json:"tags"`
+	Media            []string  `json:"media"`
+	LiveMedia        []string  `json:"liveMedia,omitempty"`
+	OriginalURL      string    `json:"originalUrl,omitempty"`
+	Published        time.Time `json:"published"`
+	Liked            bool      `json:"liked"`
+	FavoriteExplicit bool      `json:"favoriteExplicit,omitempty"`
 }
 
 type SourceConfig struct {
@@ -118,6 +121,39 @@ func normalizeKeywords(values []string) []string {
 		}
 	}
 	return result
+}
+
+func mergeUniqueStrings(groups ...[]string) []string {
+	result, seen := make([]string, 0), make(map[string]bool)
+	for _, group := range groups {
+		for _, value := range group {
+			value = strings.TrimSpace(value)
+			if value == "" || seen[value] {
+				continue
+			}
+			seen[value] = true
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func hasWeiboLikesFeed(values []string) bool {
+	for _, value := range values {
+		if strings.HasPrefix(value, "weibo-likes-") {
+			return true
+		}
+	}
+	return false
 }
 
 func filterSourcePosts(posts []Post, feed SourceConfig) []Post {
@@ -349,6 +385,15 @@ type WeiboUser struct {
 	Description string `json:"description"`
 }
 
+func (b *BilibiliStore) allSourceConfigs() []SourceConfig {
+	b.RLock()
+	defer b.RUnlock()
+	feeds := make([]SourceConfig, 0, len(b.config.Subscriptions)+len(b.config.WeiboSubscriptions))
+	feeds = append(feeds, b.config.Subscriptions...)
+	feeds = append(feeds, b.config.WeiboSubscriptions...)
+	return feeds
+}
+
 type Store struct {
 	sync.RWMutex
 	posts []Post
@@ -390,6 +435,7 @@ var contentFile = "/data/content.json"
 var bilibiliFile = "/data/bilibili.enc"
 var secretFile = "/data/secret.key"
 var flowRoot = "/flow"
+var previewRoot = "/previews"
 
 func loadAuthConfig() *AuthConfig {
 	if value := os.Getenv("LUMIC_AUTH_FILE"); value != "" {
@@ -510,9 +556,22 @@ func initializeFlowStorage() error {
 	if value := strings.TrimSpace(os.Getenv("LUMIC_FLOW_ROOT")); value != "" {
 		flowRoot = value
 	}
+	if value := strings.TrimSpace(os.Getenv("LUMIC_PREVIEW_ROOT")); value != "" {
+		previewRoot = value
+	}
 	for _, source := range []Source{SourceBilibili, SourcePixiv, SourceWeibo, SourceTwitter} {
 		if err := os.MkdirAll(filepath.Join(flowRoot, string(source)), 0755); err != nil {
 			return fmt.Errorf("create %s flow directory: %w", source, err)
+		}
+	}
+	if err := os.MkdirAll(previewRoot, 0755); err != nil {
+		return fmt.Errorf("create preview directory: %w", err)
+	}
+	legacyPreviewRoot, legacyErr := filepath.Abs(filepath.Join(flowRoot, ".previews"))
+	currentPreviewRoot, currentErr := filepath.Abs(previewRoot)
+	if legacyErr == nil && currentErr == nil && legacyPreviewRoot != currentPreviewRoot {
+		if err := os.RemoveAll(legacyPreviewRoot); err != nil {
+			return fmt.Errorf("remove legacy preview directory: %w", err)
 		}
 	}
 	return nil
@@ -632,6 +691,11 @@ func (b *BilibiliStore) reconcileFlowStorage() error {
 				return fmt.Errorf("prepare flow storage for %s: %w", feed.Name, err)
 			}
 			(*list)[index] = prepared
+			if b.content != nil && strings.HasPrefix(prepared.ID, "weibo-likes-") {
+				if err := b.content.reconcileWeiboLikesPosts(prepared); err != nil {
+					return fmt.Errorf("reconcile weibo likes posts: %w", err)
+				}
+			}
 		}
 	}
 	return nil
@@ -1002,8 +1066,16 @@ func (s *Store) mergePosts(incoming []Post) (int, error) {
 			continue
 		}
 		if index, exists := indexes[post.ID]; exists {
-			post.Liked = s.posts[index].Liked
-			if !postsEqual(s.posts[index], post) {
+			stored := s.posts[index]
+			post.FeedIDs = mergeUniqueStrings(stored.FeedIDs, post.FeedIDs)
+			post.Tags = mergeUniqueStrings(stored.Tags, post.Tags)
+			post.FavoriteExplicit = stored.FavoriteExplicit
+			if hasWeiboLikesFeed(post.FeedIDs) && !stored.FavoriteExplicit {
+				post.Liked = false
+			} else {
+				post.Liked = stored.Liked
+			}
+			if !postsEqual(stored, post) {
 				s.posts[index] = post
 				changed = true
 			}
@@ -1039,6 +1111,12 @@ func (s *Store) rewriteMediaPrefix(oldPrefix, newPrefix string) error {
 				changed = true
 			}
 		}
+		for mediaIndex, media := range s.posts[postIndex].LiveMedia {
+			if strings.HasPrefix(media, oldPrefix) {
+				s.posts[postIndex].LiveMedia[mediaIndex] = newPrefix + strings.TrimPrefix(media, oldPrefix)
+				changed = true
+			}
+		}
 	}
 	if !changed {
 		return nil
@@ -1046,32 +1124,33 @@ func (s *Store) rewriteMediaPrefix(oldPrefix, newPrefix string) error {
 	return s.saveLocked()
 }
 
-func (s *Store) setPostLiked(id string, liked bool) (Post, error) {
+func (s *Store) reconcileWeiboLikesPosts(feed SourceConfig) error {
 	s.Lock()
 	defer s.Unlock()
-	for index := range s.posts {
-		if s.posts[index].ID != id {
-			continue
-		}
-		previous := s.posts[index].Liked
-		s.posts[index].Liked = liked
-		if err := s.saveLocked(); err != nil {
-			s.posts[index].Liked = previous
-			return Post{}, err
-		}
-		return s.posts[index], nil
-	}
-	return Post{}, os.ErrNotExist
-}
-
-func (s *Store) setAuthorTags(source Source, author string, tags []string) error {
-	s.Lock()
-	defer s.Unlock()
+	prefix := flowPublicPath(SourceWeibo, canonicalSourceName(feed), "")
 	previous := append([]Post(nil), s.posts...)
 	changed := false
 	for index := range s.posts {
-		if s.posts[index].Source == source && s.posts[index].Author == author {
-			s.posts[index].Tags = append([]string(nil), tags...)
+		post := &s.posts[index]
+		belongsToSource := containsString(post.FeedIDs, feed.ID)
+		if !belongsToSource {
+			for _, media := range post.Media {
+				if strings.HasPrefix(media, prefix) {
+					belongsToSource = true
+					break
+				}
+			}
+		}
+		if !belongsToSource {
+			continue
+		}
+		updatedFeedIDs := mergeUniqueStrings(post.FeedIDs, []string{feed.ID})
+		if !stringSlicesEqual(post.FeedIDs, updatedFeedIDs) {
+			post.FeedIDs = updatedFeedIDs
+			changed = true
+		}
+		if post.Liked && !post.FavoriteExplicit {
+			post.Liked = false
 			changed = true
 		}
 	}
@@ -1083,6 +1162,110 @@ func (s *Store) setAuthorTags(source Source, author string, tags []string) error
 		return err
 	}
 	return nil
+}
+
+func (s *Store) setPostLiked(id string, liked bool) (Post, error) {
+	s.Lock()
+	defer s.Unlock()
+	for index := range s.posts {
+		if s.posts[index].ID != id {
+			continue
+		}
+		previous := s.posts[index].Liked
+		previousExplicit := s.posts[index].FavoriteExplicit
+		s.posts[index].Liked = liked
+		s.posts[index].FavoriteExplicit = true
+		if err := s.saveLocked(); err != nil {
+			s.posts[index].Liked = previous
+			s.posts[index].FavoriteExplicit = previousExplicit
+			return Post{}, err
+		}
+		return s.posts[index], nil
+	}
+	return Post{}, os.ErrNotExist
+}
+
+func (s *Store) setPostsLiked(ids []string, liked bool) (int, error) {
+	idSet := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if id = strings.TrimSpace(id); id != "" {
+			idSet[id] = true
+		}
+	}
+	if len(idSet) == 0 {
+		return 0, errors.New("至少选择一条动态")
+	}
+	s.Lock()
+	defer s.Unlock()
+	previous := append([]Post(nil), s.posts...)
+	updated := 0
+	for index := range s.posts {
+		if !idSet[s.posts[index].ID] {
+			continue
+		}
+		s.posts[index].Liked = liked
+		s.posts[index].FavoriteExplicit = true
+		updated++
+	}
+	if updated == 0 {
+		return 0, os.ErrNotExist
+	}
+	if err := s.saveLocked(); err != nil {
+		s.posts = previous
+		return 0, err
+	}
+	return updated, nil
+}
+
+func (s *Store) setSourceTags(feed SourceConfig, feeds []SourceConfig) error {
+	s.Lock()
+	defer s.Unlock()
+	previous := append([]Post(nil), s.posts...)
+	tagsByFeed := make(map[string][]string, len(feeds))
+	for _, configured := range feeds {
+		tagsByFeed[configured.ID] = append([]string(nil), configured.Tags...)
+	}
+	changed := false
+	for index := range s.posts {
+		post := &s.posts[index]
+		belongsToSource := containsString(post.FeedIDs, feed.ID)
+		if !belongsToSource && len(post.FeedIDs) == 0 && !strings.HasPrefix(feed.ID, "weibo-likes-") && post.Source == feed.Source && post.Author == feed.Name {
+			post.FeedIDs = []string{feed.ID}
+			belongsToSource = true
+			changed = true
+		}
+		if !belongsToSource {
+			continue
+		}
+		updatedTags := make([]string, 0)
+		for _, feedID := range post.FeedIDs {
+			updatedTags = mergeUniqueStrings(updatedTags, tagsByFeed[feedID])
+		}
+		if !stringSlicesEqual(post.Tags, updatedTags) {
+			post.Tags = updatedTags
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	if err := s.saveLocked(); err != nil {
+		s.posts = previous
+		return err
+	}
+	return nil
+}
+
+func stringSlicesEqual(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Store) deletePosts(ids []string, source Source, author string) (int, error) {
@@ -1112,7 +1295,7 @@ func (s *Store) deletePosts(ids []string, source Source, author string) (int, er
 		return 0, os.ErrNotExist
 	}
 	for _, post := range removed {
-		if err := deletePostMedia(post.Media); err != nil {
+		if err := deletePostMedia(append(append([]string(nil), post.Media...), post.LiveMedia...)); err != nil {
 			return 0, err
 		}
 	}
@@ -1204,10 +1387,11 @@ func mediaPreviewCachePath(root, source string) (string, bool) {
 	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		return "", false
 	}
-	if relative == ".previews" || strings.HasPrefix(relative, ".previews"+string(filepath.Separator)) {
+	previewBase, err := filepath.Abs(previewRoot)
+	if err != nil {
 		return "", false
 	}
-	return filepath.Join(root, ".previews", relative) + ".v3.jpg", true
+	return filepath.Join(previewBase, relative) + ".v3.jpg", true
 }
 
 func obsoleteMediaPreviewCachePaths(root, source string) []string {
@@ -1215,10 +1399,11 @@ func obsoleteMediaPreviewCachePaths(root, source string) []string {
 	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		return nil
 	}
-	if relative == ".previews" || strings.HasPrefix(relative, ".previews"+string(filepath.Separator)) {
+	previewBase, err := filepath.Abs(previewRoot)
+	if err != nil {
 		return nil
 	}
-	base := filepath.Join(root, ".previews", relative)
+	base := filepath.Join(previewBase, relative)
 	return []string{base + ".v2.jpg", base + ".jpg"}
 }
 
@@ -1344,15 +1529,25 @@ func mediaPreviewHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Store) postsHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPatch {
 		id := strings.TrimSpace(r.URL.Query().Get("id"))
-		if id == "" {
-			writeAPIError(w, http.StatusBadRequest, "动态 ID 不能为空")
-			return
-		}
 		var input struct {
-			Liked *bool `json:"liked"`
+			IDs   []string `json:"ids"`
+			Liked *bool    `json:"liked"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&input); err != nil || input.Liked == nil {
-			writeAPIError(w, http.StatusBadRequest, "请提供有效的点赞状态")
+			writeAPIError(w, http.StatusBadRequest, "请提供有效的收藏状态")
+			return
+		}
+		if id == "" {
+			count, err := s.setPostsLiked(input.IDs, *input.Liked)
+			if errors.Is(err, os.ErrNotExist) {
+				writeAPIError(w, http.StatusNotFound, "动态不存在或已删除")
+				return
+			}
+			if err != nil {
+				writeAPIError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, map[string]any{"status": "updated", "count": count})
 			return
 		}
 		post, err := s.setPostLiked(id, *input.Liked)
@@ -1361,7 +1556,7 @@ func (s *Store) postsHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err != nil {
-			writeAPIError(w, http.StatusInternalServerError, "无法持久化点赞状态")
+			writeAPIError(w, http.StatusInternalServerError, "无法持久化收藏状态")
 			return
 		}
 		writeJSON(w, post)
@@ -1879,7 +2074,10 @@ func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		if b.content != nil {
-			_ = b.content.setAuthorTags(input.Source, input.Name, input.Tags)
+			if err := b.content.setSourceTags(input, b.allSourceConfigs()); err != nil {
+				writeAPIError(w, http.StatusInternalServerError, "无法将标签应用到来源动态")
+				return
+			}
 		}
 		writeJSON(w, input)
 		return
@@ -1988,6 +2186,8 @@ func (b *BilibiliStore) projectSettingsHandler(w http.ResponseWriter, r *http.Re
 }
 
 // Bilibili sync accepts text, image-text, opus and article cards; video and forwarded-video cards are excluded.
+const bilibiliDynamicFeatures = "itemOpusStyle,opusBigCover,onlyfansVote,decorationCard,forwardListHidden,ugcDelete,onlyfansAssetsV2,ugcSeason,onlyfansQaCard"
+
 func allowedBilibiliDynamicType(dynamicType string) bool {
 	switch dynamicType {
 	case "DYNAMIC_TYPE_WORD", "DYNAMIC_TYPE_DRAW", "DYNAMIC_TYPE_ARTICLE", "DYNAMIC_TYPE_OPUS":
@@ -2025,6 +2225,84 @@ func normalizeWeiboOriginalImage(value string) string {
 		parsed.RawPath = ""
 	}
 	return parsed.String()
+}
+
+func weiboLivePhotoURL(fid string) string {
+	fid = strings.TrimSpace(strings.TrimSuffix(fid, ".mov"))
+	if fid == "" || strings.ContainsAny(fid, `/\\?#`) {
+		return ""
+	}
+	return "https://video.weibo.com/media/play?livephoto=//us.sinaimg.cn/" + url.PathEscape(fid) + ".mov&KID=unistore,videomovSrc"
+}
+
+func weiboLivePhotoFIDs(value any) map[string]string {
+	result := make(map[string]string)
+	var collect func(any)
+	collect = func(current any) {
+		switch typed := current.(type) {
+		case string:
+			trimmed := strings.TrimSpace(typed)
+			if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+				var nested any
+				decoder := json.NewDecoder(strings.NewReader(trimmed))
+				decoder.UseNumber()
+				if decoder.Decode(&nested) == nil {
+					collect(nested)
+					return
+				}
+			}
+			for _, item := range strings.Split(trimmed, ",") {
+				pair := strings.SplitN(strings.TrimSpace(item), ":", 2)
+				if len(pair) == 2 && strings.TrimSpace(pair[0]) != "" && strings.TrimSpace(pair[1]) != "" {
+					result[strings.TrimSpace(pair[0])] = strings.TrimSpace(pair[1])
+				}
+			}
+		case []any:
+			for _, item := range typed {
+				collect(item)
+			}
+		case map[string]any:
+			for key, item := range typed {
+				switch scalar := item.(type) {
+				case string, json.Number, float64:
+					if fid := jsonValueString(scalar); fid != "" && fid != "<nil>" {
+						result[key] = fid
+					}
+				default:
+					collect(item)
+				}
+			}
+		}
+	}
+	collect(value)
+	return result
+}
+
+func weiboLivePhotoCandidate(value any) string {
+	switch typed := value.(type) {
+	case string:
+		candidate := normalizeRemoteImage(typed)
+		if strings.HasPrefix(candidate, "http://") || strings.HasPrefix(candidate, "https://") {
+			return candidate
+		}
+		return weiboLivePhotoURL(candidate)
+	case map[string]any:
+		for _, key := range []string{"url", "video_url", "videoUrl", "mp4_hd_url", "mp4_sd_url", "stream_url", "live_photo_url", "fid"} {
+			if candidate := weiboLivePhotoCandidate(typed[key]); candidate != "" {
+				return candidate
+			}
+		}
+	}
+	return ""
+}
+
+func weiboPictureLivePhoto(picture map[string]any, fallbackFID string) string {
+	for _, key := range []string{"video", "video_object", "live_photo", "live_photo_url", "video_url", "videoUrl", "fid"} {
+		if candidate := weiboLivePhotoCandidate(picture[key]); candidate != "" {
+			return candidate
+		}
+	}
+	return weiboLivePhotoURL(fallbackFID)
 }
 
 func cleanRemoteText(value string) string {
@@ -2084,6 +2362,34 @@ func mergeDetailedRemoteText(values ...string) string {
 	return result
 }
 
+func bilibiliDirectText(value map[string]any) string {
+	for _, key := range []string{"text", "orig_text", "raw_text", "text_raw"} {
+		if text, ok := value[key].(string); ok {
+			if text = cleanRemoteText(text); text != "" {
+				return text
+			}
+		}
+	}
+	return ""
+}
+
+func bilibiliInlineText(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return cleanRemoteText(typed)
+	case []any:
+		var text strings.Builder
+		for _, item := range typed {
+			text.WriteString(bilibiliInlineText(item))
+		}
+		return cleanRemoteText(text.String())
+	case map[string]any:
+		return bilibiliDirectText(typed)
+	default:
+		return ""
+	}
+}
+
 func collectBilibiliRichText(value any, parts *[]string) {
 	switch typed := value.(type) {
 	case string:
@@ -2105,10 +2411,20 @@ func collectBilibiliRichText(value any, parts *[]string) {
 			collectBilibiliRichText(item, parts)
 		}
 	case map[string]any:
-		if text, ok := typed["text"].(string); ok {
-			collectBilibiliRichText(text, parts)
+		directText := bilibiliDirectText(typed)
+		if directText != "" {
+			*parts = append(*parts, directText)
 		}
-		for _, key := range []string{"rich_text_nodes", "nodes", "paragraphs", "content", "summary", "desc", "description", "title", "text_content", "opus", "draw", "article", "major", "modules", "module_dynamic", "item", "items"} {
+		if directText == "" {
+			for _, key := range []string{"rich_text_nodes", "nodes"} {
+				if nested, exists := typed[key]; exists {
+					if text := bilibiliInlineText(nested); text != "" {
+						*parts = append(*parts, text)
+					}
+				}
+			}
+		}
+		for _, key := range []string{"paragraphs", "content", "summary", "desc", "description", "title", "text_content", "opus", "draw", "article", "major", "modules", "module_dynamic", "item", "items"} {
 			if nested, exists := typed[key]; exists {
 				collectBilibiliRichText(nested, parts)
 			}
@@ -2152,9 +2468,9 @@ func bilibiliCaptionFromRaw(raw json.RawMessage) string {
 
 func (b *BilibiliStore) fetchBilibiliDynamicCaption(dynamicID string, credentials BilibiliCredentials, proxyURL string) string {
 	endpoints := []string{
-		"https://api.bilibili.com/x/polymer/web-dynamic/v1/detail?id=" + url.QueryEscape(dynamicID),
-		"https://api.bilibili.com/x/polymer/web-dynamic/v1/opus/detail?id=" + url.QueryEscape(dynamicID),
-		"https://api.bilibili.com/x/polymer/web-dynamic/v1/opus/detail?opus_id=" + url.QueryEscape(dynamicID),
+		"https://api.bilibili.com/x/polymer/web-dynamic/v1/detail?id=" + url.QueryEscape(dynamicID) + "&features=" + url.QueryEscape(bilibiliDynamicFeatures) + "&timezone_offset=-480",
+		"https://api.bilibili.com/x/polymer/web-dynamic/v1/opus/detail?id=" + url.QueryEscape(dynamicID) + "&features=" + url.QueryEscape(bilibiliDynamicFeatures),
+		"https://api.bilibili.com/x/polymer/web-dynamic/v1/opus/detail?opus_id=" + url.QueryEscape(dynamicID) + "&features=" + url.QueryEscape(bilibiliDynamicFeatures),
 	}
 	captions := make([]string, 0, len(endpoints))
 	for _, endpoint := range endpoints {
@@ -2260,6 +2576,85 @@ func downloadRemoteImage(client *http.Client, remoteURL, targetBase, referer, co
 	return target, nil
 }
 
+func liveMediaFileExtension(remoteURL, contentType string) string {
+	extension := strings.ToLower(filepath.Ext(path.Base(strings.Split(remoteURL, "?")[0])))
+	if extension == ".mov" || extension == ".mp4" || extension == ".m4v" || extension == ".webm" {
+		return extension
+	}
+	switch strings.ToLower(strings.Split(contentType, ";")[0]) {
+	case "video/mp4":
+		return ".mp4"
+	case "video/webm":
+		return ".webm"
+	default:
+		return ".mov"
+	}
+}
+
+func downloadRemoteLiveMedia(client *http.Client, remoteURL, targetBase, referer, cookie string) (string, error) {
+	remoteURL = normalizeRemoteImage(remoteURL)
+	if remoteURL == "" || strings.HasPrefix(remoteURL, "/flow/") {
+		return remoteURL, nil
+	}
+	request, err := http.NewRequest(http.MethodGet, remoteURL, nil)
+	if err != nil {
+		return "", err
+	}
+	request.Header.Set("Accept", "video/mp4,video/quicktime,video/webm,video/*;q=0.9,*/*;q=0.5")
+	request.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36")
+	if referer != "" {
+		request.Header.Set("Referer", referer)
+	}
+	if cookie != "" {
+		request.Header.Set("Cookie", cookie)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HTTP %d", response.StatusCode)
+	}
+	contentType := strings.ToLower(response.Header.Get("Content-Type"))
+	if !strings.HasPrefix(contentType, "video/") && !strings.HasPrefix(contentType, "application/octet-stream") {
+		return "", fmt.Errorf("unexpected content type %s", contentType)
+	}
+	resolvedURL := remoteURL
+	if response.Request != nil && response.Request.URL != nil {
+		resolvedURL = response.Request.URL.String()
+	}
+	target := targetBase + liveMediaFileExtension(resolvedURL, contentType)
+	if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
+		return "", err
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(target), ".lumic-live-*.tmp")
+	if err != nil {
+		return "", err
+	}
+	temporaryName := temporary.Name()
+	defer os.Remove(temporaryName)
+	written, copyErr := io.CopyBuffer(temporary, response.Body, make([]byte, 64<<10))
+	if copyErr != nil || written == 0 {
+		temporary.Close()
+		if copyErr != nil {
+			return "", copyErr
+		}
+		return "", errors.New("empty live media")
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return "", err
+	}
+	if err := temporary.Close(); err != nil {
+		return "", err
+	}
+	if err := replaceFile(temporaryName, target); err != nil {
+		return "", err
+	}
+	return target, nil
+}
+
 func replaceFile(temporaryName, target string) error {
 	if err := os.Rename(temporaryName, target); err == nil {
 		return nil
@@ -2331,22 +2726,59 @@ func (b *BilibiliStore) archiveSourceContent(feed SourceConfig, posts []Post) (S
 			posts[postIndex].Avatar = prepared.Avatar
 		}
 		localMedia := make([]string, 0, len(posts[postIndex].Media))
+		localLiveMedia := make([]string, 0, len(posts[postIndex].Media))
 		for mediaIndex, remoteURL := range posts[postIndex].Media {
+			base := ""
 			if strings.HasPrefix(remoteURL, "/flow/") {
 				localMedia = append(localMedia, remoteURL)
+				parsed, _ := url.Parse(remoteURL)
+				filename := path.Base(parsed.Path)
+				base = filepath.Join(prepared.StoragePath, strings.TrimSuffix(filename, filepath.Ext(filename)))
+			} else {
+				base = availableMediaTargetBase(prepared.StoragePath, postMediaBaseName(posts[postIndex], mediaIndex))
+				localPath, downloadErr := downloadRemoteImage(client, remoteURL, base, referer, cookie)
+				if downloadErr != nil {
+					return feed, posts, fmt.Errorf("下载动态 %s 的第 %d 张图片失败: %w", posts[postIndex].ID, mediaIndex+1, downloadErr)
+				}
+				localMedia = append(localMedia, flowPublicPath(prepared.Source, prepared.Name, filepath.Base(localPath)))
+				if delay := imageDownloadDelay(); delay > 0 {
+					time.Sleep(delay)
+				}
+			}
+			liveURL := ""
+			if mediaIndex < len(posts[postIndex].LiveMedia) {
+				liveURL = posts[postIndex].LiveMedia[mediaIndex]
+			}
+			if liveURL == "" {
+				localLiveMedia = append(localLiveMedia, "")
 				continue
 			}
-			base := availableMediaTargetBase(prepared.StoragePath, postMediaBaseName(posts[postIndex], mediaIndex))
-			localPath, downloadErr := downloadRemoteImage(client, remoteURL, base, referer, cookie)
-			if downloadErr != nil {
-				return feed, posts, fmt.Errorf("下载动态 %s 的第 %d 张图片失败: %w", posts[postIndex].ID, mediaIndex+1, downloadErr)
+			if strings.HasPrefix(liveURL, "/flow/") {
+				localLiveMedia = append(localLiveMedia, liveURL)
+				continue
 			}
-			localMedia = append(localMedia, flowPublicPath(prepared.Source, prepared.Name, filepath.Base(localPath)))
+			localLivePath, downloadErr := downloadRemoteLiveMedia(client, liveURL, base, referer, cookie)
+			if downloadErr != nil {
+				return feed, posts, fmt.Errorf("下载动态 %s 的第 %d 个 LIVE 文件失败: %w", posts[postIndex].ID, mediaIndex+1, downloadErr)
+			}
+			localLiveMedia = append(localLiveMedia, flowPublicPath(prepared.Source, prepared.Name, filepath.Base(localLivePath)))
 			if delay := imageDownloadDelay(); delay > 0 {
 				time.Sleep(delay)
 			}
 		}
 		posts[postIndex].Media = localMedia
+		hasLiveMedia := false
+		for _, live := range localLiveMedia {
+			if live != "" {
+				hasLiveMedia = true
+				break
+			}
+		}
+		if hasLiveMedia {
+			posts[postIndex].LiveMedia = localLiveMedia
+		} else {
+			posts[postIndex].LiveMedia = nil
+		}
 	}
 	prepared, err = prepareSourceStorage(prepared)
 	return prepared, posts, err
@@ -2450,10 +2882,14 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 	posts := make([]Post, 0)
 	offset := ""
 	for page := 0; page < 100; page++ {
-		endpoint := "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space?host_mid=" + url.QueryEscape(userID)
+		query := url.Values{}
+		query.Set("host_mid", userID)
+		query.Set("features", bilibiliDynamicFeatures)
+		query.Set("timezone_offset", "-480")
 		if offset != "" {
-			endpoint += "&offset=" + url.QueryEscape(offset)
+			query.Set("offset", offset)
 		}
+		endpoint := "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space?" + query.Encode()
 		payload.Data.Items = nil
 		if err := bilibiliRequest(endpoint, credentials, proxyURL, &payload); err != nil {
 			return nil, fmt.Errorf("B 站请求失败: %w", err)
@@ -2519,7 +2955,7 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 			if avatar == "" {
 				avatar = feed.Avatar
 			}
-			posts = append(posts, Post{ID: "bili-dynamic-" + item.ID, Source: SourceBilibili, Author: name, Avatar: avatar, Caption: caption, Tags: append([]string(nil), feed.Tags...), Media: media, OriginalURL: "https://t.bilibili.com/" + url.PathEscape(item.ID), Published: published})
+			posts = append(posts, Post{ID: "bili-dynamic-" + item.ID, Source: SourceBilibili, FeedIDs: []string{feed.ID}, Author: name, Avatar: avatar, Caption: caption, Tags: append([]string(nil), feed.Tags...), Media: media, OriginalURL: "https://t.bilibili.com/" + url.PathEscape(item.ID), Published: published})
 			if !full && !feed.LastSyncedAt.IsZero() && !published.After(feed.LastSyncedAt) {
 				reachedBoundary = true
 			}
@@ -2560,10 +2996,33 @@ func collectWeiboPosts(value any, feed SourceConfig, posts *[]Post, seen map[str
 			if parseErr != nil {
 				published = time.Now()
 			}
-			media := make([]string, 0)
+			media, liveMedia := make([]string, 0), make([]string, 0)
+			mediaIndexes := make(map[string]int)
+			livePhotoFIDs := weiboLivePhotoFIDs(mblog["pic_video"])
+			appendMedia := func(pictureID, image, live string) {
+				image = normalizeWeiboOriginalImage(image)
+				live = normalizeRemoteImage(live)
+				if image == "" || image == "<nil>" {
+					return
+				}
+				key := strings.TrimSpace(pictureID)
+				if key == "" {
+					key = image
+				}
+				if index, exists := mediaIndexes[key]; exists {
+					if liveMedia[index] == "" && live != "" {
+						liveMedia[index] = live
+					}
+					return
+				}
+				mediaIndexes[key] = len(media)
+				media = append(media, image)
+				liveMedia = append(liveMedia, live)
+			}
 			if pictures, ok := mblog["pics"].([]any); ok {
 				for _, rawPicture := range pictures {
 					picture, _ := rawPicture.(map[string]any)
+					pictureID := firstNonEmptyRemoteText(jsonValueString(picture["pid"]), jsonValueString(picture["pic_id"]), jsonValueString(picture["id"]), jsonValueString(picture["pic_idstr"]))
 					original, _ := picture["original"].(map[string]any)
 					image := normalizeWeiboOriginalImage(jsonValueString(original["url"]))
 					large, _ := picture["large"].(map[string]any)
@@ -2573,13 +3032,11 @@ func collectWeiboPosts(value any, feed SourceConfig, posts *[]Post, seen map[str
 					if image == "" {
 						image = normalizeWeiboOriginalImage(jsonValueString(picture["url"]))
 					}
-					if image != "" && image != "<nil>" {
-						media = append(media, image)
-					}
+					appendMedia(pictureID, image, weiboPictureLivePhoto(picture, livePhotoFIDs[pictureID]))
 				}
 			}
 			if picInfos, ok := mblog["pic_infos"].(map[string]any); ok {
-				for _, rawPicture := range picInfos {
+				for pictureID, rawPicture := range picInfos {
 					picture, _ := rawPicture.(map[string]any)
 					original, _ := picture["original"].(map[string]any)
 					image := normalizeWeiboOriginalImage(jsonValueString(original["url"]))
@@ -2587,10 +3044,18 @@ func collectWeiboPosts(value any, feed SourceConfig, posts *[]Post, seen map[str
 						large, _ := picture["large"].(map[string]any)
 						image = normalizeWeiboOriginalImage(jsonValueString(large["url"]))
 					}
-					if image != "" {
-						media = append(media, image)
-					}
+					appendMedia(pictureID, image, weiboPictureLivePhoto(picture, livePhotoFIDs[pictureID]))
 				}
+			}
+			hasLiveMedia := false
+			for _, live := range liveMedia {
+				if live != "" {
+					hasLiveMedia = true
+					break
+				}
+			}
+			if !hasLiveMedia {
+				liveMedia = nil
 			}
 			caption := jsonValueString(mblog["text_raw"])
 			if caption == "" {
@@ -2604,7 +3069,7 @@ func collectWeiboPosts(value any, feed SourceConfig, posts *[]Post, seen map[str
 			if profileID != "" {
 				originalURL = "https://weibo.com/" + url.PathEscape(profileID) + "/" + url.PathEscape(id)
 			}
-			*posts = append(*posts, Post{ID: "weibo-status-" + id, Source: SourceWeibo, Author: name, Avatar: avatar, Caption: caption, Tags: append([]string(nil), feed.Tags...), Media: media, OriginalURL: originalURL, Published: published})
+			*posts = append(*posts, Post{ID: "weibo-status-" + id, Source: SourceWeibo, FeedIDs: []string{feed.ID}, Author: name, Avatar: avatar, Caption: caption, Tags: append([]string(nil), feed.Tags...), Media: media, LiveMedia: liveMedia, OriginalURL: originalURL, Published: published})
 		}
 		for _, child := range object {
 			collectWeiboPosts(child, feed, posts, seen)
@@ -2709,9 +3174,6 @@ func (b *BilibiliStore) fetchWeiboLikedPosts(feed SourceConfig) ([]Post, error) 
 			if len(pagePosts) == 0 {
 				break
 			}
-			for index := range pagePosts {
-				pagePosts[index].Liked = true
-			}
 			posts = append(posts, pagePosts...)
 		}
 		if len(posts) > 0 {
@@ -2751,6 +3213,82 @@ func postsAfter(posts []Post, boundary time.Time) []Post {
 		if post.Published.After(boundary) {
 			filtered = append(filtered, post)
 		}
+	}
+	return filtered
+}
+
+func (s *Store) postsAfterOrCaptionRepair(posts []Post, boundary time.Time) []Post {
+	if boundary.IsZero() {
+		return posts
+	}
+	s.RLock()
+	existing := make(map[string]Post, len(s.posts))
+	for _, post := range s.posts {
+		existing[post.ID] = post
+	}
+	s.RUnlock()
+	filtered := make([]Post, 0, len(posts))
+	for _, post := range posts {
+		if post.Published.After(boundary) {
+			filtered = append(filtered, post)
+			continue
+		}
+		stored, ok := existing[post.ID]
+		incomingCaption := cleanRemoteText(post.Caption)
+		storedCaption := cleanRemoteText(stored.Caption)
+		if !ok || incomingCaption == "" || incomingCaption == storedCaption || (storedCaption != "" && len([]rune(incomingCaption)) <= len([]rune(storedCaption))) {
+			continue
+		}
+		if len(stored.Media) > 0 {
+			post.Media = append([]string(nil), stored.Media...)
+		}
+		if len(stored.LiveMedia) > 0 {
+			post.LiveMedia = append([]string(nil), stored.LiveMedia...)
+		}
+		if strings.HasPrefix(stored.Avatar, "/flow/") {
+			post.Avatar = stored.Avatar
+		}
+		post.Liked = stored.Liked
+		post.FavoriteExplicit = stored.FavoriteExplicit
+		post.FeedIDs = mergeUniqueStrings(stored.FeedIDs, post.FeedIDs)
+		filtered = append(filtered, post)
+	}
+	return filtered
+}
+
+func (s *Store) postsAfterOrSourceMembership(posts []Post, boundary time.Time, feedID string) []Post {
+	if boundary.IsZero() {
+		return posts
+	}
+	s.RLock()
+	existing := make(map[string]Post, len(s.posts))
+	for _, post := range s.posts {
+		existing[post.ID] = post
+	}
+	s.RUnlock()
+	filtered := make([]Post, 0, len(posts))
+	for _, post := range posts {
+		if post.Published.After(boundary) {
+			filtered = append(filtered, post)
+			continue
+		}
+		stored, ok := existing[post.ID]
+		if !ok || containsString(stored.FeedIDs, feedID) {
+			continue
+		}
+		if len(stored.Media) > 0 {
+			post.Media = append([]string(nil), stored.Media...)
+		}
+		if len(stored.LiveMedia) > 0 {
+			post.LiveMedia = append([]string(nil), stored.LiveMedia...)
+		}
+		if strings.HasPrefix(stored.Avatar, "/flow/") {
+			post.Avatar = stored.Avatar
+		}
+		post.Liked = stored.Liked
+		post.FavoriteExplicit = stored.FavoriteExplicit
+		post.FeedIDs = mergeUniqueStrings(stored.FeedIDs, post.FeedIDs, []string{feedID})
+		filtered = append(filtered, post)
 	}
 	return filtered
 }
@@ -2800,7 +3338,13 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 	added := 0
 	if err == nil {
 		if !full {
-			posts = postsAfter(posts, feed.LastSyncedAt)
+			if feed.Source == SourceBilibili && b.content != nil {
+				posts = b.content.postsAfterOrCaptionRepair(posts, feed.LastSyncedAt)
+			} else if strings.HasPrefix(feed.ID, "weibo-likes-") && b.content != nil {
+				posts = b.content.postsAfterOrSourceMembership(posts, feed.LastSyncedAt, feed.ID)
+			} else {
+				posts = postsAfter(posts, feed.LastSyncedAt)
+			}
 		}
 		posts = filterSourcePosts(posts, feed)
 		if len(posts) > 0 && !strings.HasPrefix(feed.ID, "weibo-likes-") {
@@ -3247,6 +3791,7 @@ func weiboClient(proxyURL string) (*http.Client, error) {
 var weiboPreloginEndpoint = "https://login.sina.com.cn/sso/prelogin.php"
 var weiboLoginEndpoint = "https://login.sina.com.cn/sso/login.php"
 var validateWeiboLoginSession = validateWeiboCredentials
+var fetchWeiboAccountProfile = fetchWeiboUser
 
 type weiboPreloginResponse struct {
 	ServerTime int64  `json:"servertime"`
@@ -3768,7 +4313,10 @@ func (b *BilibiliStore) weiboSubscriptionsHandler(w http.ResponseWriter, r *http
 			return
 		}
 		if b.content != nil {
-			_ = b.content.setAuthorTags(input.Source, input.Name, input.Tags)
+			if err := b.content.setSourceTags(input, b.allSourceConfigs()); err != nil {
+				writeAPIError(w, http.StatusInternalServerError, "无法将标签应用到来源动态")
+				return
+			}
 		}
 		writeJSON(w, input)
 		return
@@ -3942,7 +4490,7 @@ func validateWeiboCredentials(cookie, userID, proxyURL string) (WeiboCredentials
 		return WeiboCredentials{}, errors.New("Cookie 缺少 SUB/SUBP 登录凭证，请从已登录微博的浏览器请求头中复制完整 Cookie")
 	}
 	credentials := WeiboCredentials{Cookie: cookie, UserID: userID}
-	user, err := fetchWeiboUser(userID, credentials, proxyURL)
+	user, err := fetchWeiboAccountProfile(userID, credentials, proxyURL)
 	if err != nil {
 		return WeiboCredentials{}, fmt.Errorf("微博 Cookie 验证失败：%w", err)
 	}
@@ -3956,6 +4504,22 @@ func (b *BilibiliStore) weiboAccountHandler(w http.ResponseWriter, r *http.Reque
 	current, proxyURL := b.config.Weibo, b.config.ProxyURL
 	b.RUnlock()
 	if r.Method == http.MethodGet {
+		if current.Cookie != "" && current.UserID != "" && (strings.TrimSpace(current.UserName) == "" || strings.TrimSpace(current.Avatar) == "") {
+			if user, err := fetchWeiboAccountProfile(current.UserID, current, proxyURL); err == nil {
+				if strings.TrimSpace(user.Name) != "" {
+					current.UserName = user.Name
+				}
+				if strings.TrimSpace(user.Avatar) != "" {
+					current.Avatar = user.Avatar
+				}
+				b.Lock()
+				if b.config.Weibo.Cookie == current.Cookie && b.config.Weibo.UserID == current.UserID {
+					b.config.Weibo = current
+				}
+				b.Unlock()
+				_ = b.save()
+			}
+		}
 		writeJSON(w, map[string]any{"configured": current.Cookie != "", "userId": current.UserID, "userName": current.UserName, "avatar": current.Avatar})
 		return
 	}
@@ -3978,7 +4542,7 @@ func (b *BilibiliStore) weiboAccountHandler(w http.ResponseWriter, r *http.Reque
 	if strings.TrimSpace(input.Username) != "" || strings.TrimSpace(input.Password) != "" {
 		credentials, err = loginWeiboWithPassword(input.Username, input.Password, proxyURL)
 	} else {
-		credentials, err = validateWeiboCredentials(input.Cookie, input.UserID, proxyURL)
+		credentials, err = validateWeiboLoginSession(input.Cookie, input.UserID, proxyURL)
 	}
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
@@ -3994,7 +4558,7 @@ func (b *BilibiliStore) weiboAccountHandler(w http.ResponseWriter, r *http.Reque
 		writeAPIError(w, http.StatusInternalServerError, "无法保存微博凭证")
 		return
 	}
-	writeJSON(w, map[string]any{"configured": true, "userId": credentials.UserID, "userName": credentials.UserName})
+	writeJSON(w, map[string]any{"configured": true, "userId": credentials.UserID, "userName": credentials.UserName, "avatar": credentials.Avatar})
 }
 
 func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {

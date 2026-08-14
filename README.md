@@ -51,10 +51,11 @@ docker compose up -d
 docker compose logs -f lumic
 ```
 
-Compose 使用两个职责不同的持久化挂载：
+Compose 使用三个职责不同的持久化挂载：
 
 - `./data:/data`：保存应用基础设置、加密密钥、平台账号凭证、订阅配置、数据库、同步游标和任务状态。这是应用内部状态目录，不保存采集到的正文与媒体。
 - `./flow:/flow`：保存平台采集的动态、图文、专栏正文和媒体文件。可通过 `LUMIC_FLOW_ROOT` 修改容器内根路径，Compose 默认固定为 `/flow`。
+- `./previews:/previews`：保存动态列表按需生成的压缩预览图，可独立清理或重建。可通过 `LUMIC_PREVIEW_ROOT` 修改容器内缓存路径，Compose 默认固定为 `/previews`。
 
 `/flow` 按“平台 → 作者”组织：
 
@@ -73,6 +74,8 @@ Compose 使用两个职责不同的持久化挂载：
 ```
 
 服务启动时会自动创建 `/flow/bilibili`、`/flow/pixiv` 和 `/flow/weibo`。新增 B 站 UP 主订阅时，会立即创建对应的作者目录，并写入不含账号凭证的 `source.json`。已有 B 站订阅会在升级后的首次启动时自动补建目录。作者名称中的路径分隔符、Windows 非法字符及保留设备名会被安全替换，避免目录穿越和跨平台挂载失败。
+
+浏览动态产生的预览缓存不会写入 `/flow`。服务会在 `/previews` 中按平台和作者镜像原图路径，并在升级后自动清理旧的 `/flow/.previews` 缓存目录。
 
 本地构建镜像时使用：
 
