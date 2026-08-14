@@ -139,11 +139,11 @@ func TestMediaPreviewHandlerCompressesAndCleansCache(t *testing.T) {
 func TestPostMediaBaseNameUsesAuthorDateAndImageSequence(t *testing.T) {
 	published := time.Date(2026, time.August, 13, 20, 30, 0, 0, time.FixedZone("CST", 8*60*60))
 	single := Post{Author: "测试作者", Published: published, Media: []string{"one"}}
-	if got := postMediaBaseName(single, 0); got != "测试作者20260813" {
+	if got := postMediaBaseName(single, 0); got != "测试作者-20260813" {
 		t.Fatalf("unexpected single image name: %s", got)
 	}
 	multiple := Post{Author: "测试作者", Published: published, Media: []string{"one", "two", "three"}}
-	for index, want := range []string{"测试作者20260813-1", "测试作者20260813-2", "测试作者20260813-3"} {
+	for index, want := range []string{"测试作者-20260813·1", "测试作者-20260813·2", "测试作者-20260813·3"} {
 		if got := postMediaBaseName(multiple, index); got != want {
 			t.Fatalf("unexpected multiple image name at %d: got=%s want=%s", index, got, want)
 		}
@@ -152,10 +152,10 @@ func TestPostMediaBaseNameUsesAuthorDateAndImageSequence(t *testing.T) {
 
 func TestAvailableMediaTargetBaseAvoidsOverwrite(t *testing.T) {
 	directory := t.TempDir()
-	if err := os.WriteFile(filepath.Join(directory, "作者20260813.jpg"), []byte("existing"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(directory, "作者-20260813.jpg"), []byte("existing"), 0600); err != nil {
 		t.Fatalf("seed existing image: %v", err)
 	}
-	if got := filepath.Base(availableMediaTargetBase(directory, "作者20260813")); got != "作者20260813-2" {
+	if got := filepath.Base(availableMediaTargetBase(directory, "作者-20260813")); got != "作者-20260813-2" {
 		t.Fatalf("unexpected collision name: %s", got)
 	}
 }

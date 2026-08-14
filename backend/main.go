@@ -2739,9 +2739,9 @@ func postMediaBaseName(post Post, mediaIndex int) string {
 	if published.IsZero() {
 		published = time.Now()
 	}
-	base := author + published.Format("20060102")
+	base := author + "-" + published.Format("20060102")
 	if len(post.Media) > 1 {
-		base += "-" + strconv.Itoa(mediaIndex+1)
+		base += "·" + strconv.Itoa(mediaIndex+1)
 	}
 	return base
 }
