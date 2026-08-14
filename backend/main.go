@@ -16,6 +16,12 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"image"
+	"image/color"
+	"image/draw"
+	_ "image/gif"
+	"image/jpeg"
+	_ "image/png"
 	"io"
 	"log"
 	"math/big"
@@ -253,11 +259,15 @@ type BilibiliCredentials struct {
 	AccessTimeValue string `json:"ac_time_value,omitempty"`
 	Buvid4          string `json:"buvid4,omitempty"`
 	DedeUserIDCKMd5 string `json:"DedeUserID__ckMd5,omitempty"`
+	UserName        string `json:"userName,omitempty"`
+	Avatar          string `json:"avatar,omitempty"`
 }
 
 type BilibiliAccount struct {
 	Configured bool   `json:"configured"`
 	UserID     string `json:"userId,omitempty"`
+	UserName   string `json:"userName,omitempty"`
+	Avatar     string `json:"avatar,omitempty"`
 }
 
 type PixivCredentials struct {
@@ -271,6 +281,7 @@ type PixivCredentials struct {
 	CSRFToken    string `json:"csrfToken,omitempty"`
 	UserID       string `json:"userId,omitempty"`
 	UserName     string `json:"userName,omitempty"`
+	Avatar       string `json:"avatar,omitempty"`
 }
 
 type WeiboCredentials struct {
@@ -1157,6 +1168,7 @@ func deletePostMedia(media []string) error {
 		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 			continue
 		}
+		preview, hasPreview := mediaPreviewCachePath(root, absolute)
 		if info, err := os.Stat(absolute); err == nil {
 			if info.IsDir() {
 				continue
@@ -1167,8 +1179,145 @@ func deletePostMedia(media []string) error {
 		} else if !os.IsNotExist(err) {
 			return err
 		}
+		if hasPreview {
+			if err := os.Remove(preview); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		}
 	}
 	return nil
+}
+
+const mediaPreviewMaxDimension = 640
+
+var mediaPreviewLocks sync.Map
+var mediaPreviewGenerationSlots = make(chan struct{}, 2)
+
+func mediaPreviewCachePath(root, source string) (string, bool) {
+	relative, err := filepath.Rel(root, source)
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	if relative == ".previews" || strings.HasPrefix(relative, ".previews"+string(filepath.Separator)) {
+		return "", false
+	}
+	return filepath.Join(root, ".previews", relative) + ".jpg", true
+}
+
+func resizeMediaPreview(source image.Image, width, height int) *image.RGBA {
+	preview := image.NewRGBA(image.Rect(0, 0, width, height))
+	background := color.RGBA{R: 242, G: 245, B: 242, A: 255}
+	draw.Draw(preview, preview.Bounds(), &image.Uniform{C: background}, image.Point{}, draw.Src)
+	bounds := source.Bounds()
+	for y := 0; y < height; y++ {
+		sourceY := bounds.Min.Y + y*bounds.Dy()/height
+		for x := 0; x < width; x++ {
+			sourceX := bounds.Min.X + x*bounds.Dx()/width
+			r, g, b, a := source.At(sourceX, sourceY).RGBA()
+			inverseAlpha := uint64(0xffff - a)
+			red := uint64(r) + uint64(background.R)*0x101*inverseAlpha/0xffff
+			green := uint64(g) + uint64(background.G)*0x101*inverseAlpha/0xffff
+			blue := uint64(b) + uint64(background.B)*0x101*inverseAlpha/0xffff
+			preview.SetRGBA(x, y, color.RGBA{R: uint8(red >> 8), G: uint8(green >> 8), B: uint8(blue >> 8), A: 255})
+		}
+	}
+	return preview
+}
+
+func generateMediaPreview(sourcePath, previewPath string) error {
+	sourceFile, err := os.Open(sourcePath)
+	if err != nil {
+		return err
+	}
+	defer sourceFile.Close()
+	decoded, _, err := image.Decode(sourceFile)
+	if err != nil {
+		return err
+	}
+	bounds := decoded.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+	if width <= 0 || height <= 0 {
+		return errors.New("invalid image dimensions")
+	}
+	if width > mediaPreviewMaxDimension || height > mediaPreviewMaxDimension {
+		if width >= height {
+			height = max(1, height*mediaPreviewMaxDimension/width)
+			width = mediaPreviewMaxDimension
+		} else {
+			width = max(1, width*mediaPreviewMaxDimension/height)
+			height = mediaPreviewMaxDimension
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(previewPath), 0700); err != nil {
+		return err
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(previewPath), ".lumic-preview-*.tmp")
+	if err != nil {
+		return err
+	}
+	temporaryName := temporary.Name()
+	defer os.Remove(temporaryName)
+	if err := jpeg.Encode(temporary, resizeMediaPreview(decoded, width, height), &jpeg.Options{Quality: 70}); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return replaceFile(temporaryName, previewPath)
+}
+
+func mediaPreviewHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	root, err := filepath.Abs(flowRoot)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	relative := filepath.Clean(filepath.FromSlash(strings.TrimPrefix(r.URL.Path, "/preview/")))
+	if relative == "." || relative == ".." || filepath.IsAbs(relative) || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		http.NotFound(w, r)
+		return
+	}
+	sourcePath, err := filepath.Abs(filepath.Join(root, relative))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	previewPath, ok := mediaPreviewCachePath(root, sourcePath)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	sourceInfo, err := os.Stat(sourcePath)
+	if err != nil || sourceInfo.IsDir() {
+		http.NotFound(w, r)
+		return
+	}
+	lockValue, _ := mediaPreviewLocks.LoadOrStore(previewPath, &sync.Mutex{})
+	lock := lockValue.(*sync.Mutex)
+	lock.Lock()
+	defer func() {
+		lock.Unlock()
+		mediaPreviewLocks.Delete(previewPath)
+	}()
+	previewInfo, previewErr := os.Stat(previewPath)
+	if previewErr != nil || previewInfo.Size() == 0 || previewInfo.ModTime().Before(sourceInfo.ModTime()) {
+		mediaPreviewGenerationSlots <- struct{}{}
+		generationErr := generateMediaPreview(sourcePath, previewPath)
+		<-mediaPreviewGenerationSlots
+		if generationErr != nil {
+			w.Header().Set("Cache-Control", "public, max-age=3600")
+			http.ServeFile(w, r, sourcePath)
+			return
+		}
+	}
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	w.Header().Set("Content-Type", "image/jpeg")
+	http.ServeFile(w, r, previewPath)
 }
 
 func (s *Store) postsHandler(w http.ResponseWriter, r *http.Request) {
@@ -1495,11 +1644,44 @@ func verifyBilibiliCredentials(credentials BilibiliCredentials, proxyURL string)
 	return nil
 }
 
+func bilibiliAccountProfile(credentials BilibiliCredentials, proxyURL string) BilibiliAccount {
+	account := BilibiliAccount{Configured: credentials.SESSDATA != "", UserID: credentials.DedeUserID, UserName: credentials.UserName, Avatar: credentials.Avatar}
+	var payload struct {
+		Code int `json:"code"`
+		Data struct {
+			Mid   int64  `json:"mid"`
+			Uname string `json:"uname"`
+			Face  string `json:"face"`
+		} `json:"data"`
+	}
+	if err := bilibiliRequest("https://api.bilibili.com/x/web-interface/nav", credentials, proxyURL, &payload); err != nil || payload.Code != 0 {
+		return account
+	}
+	if payload.Data.Mid > 0 {
+		account.UserID = strconv.FormatInt(payload.Data.Mid, 10)
+	}
+	account.UserName = strings.TrimSpace(payload.Data.Uname)
+	account.Avatar = normalizeRemoteImage(payload.Data.Face)
+	return account
+}
+
 func (b *BilibiliStore) accountHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		b.RLock()
-		account := BilibiliAccount{Configured: b.config.Credentials.SESSDATA != "", UserID: b.config.Credentials.DedeUserID}
+		credentials, proxyURL := b.config.Credentials, b.config.ProxyURL
 		b.RUnlock()
+		account := BilibiliAccount{Configured: credentials.SESSDATA != "", UserID: credentials.DedeUserID, UserName: credentials.UserName, Avatar: credentials.Avatar}
+		if account.Configured && (account.UserName == "" || account.Avatar == "") {
+			enriched := bilibiliAccountProfile(credentials, proxyURL)
+			if enriched.UserName != "" || enriched.Avatar != "" {
+				credentials.UserName, credentials.Avatar = enriched.UserName, enriched.Avatar
+				b.Lock()
+				b.config.Credentials = credentials
+				b.Unlock()
+				_ = b.save()
+				account = enriched
+			}
+		}
 		writeJSON(w, account)
 		return
 	}
@@ -1520,6 +1702,8 @@ func (b *BilibiliStore) accountHandler(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	account := bilibiliAccountProfile(credentials, proxyURL)
+	credentials.UserName, credentials.Avatar = account.UserName, account.Avatar
 	b.Lock()
 	b.config.Credentials = credentials
 	b.Unlock()
@@ -1527,7 +1711,7 @@ func (b *BilibiliStore) accountHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unable to save bilibili account", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, BilibiliAccount{Configured: true, UserID: credentials.DedeUserID})
+	writeJSON(w, account)
 }
 
 func plainBilibiliText(value string) string {
@@ -2765,6 +2949,10 @@ func pixivBrowserCredentialsRequest(credentials PixivCredentials, proxyURL, base
 		return PixivCredentials{}, errors.New("Pixiv 用户 ID 与浏览器登录账号不一致")
 	}
 	credentials.UserName = strings.TrimSpace(jsonValueString(body["name"]))
+	credentials.Avatar = strings.TrimSpace(jsonValueString(body["imageBig"]))
+	if credentials.Avatar == "" {
+		credentials.Avatar = strings.TrimSpace(jsonValueString(body["image"]))
+	}
 	credentials.RefreshToken, credentials.ClientID, credentials.ClientSecret = "", "", ""
 	return credentials, nil
 }
@@ -2774,7 +2962,16 @@ func (b *BilibiliStore) pixivHandler(w http.ResponseWriter, r *http.Request) {
 	proxyURL, current := b.config.ProxyURL, b.config.Pixiv
 	b.RUnlock()
 	if r.Method == http.MethodGet {
-		writeJSON(w, map[string]any{"configured": current.Cookie != "" && current.UserID != "", "userId": current.UserID, "userName": current.UserName})
+		if current.Cookie != "" && current.UserID != "" && (current.UserName == "" || current.Avatar == "") {
+			if enriched, err := pixivBrowserCredentialsRequest(current, proxyURL, "https://www.pixiv.net"); err == nil {
+				current = enriched
+				b.Lock()
+				b.config.Pixiv = current
+				b.Unlock()
+				_ = b.save()
+			}
+		}
+		writeJSON(w, map[string]any{"configured": current.Cookie != "" && current.UserID != "", "userId": current.UserID, "userName": current.UserName, "avatar": current.Avatar})
 		return
 	}
 	if r.Method != http.MethodPut {
@@ -2798,7 +2995,7 @@ func (b *BilibiliStore) pixivHandler(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusInternalServerError, "无法保存 Pixiv 凭证")
 		return
 	}
-	writeJSON(w, map[string]any{"configured": true, "userId": credentials.UserID, "userName": credentials.UserName})
+	writeJSON(w, map[string]any{"configured": true, "userId": credentials.UserID, "userName": credentials.UserName, "avatar": credentials.Avatar})
 }
 
 func browserClient(proxyURL string) (*http.Client, error) {
@@ -2994,6 +3191,8 @@ func (b *BilibiliStore) bilibiliQRHandler(w http.ResponseWriter, r *http.Request
 				credentials.Buvid3, credentials.Buvid4 = spi.Data.B3, spi.Data.B4
 			}
 		}
+		account := bilibiliAccountProfile(credentials, proxyURL)
+		credentials.UserName, credentials.Avatar = account.UserName, account.Avatar
 		b.Lock()
 		b.config.Credentials = credentials
 		delete(b.bilibiliQR, id)
@@ -3003,7 +3202,7 @@ func (b *BilibiliStore) bilibiliQRHandler(w http.ResponseWriter, r *http.Request
 			writeAPIError(w, http.StatusInternalServerError, "无法保存 B 站登录状态")
 			return
 		}
-		writeJSON(w, map[string]string{"status": "connected", "userId": credentials.DedeUserID})
+		writeJSON(w, map[string]string{"status": "connected", "userId": credentials.DedeUserID, "userName": credentials.UserName, "avatar": credentials.Avatar})
 		return
 	default:
 		writeAPIError(w, http.StatusBadGateway, "B 站扫码失败："+payload.Data.Message)
@@ -4103,6 +4302,10 @@ func main() {
 		}
 		if strings.HasPrefix(r.URL.Path, "/flow/") {
 			http.StripPrefix("/flow/", http.FileServer(http.Dir(flowRoot))).ServeHTTP(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/preview/") {
+			mediaPreviewHandler(w, r)
 			return
 		}
 		serveFrontend(w, r)

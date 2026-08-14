@@ -7,6 +7,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	"image/draw"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -40,6 +44,61 @@ func TestDownloadRemoteImageAndFlowPath(t *testing.T) {
 	}
 	if got := flowPublicPath(SourceBilibili, "测试/UP", filepath.Base(localPath)); got != "/flow/bilibili/%E6%B5%8B%E8%AF%95_UP/avatar.png" {
 		t.Fatalf("unexpected public path: %s", got)
+	}
+}
+
+func TestMediaPreviewHandlerCompressesAndCleansCache(t *testing.T) {
+	root := t.TempDir()
+	oldFlowRoot := flowRoot
+	flowRoot = root
+	t.Cleanup(func() { flowRoot = oldFlowRoot })
+	sourcePath := filepath.Join(root, "weibo", "author", "post.png")
+	if err := os.MkdirAll(filepath.Dir(sourcePath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	original := image.NewRGBA(image.Rect(0, 0, 1200, 800))
+	draw.Draw(original, original.Bounds(), &image.Uniform{C: color.RGBA{R: 80, G: 140, B: 110, A: 255}}, image.Point{}, draw.Src)
+	file, err := os.Create(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := png.Encode(file, original); err != nil {
+		file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/preview/weibo/author/post.png", nil)
+	response := httptest.NewRecorder()
+	mediaPreviewHandler(response, request)
+	if response.Code != http.StatusOK || !strings.HasPrefix(response.Header().Get("Content-Type"), "image/jpeg") {
+		t.Fatalf("unexpected preview response: status=%d content-type=%q", response.Code, response.Header().Get("Content-Type"))
+	}
+	config, _, err := image.DecodeConfig(bytes.NewReader(response.Body.Bytes()))
+	if err != nil {
+		t.Fatalf("decode preview: %v", err)
+	}
+	if config.Width > mediaPreviewMaxDimension || config.Height > mediaPreviewMaxDimension {
+		t.Fatalf("preview was not resized: %dx%d", config.Width, config.Height)
+	}
+	previewPath, ok := mediaPreviewCachePath(root, sourcePath)
+	if !ok {
+		t.Fatal("preview path was rejected")
+	}
+	if _, err := os.Stat(previewPath); err != nil {
+		t.Fatalf("preview cache missing: %v", err)
+	}
+
+	if err := deletePostMedia([]string{"/flow/weibo/author/post.png"}); err != nil {
+		t.Fatalf("delete media: %v", err)
+	}
+	if _, err := os.Stat(sourcePath); !os.IsNotExist(err) {
+		t.Fatalf("original media still exists: %v", err)
+	}
+	if _, err := os.Stat(previewPath); !os.IsNotExist(err) {
+		t.Fatalf("preview cache still exists: %v", err)
 	}
 }
 
@@ -155,7 +214,7 @@ func TestPixivBrowserCredentialsRequest(t *testing.T) {
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"error":false,"message":"","body":{"userId":"12345","name":"Pixiv User"}}`))
+		_, _ = w.Write([]byte(`{"error":false,"message":"","body":{"userId":"12345","name":"Pixiv User","imageBig":"https://i.pximg.net/user-profile/img/avatar.jpg"}}`))
 	}))
 	defer server.Close()
 
@@ -170,7 +229,7 @@ func TestPixivBrowserCredentialsRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("validate Pixiv browser credentials: %v", err)
 	}
-	if credentials.UserName != "Pixiv User" || credentials.UserID != "12345" {
+	if credentials.UserName != "Pixiv User" || credentials.UserID != "12345" || credentials.Avatar != "https://i.pximg.net/user-profile/img/avatar.jpg" {
 		t.Fatalf("unexpected Pixiv account: %#v", credentials)
 	}
 }

@@ -25,6 +25,7 @@ const selectedFeed = ref(null)
 const cronEditing = ref(false)
 const showFeedSettings = ref(false)
 const selectedPlatform = ref(null)
+const credentialPlatform = ref(null)
 const sourceActionBusy = ref('')
 const sourceActionMessage = ref('')
 const confirmDialog = ref({ open: false, title: '', message: '', confirmText: '确认', cancelText: '取消', tone: 'danger' })
@@ -47,7 +48,7 @@ const weiboKeyword = ref('')
 const weiboResults = ref([])
 const weiboIncludePast = ref(false)
 const weiboSubscriptionTags = ref('')
-const biliAccount = ref({ configured: false, userId: '' })
+const biliAccount = ref({ configured: false, userId: '', userName: '', avatar: '' })
 const biliCredentials = ref({ cookie: '', SESSDATA: '', bili_jct: '', buvid3: '', DedeUserID: '', ac_time_value: '', buvid4: '', DedeUserID__ckMd5: '' })
 const biliKeyword = ref('')
 const biliResults = ref([])
@@ -59,7 +60,7 @@ const biliQR = ref(null)
 const biliQRImage = ref('')
 const biliQRStatus = ref('')
 let biliPollTimer = null
-const pixivAccount = ref({ configured: false, userId: '', userName: '' })
+const pixivAccount = ref({ configured: false, userId: '', userName: '', avatar: '' })
 const emptyPixivCredentials = () => ({ userAgent: '', baggage: '', cookie: '', userId: '', sentryTrace: '', csrfToken: '' })
 const pixivCredentials = ref(emptyPixivCredentials())
 const pixivBusy = ref(false)
@@ -130,10 +131,10 @@ const authorProfile = computed(() => {
 })
 const sourceCount = computed(() => new Set(posts.value.map(p => p.source)).size)
 const platformCards = computed(() => [
-  { key: 'bilibili', label: '哔哩哔哩', short: '哔', ...sourceMeta.bilibili, configured: biliAccount.value.configured, account: biliAccount.value.configured ? `UID ${biliAccount.value.userId}` : '尚未连接账号', path: '/flow/bilibili', description: 'UP 主图文动态与专栏', feeds: feeds.value.filter(feed => feed.source === 'bilibili') },
-  { key: 'weibo', label: '微博', short: '微', ...sourceMeta.weibo, configured: weiboAccount.value.configured, account: weiboAccount.value.configured ? (weiboAccount.value.userName || `UID ${weiboAccount.value.userId}`) : '尚未连接账号', path: '/flow/weibo', description: '博主动态与图文媒体', feeds: feeds.value.filter(feed => feed.source === 'weibo') },
-  { key: 'pixiv', label: 'Pixiv', short: 'P', ...sourceMeta.pixiv, configured: pixivAccount.value.configured, account: pixivAccount.value.configured ? (pixivAccount.value.userName || `UID ${pixivAccount.value.userId}`) : '尚未连接账号', path: '/flow/pixiv', description: '画师作品与插画媒体', feeds: feeds.value.filter(feed => feed.source === 'pixiv') },
-  { key: 'twitter', label: '推特', short: '推', ...sourceMeta.twitter, configured: false, account: '采集器尚未配置', path: '/flow/twitter', description: '推文、图片与媒体动态', feeds: feeds.value.filter(feed => feed.source === 'twitter') }
+  { key: 'bilibili', label: '哔哩哔哩', short: '哔', ...sourceMeta.bilibili, configured: biliAccount.value.configured, account: biliAccount.value.configured ? (biliAccount.value.userName || `UID ${biliAccount.value.userId}`) : '尚未连接', avatar: biliAccount.value.avatar, path: '/flow/bilibili', description: 'UP 主图文动态与专栏', feeds: feeds.value.filter(feed => feed.source === 'bilibili') },
+  { key: 'weibo', label: '微博', short: '微', ...sourceMeta.weibo, configured: weiboAccount.value.configured, account: weiboAccount.value.configured ? (weiboAccount.value.userName || `UID ${weiboAccount.value.userId}`) : '尚未连接', avatar: weiboAccount.value.avatar, path: '/flow/weibo', description: '博主动态与图文媒体', feeds: feeds.value.filter(feed => feed.source === 'weibo') },
+  { key: 'pixiv', label: 'Pixiv', short: 'P', ...sourceMeta.pixiv, configured: pixivAccount.value.configured, account: pixivAccount.value.configured ? (pixivAccount.value.userName || `UID ${pixivAccount.value.userId}`) : '尚未连接', avatar: pixivAccount.value.avatar, path: '/flow/pixiv', description: '画师作品与插画媒体', feeds: feeds.value.filter(feed => feed.source === 'pixiv') },
+  { key: 'twitter', label: '推特', short: '推', ...sourceMeta.twitter, configured: false, account: '暂未开放', avatar: '', path: '/flow/twitter', description: '推文、图片与媒体动态', feeds: feeds.value.filter(feed => feed.source === 'twitter') }
 ])
 const hasWeiboLikesSource = computed(() => feeds.value.some(feed => feed.id?.startsWith('weibo-likes-')))
 const localGreeting = computed(() => {
@@ -278,7 +279,7 @@ async function pollBilibiliQR() {
     const response = await fetch(`/api/bilibili/qr?id=${encodeURIComponent(biliQR.value.id)}`)
     if (!response.ok) throw new Error(await responseError(response, 'B 站扫码状态查询失败'))
     const result = await response.json(); biliQRStatus.value = result.message || '等待扫码'
-    if (result.status === 'connected') { biliAccount.value = { configured: true, userId: result.userId }; biliQR.value = null; biliQRImage.value = ''; biliBusy.value = false; stopBilibiliPolling(); return }
+    if (result.status === 'connected') { biliAccount.value = { configured: true, userId: result.userId, userName: result.userName || '', avatar: result.avatar || '' }; biliQR.value = null; biliQRImage.value = ''; biliBusy.value = false; stopBilibiliPolling(); return }
     biliPollTimer = setTimeout(pollBilibiliQR, 3000)
   } catch (error) { biliError.value = error.message; biliBusy.value = false; stopBilibiliPolling() }
 }
@@ -461,11 +462,18 @@ async function subscribeBilibili(user) {
 function openPlatformSettings(platform) {
   selectedPlatform.value = platform
 }
+function openCredentialSettings(platformKey) {
+  credentialPlatform.value = platformCards.value.find(platform => platform.key === platformKey) || null
+  biliError.value = ''
+  weiboError.value = ''
+  pixivError.value = ''
+}
+function handleCredentialCardClick(platformKey) {
+  if (phonePortrait.value) openCredentialSettings(platformKey)
+}
 function managePlatformCredentials(platformKey) {
   selectedPlatform.value = null
-  openSettings()
-  if (platformKey === 'bilibili' && !biliAccount.value.configured) startBilibiliQR()
-  if (platformKey === 'weibo' && !weiboAccount.value.configured) startWeiboQR()
+  openSettings().then(() => openCredentialSettings(platformKey))
 }
 function openFeedSettings(feed) {
   cronEditing.value = false
@@ -571,9 +579,6 @@ function toggleLightboxFit() {
 function rotateLightbox() {
   lightbox.value.rotation = (lightbox.value.rotation + 90) % 360
 }
-function lightboxBackgroundStyle() {
-  return { backgroundImage: `url(${JSON.stringify(lightbox.value.media[lightbox.value.index] || '')})` }
-}
 async function downloadLightboxImage() {
   const source = lightbox.value.media[lightbox.value.index]
   if (!source) return
@@ -624,6 +629,10 @@ function handleGlobalKeydown(event) {
     if (event.key === '+' || event.key === '=') zoomLightboxBy(0.15)
     if (event.key === '-') zoomLightboxBy(-0.15)
     if (event.key.toLowerCase() === 'r') rotateLightbox()
+    return
+  }
+  if (credentialPlatform.value && event.key === 'Escape') {
+    credentialPlatform.value = null
     return
   }
   if (!confirmDialog.value.open) return
@@ -739,6 +748,12 @@ function setMediaShape(post, mediaIndex, event) {
 }
 function mediaShape(post, mediaIndex) {
   return mediaShapes.value[`${post.id}:${mediaIndex}`] || 'unknown'
+}
+function previewMedia(media) {
+  const value = String(media || '')
+  if (!value.startsWith('/flow/')) return value
+  const path = value.split('?', 1)[0]
+  return `/preview/${path.slice('/flow/'.length)}`
 }
 function scheduleTransient(callback, delay) {
   const timer = window.setTimeout(() => {
@@ -933,6 +948,10 @@ async function checkSession() {
 }
 watch(filteredPosts, resetTimelineWindow)
 watch(posts, prunePostCaches)
+watch(platformCards, cards => {
+  if (!credentialPlatform.value) return
+  credentialPlatform.value = cards.find(platform => platform.key === credentialPlatform.value.key) || null
+})
 onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; phonePortraitQuery = window.matchMedia('(max-width: 760px) and (orientation: portrait)'); phonePortrait.value = phonePortraitQuery.matches; phonePortraitQuery.addEventListener('change', updatePhonePortrait); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); if (phonePortrait.value) openPhoneDefaultTimeline(); checkSession(); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', applyRoute); window.addEventListener('scroll', scheduleTimelineWindow, { passive: true }); window.addEventListener('resize', scheduleTimelineWindow) })
 onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); postResizeObserver?.disconnect(); observedPostElements.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); closeLightbox(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', applyRoute); window.removeEventListener('scroll', scheduleTimelineWindow); window.removeEventListener('resize', scheduleTimelineWindow); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
 </script>
@@ -1041,13 +1060,13 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
       <div class="section-heading">
 <div v-if="!authorProfile" class="filters">
 <button :class="{ selected: activeSource === 'all' }" @click="activeSource = 'all'"><span>✦</span>全部</button>
+<button class="timeline-sort-button" type="button" :title="timelineSort === 'newest' ? '当前最新优先，点击切换为最早优先' : '当前最早优先，点击切换为最新优先'" :aria-label="timelineSort === 'newest' ? '最新优先，切换为最早优先' : '最早优先，切换为最新优先'" @click="timelineSort = timelineSort === 'newest' ? 'oldest' : 'newest'">
+  <svg v-if="timelineSort === 'newest'" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v15M7.5 14.5 12 19l4.5-4.5"/><path d="M5 5h4M5 9h4M5 13h2"/></svg>
+  <svg v-else viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V5M7.5 9.5 12 5l4.5 4.5"/><path d="M5 19h4M5 15h4M5 11h2"/></svg>
+</button>
 </div>
 <div v-if="!authorProfile" class="timeline-tools">
   <label class="timeline-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><input v-model="timelineSearch" type="search" placeholder="搜索动态内容" aria-label="搜索动态内容"></label>
-  <div class="timeline-sort" role="group" aria-label="动态时间排序">
-    <button type="button" :class="{ selected: timelineSort === 'newest' }" title="最新优先" aria-label="最新优先" @click="timelineSort = 'newest'"><svg viewBox="0 0 24 24"><circle cx="9" cy="9" r="5"/><path d="M9 6v3l2 1M15 15h6M18 12v6l3-3"/></svg></button>
-    <button type="button" :class="{ selected: timelineSort === 'oldest' }" title="最早优先" aria-label="最早优先" @click="timelineSort = 'oldest'"><svg viewBox="0 0 24 24"><circle cx="9" cy="9" r="5"/><path d="M9 6v3l2 1M15 15h6M18 18v-6l3 3"/></svg></button>
-  </div>
 </div>
 </div>
       <p v-if="timelineMessage" class="timeline-message">{{ timelineMessage }}</p>
@@ -1066,7 +1085,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
 </div>
 <p v-if="post.caption" class="caption">{{ post.caption }}</p>
 <div v-if="post.media?.length" :class="['media-grid', `media-count-${Math.min(post.media.length, 9)}`]">
-<button v-for="(media, mediaIndex) in post.media.slice(0, 9)" :key="media" :class="['media-frame', mediaShape(post, mediaIndex)]" type="button" :aria-label="`查看 ${post.author} 的第 ${mediaIndex + 1} 张图片`" @click="openLightbox(post, mediaIndex)"><img :src="media" alt="" loading="lazy" decoding="async" @load="setMediaShape(post, mediaIndex, $event); scheduleTimelineWindow()"><span v-if="mediaIndex === 8 && post.media.length > 9" class="media-more-count">+{{ post.media.length - 9 }}</span></button>
+<button v-for="(media, mediaIndex) in post.media.slice(0, 9)" :key="media" :class="['media-frame', mediaShape(post, mediaIndex)]" type="button" :aria-label="`查看 ${post.author} 的第 ${mediaIndex + 1} 张图片`" @click="openLightbox(post, mediaIndex)"><img :src="previewMedia(media)" alt="" loading="lazy" decoding="async" fetchpriority="low" @load="setMediaShape(post, mediaIndex, $event); scheduleTimelineWindow()"><span v-if="mediaIndex === 8 && post.media.length > 9" class="media-more-count">+{{ post.media.length - 9 }}</span></button>
 </div>
 <div class="post-foot">
 <div class="tag-row"><button v-for="tag in post.tags" :key="tag" type="button" :class="{ active: selectedTag === tag }" @click="openTag(tag)">#{{ tag }}</button></div>
@@ -1114,7 +1133,6 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
       <button type="button" class="selection-delete-button" :disabled="!selectedPostCount || postActionBusy === 'batch-delete'" title="删除所选动态" aria-label="删除所选动态" @click="deleteSelectedPosts"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg><b>删除</b></button>
     </div>
     <div v-if="lightbox.open" class="lightbox-layer" role="dialog" aria-modal="true" :aria-label="`${lightbox.author} 的动态图片`" @click.self="closeLightbox" @wheel.prevent="zoomLightbox">
-      <div :key="`background:${lightbox.media[lightbox.index]}`" class="lightbox-blur-background" :style="lightboxBackgroundStyle()" @click="closeLightbox"></div>
       <button class="lightbox-close" type="button" title="关闭大图" aria-label="关闭大图" @click="closeLightbox">×</button>
       <figure @click.self="closeLightbox">
         <div :key="`${lightbox.media[lightbox.index]}:${lightbox.motion}`" :class="['lightbox-image-stage', `motion-${lightbox.motion}`]">
@@ -1197,27 +1215,9 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
         <section class="settings-pane platform-credentials-pane">
           <div class="pane-heading"><div><h3>平台凭证</h3><p>各平台凭证仅由服务端验证，并加密保存在本地数据目录。</p></div><span>4 个平台</span></div>
           <div class="platform-auth-grid">
-            <article class="platform-auth-card bilibili">
-              <header class="platform-auth-head"><img class="source-icon" :src="sourceMeta.bilibili.image" alt="哔哩哔哩图标"><div><h3>哔哩哔哩</h3><span>手机客户端扫码登录</span></div><em :class="['connection-dot', { online: biliAccount.configured }]">{{ biliAccount.configured ? '已连接' : '未连接' }}</em></header>
-              <p v-if="biliAccount.configured">当前账号：UID {{ biliAccount.userId }}。扫码可切换账号。</p><p v-else>登录凭证会自动获取并加密保存。</p>
-              <div v-if="biliQRImage" class="weibo-qr"><img :src="biliQRImage" alt="哔哩哔哩登录二维码"><span>{{ biliQRStatus }}</span></div><button class="login-button platform-login-button" type="button" @click="startBilibiliQR" :disabled="biliBusy && !biliQR">{{ biliQR ? '刷新二维码' : biliBusy ? '获取中…' : biliAccount.configured ? '扫码切换 B 站账号' : '扫码连接 B 站' }}</button>
-              <details class="manual-credential"><summary>高级：手动导入 Cookie</summary><form class="settings-form bili-credentials" @submit.prevent="saveBilibiliAccount" autocomplete="off"><label>完整 Cookie</label><textarea v-model="biliCredentials.cookie" rows="4" placeholder="仅在扫码不可用时使用"></textarea><label>SESSDATA</label><input v-model="biliCredentials.SESSDATA" type="password"><label>bili_jct</label><input v-model="biliCredentials.bili_jct" type="password"><label>buvid3</label><input v-model="biliCredentials.buvid3" type="password"><label>DedeUserID</label><input v-model="biliCredentials.DedeUserID" inputmode="numeric"><button class="login-button" :disabled="biliBusy">验证并保存手动凭证</button></form></details><p v-if="biliError" class="login-error bili-error">{{ biliError }}</p>
-            </article>
-            <article class="platform-auth-card weibo">
-              <header class="platform-auth-head"><img class="source-icon" :src="sourceMeta.weibo.image" alt="微博图标"><div><h3>微博</h3><span>账号密码、扫码或 Cookie 登录</span></div><em :class="['connection-dot', { online: weiboAccount.configured }]">{{ weiboAccount.configured ? '已连接' : '未连接' }}</em></header>
-              <p v-if="weiboAccount.configured">当前账号：{{ weiboAccount.userName || `UID ${weiboAccount.userId}` }}。</p><p v-else>可直接使用微博账号密码建立会话。密码仅用于本次登录请求，不会写入本地配置；触发验证码或安全验证时请改用扫码。</p>
-              <details class="platform-auth-details"><summary>账号密码登录</summary><form class="settings-form platform-auth-form weibo-password-form" @submit.prevent="loginWeiboAccount" autocomplete="off"><label>微博账号</label><input v-model="weiboPasswordCredentials.username" type="text" autocomplete="username" required placeholder="手机号、邮箱或微博账号"><label>微博密码</label><input v-model="weiboPasswordCredentials.password" type="password" autocomplete="current-password" required><button class="login-button" :disabled="weiboBusy">{{ weiboBusy ? '登录中…' : '账号密码登录' }}</button></form></details>
-              <div v-if="weiboQR" class="weibo-qr"><img :src="weiboQR.image.startsWith('//') ? `https:${weiboQR.image}` : weiboQR.image" alt="微博登录二维码"><span>请在二维码过期前扫码并确认</span></div><button class="login-button platform-login-button" type="button" @click="startWeiboQR" :disabled="weiboBusy && !weiboQR">{{ weiboQR ? '刷新二维码' : weiboBusy ? '获取中…' : weiboAccount.configured ? '扫码切换微博账号' : '扫码连接微博' }}</button><details class="manual-credential"><summary>高级：手动导入 Cookie</summary><form class="settings-form bili-credentials" @submit.prevent="saveWeiboAccount" autocomplete="off"><label>微博 UID</label><input v-model="weiboCredentials.userId" inputmode="numeric" required placeholder="个人主页地址中的数字 UID"><label>完整 Cookie</label><textarea v-model="weiboCredentials.cookie" rows="4" required placeholder="可粘贴浏览器请求头中的 Cookie: 完整内容"></textarea><p class="credential-note">请使用已成功打开微博的同一网络出口获取 Cookie；保存前会验证账号资料，不会回显原始 Cookie。</p><button class="login-button" :disabled="weiboBusy">{{ weiboBusy ? '验证中…' : '验证并保存 Cookie' }}</button></form></details><p v-if="weiboError" class="login-error">{{ weiboError }}</p>
-            </article>
-            <article class="platform-auth-card pixiv">
-              <header class="platform-auth-head"><img class="source-icon" :src="sourceMeta.pixiv.image" alt="Pixiv图标"><div><h3>Pixiv</h3><span>浏览器请求头凭证</span></div><em :class="['connection-dot', { online: pixivAccount.configured }]">{{ pixivAccount.configured ? '已连接' : '未连接' }}</em></header>
-              <p v-if="pixivAccount.configured">当前账号：{{ pixivAccount.userName || `UID ${pixivAccount.userId}` }}。重新保存可更新浏览器凭证。</p><p v-else>导入已登录 Pixiv 的浏览器请求头建立连接。</p>
-              <details class="platform-auth-details pixiv-browser-details"><summary>配置浏览器凭证</summary><form class="settings-form platform-auth-form pixiv-browser-form" @submit.prevent="savePixivAccount"><label>浏览器 UA</label><input v-model="pixivCredentials.userAgent" required autocomplete="off" placeholder="Mozilla/5.0 ..."><label>浏览器 Baggage</label><textarea v-model="pixivCredentials.baggage" rows="2" autocomplete="off"></textarea><label>浏览器 Cookie</label><textarea v-model="pixivCredentials.cookie" rows="4" required autocomplete="off"></textarea><label>用户 ID</label><input v-model="pixivCredentials.userId" required inputmode="numeric" autocomplete="off"><label>浏览器 Sentry-Trace</label><input v-model="pixivCredentials.sentryTrace" autocomplete="off"><label>浏览器 X-CSRF-TOKEN</label><input v-model="pixivCredentials.csrfToken" autocomplete="off"><button class="login-button" :disabled="pixivBusy">{{ pixivBusy ? '验证中…' : '验证并保存 Pixiv' }}</button></form></details><p v-if="pixivError" class="login-error">{{ pixivError }}</p>
-            </article>
-            <article class="platform-auth-card twitter">
-              <header class="platform-auth-head"><img class="source-icon" :src="sourceMeta.twitter.image" alt="推特图标"><div><h3>推特</h3><span>账号连接与作者采集</span></div><em class="connection-dot">未开放</em></header>
-              <p>推特已加入来源分类、侧栏筛选和本地媒体目录；账号授权与作者采集器将在后续版本开放。</p>
-              <button class="secondary-button platform-login-button" type="button" disabled>连接能力开发中</button>
+            <article v-for="platform in platformCards" :key="platform.key" :class="['platform-auth-card', platform.key]" tabindex="0" @contextmenu.prevent="openCredentialSettings(platform.key)" @click="handleCredentialCardClick(platform.key)" @keydown.enter="openCredentialSettings(platform.key)">
+              <header class="platform-auth-head"><img class="source-icon" :src="platform.image" :alt="`${platform.label}图标`"><div><h3>{{ platform.label }}</h3><span>{{ platform.key === 'twitter' ? '账号连接与作者采集' : '平台账号凭证' }}</span></div><em :class="['connection-dot', { online: platform.configured }]">{{ platform.key === 'twitter' ? '未开放' : platform.configured ? '已连接' : '未连接' }}</em></header>
+              <div class="platform-account-summary"><img :src="platform.avatar || platform.image" :alt="`${platform.account}头像`" @error="$event.target.src = platform.image"><div><span>接入账号</span><strong>{{ platform.account }}</strong></div></div>
             </article>
           </div>
         </section>
@@ -1240,6 +1240,38 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
         <p v-if="settingsError" class="login-error settings-page-error">{{ settingsError }}</p>
       </div>
     </main>
+    <div v-if="credentialPlatform" class="modal-backdrop credential-modal-backdrop" @click.self="credentialPlatform = null">
+      <div class="modal credential-settings-modal">
+        <button class="modal-close" type="button" aria-label="关闭平台配置" @click="credentialPlatform = null">×</button>
+        <div class="credential-modal-head">
+          <img class="source-icon" :src="credentialPlatform.image" :alt="`${credentialPlatform.label}图标`">
+          <div><p class="eyebrow">PLATFORM CREDENTIAL</p><h2>{{ credentialPlatform.label }}</h2><span>{{ credentialPlatform.account }}</span></div>
+          <em :class="['connection-dot', { online: credentialPlatform.configured }]">{{ credentialPlatform.key === 'twitter' ? '未开放' : credentialPlatform.configured ? '已连接' : '未连接' }}</em>
+        </div>
+
+        <div v-if="credentialPlatform.key === 'bilibili'" class="credential-config-body">
+          <div v-if="biliQRImage" class="weibo-qr"><img :src="biliQRImage" alt="哔哩哔哩登录二维码"><span>{{ biliQRStatus }}</span></div>
+          <button class="login-button platform-login-button" type="button" @click="startBilibiliQR" :disabled="biliBusy && !biliQR">{{ biliQR ? '刷新二维码' : biliBusy ? '获取中…' : biliAccount.configured ? '扫码切换 B 站账号' : '扫码连接 B 站' }}</button>
+          <details class="manual-credential"><summary>手动导入 Cookie</summary><form class="settings-form bili-credentials" @submit.prevent="saveBilibiliAccount" autocomplete="off"><label>完整 Cookie</label><textarea v-model="biliCredentials.cookie" rows="4" placeholder="仅在扫码不可用时使用"></textarea><label>SESSDATA</label><input v-model="biliCredentials.SESSDATA" type="password"><label>bili_jct</label><input v-model="biliCredentials.bili_jct" type="password"><label>buvid3</label><input v-model="biliCredentials.buvid3" type="password"><label>DedeUserID</label><input v-model="biliCredentials.DedeUserID" inputmode="numeric"><button class="login-button" :disabled="biliBusy">验证并保存手动凭证</button></form></details>
+          <p v-if="biliError" class="login-error bili-error">{{ biliError }}</p>
+        </div>
+
+        <div v-else-if="credentialPlatform.key === 'weibo'" class="credential-config-body">
+          <details class="platform-auth-details"><summary>账号密码登录</summary><form class="settings-form platform-auth-form weibo-password-form" @submit.prevent="loginWeiboAccount" autocomplete="off"><label>微博账号</label><input v-model="weiboPasswordCredentials.username" type="text" autocomplete="username" required placeholder="手机号、邮箱或微博账号"><label>微博密码</label><input v-model="weiboPasswordCredentials.password" type="password" autocomplete="current-password" required><button class="login-button" :disabled="weiboBusy">{{ weiboBusy ? '登录中…' : '账号密码登录' }}</button></form></details>
+          <div v-if="weiboQR" class="weibo-qr"><img :src="weiboQR.image.startsWith('//') ? `https:${weiboQR.image}` : weiboQR.image" alt="微博登录二维码"><span>请在二维码过期前扫码并确认</span></div>
+          <button class="login-button platform-login-button" type="button" @click="startWeiboQR" :disabled="weiboBusy && !weiboQR">{{ weiboQR ? '刷新二维码' : weiboBusy ? '获取中…' : weiboAccount.configured ? '扫码切换微博账号' : '扫码连接微博' }}</button>
+          <details class="manual-credential"><summary>手动导入 Cookie</summary><form class="settings-form bili-credentials" @submit.prevent="saveWeiboAccount" autocomplete="off"><label>微博 UID</label><input v-model="weiboCredentials.userId" inputmode="numeric" required placeholder="个人主页地址中的数字 UID"><label>完整 Cookie</label><textarea v-model="weiboCredentials.cookie" rows="4" required placeholder="可粘贴浏览器请求头中的 Cookie: 完整内容"></textarea><p class="credential-note">保存前会验证账号资料，不会回显原始 Cookie。</p><button class="login-button" :disabled="weiboBusy">{{ weiboBusy ? '验证中…' : '验证并保存 Cookie' }}</button></form></details>
+          <p v-if="weiboError" class="login-error">{{ weiboError }}</p>
+        </div>
+
+        <div v-else-if="credentialPlatform.key === 'pixiv'" class="credential-config-body">
+          <form class="settings-form platform-auth-form pixiv-browser-form" @submit.prevent="savePixivAccount"><label>浏览器 UA</label><input v-model="pixivCredentials.userAgent" required autocomplete="off" placeholder="Mozilla/5.0 ..."><label>浏览器 Baggage</label><textarea v-model="pixivCredentials.baggage" rows="2" autocomplete="off"></textarea><label>浏览器 Cookie</label><textarea v-model="pixivCredentials.cookie" rows="4" required autocomplete="off"></textarea><label>用户 ID</label><input v-model="pixivCredentials.userId" required inputmode="numeric" autocomplete="off"><label>浏览器 Sentry-Trace</label><input v-model="pixivCredentials.sentryTrace" autocomplete="off"><label>浏览器 X-CSRF-TOKEN</label><input v-model="pixivCredentials.csrfToken" autocomplete="off"><button class="login-button" :disabled="pixivBusy">{{ pixivBusy ? '验证中…' : '验证并保存 Pixiv' }}</button></form>
+          <p v-if="pixivError" class="login-error">{{ pixivError }}</p>
+        </div>
+
+        <div v-else class="credential-unavailable"><img :src="credentialPlatform.image" alt="推特图标"><strong>连接能力开发中</strong><p>账号授权与作者采集器将在后续版本开放。</p></div>
+      </div>
+    </div>
     <div v-if="selectedPlatform" class="modal-backdrop platform-detail-backdrop" @click.self="selectedPlatform = null">
       <div class="modal platform-detail-modal">
         <button class="modal-close" @click="selectedPlatform = null">×</button>
