@@ -499,10 +499,71 @@ body, button, input, textarea, select { font-size: 14px; }
 .dark .media-grid .media-frame { background: #111319; border-color: #282b33; }
 .dark .selection-cancel-button:hover, .dark .selection-select-all-button:hover { background: #24272f; }
 
+/* Reference line icons, account menu, and compact source controls */
+.nav-mask-symbol, .theme-mask-symbol {
+  display: inline-block;
+  flex: none;
+  background-color: currentColor;
+  -webkit-mask-image: var(--nav-mask);
+  mask-image: var(--nav-mask);
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+.nav-mask-symbol { width: 24px!important; height: 24px; }
+.theme-mask-symbol { width: 23px!important; height: 23px; }
+.brand { position: relative; align-items: center; }
+.brand-mark-button { display: grid; place-items: center; width: 34px; height: 34px; flex: none; padding: 0; color: inherit; background: transparent; border-radius: 8px; }
+.brand-mark-button .brand-mark { transition: transform .18s ease, filter .18s ease; }
+.brand-mark-button:hover .brand-mark, .brand-mark-button:focus-visible .brand-mark { transform: rotate(10deg) scale(1.09); filter: brightness(1.08); }
+.brand-mark-button:focus-visible { outline: 1px solid #c9a54e; outline-offset: 2px; }
+.brand-account-popover { position: absolute; top: 42px; left: 11px; z-index: 30; width: 158px; padding: 6px; color: var(--ink); background: color-mix(in srgb, var(--card) 96%, transparent); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 14px 34px #4a3a2024; backdrop-filter: blur(16px); }
+.brand-account-popover button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 40px; padding: 0 10px; color: #9d554f; background: transparent; border-radius: 6px; font-size: 12px; font-weight: 600; }
+.brand-account-popover button:hover { background: #f6e9e5; }
+.brand-account-popover svg { width: 19px; height: 19px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.dark .brand-account-popover { background: #15171df2; border-color: #30333d; box-shadow: 0 18px 42px #0009; }
+.dark .brand-account-popover button { color: #e2aaa4; }
+.dark .brand-account-popover button:hover { background: #292126; }
+.sidebar-bottom .sidebar-theme-button .theme-mask-symbol { color: inherit; }
+.dark .sidebar-bottom .sidebar-theme-button .theme-mask-symbol { filter: drop-shadow(0 0 5px #d7c77a70); }
+
+.pixiv-source-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 13px; margin-top: 18px; }
+.pixiv-source-form .pixiv-subscribe-row { width: 100%; }
+.pixiv-source-form .pixiv-subscribe-row button { min-width: 92px; height: 44px; padding: 0 16px; font-size: 12px; }
+.pixiv-source-form .subscription-tag-field { margin-top: 0; }
+.pixiv-source-form .subscription-tag-field input { width: 100%; height: 42px; padding: 0 12px; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 8px; outline: none; }
+.pixiv-source-form .subscription-tag-field input:focus { border-color: #a88a45; box-shadow: 0 0 0 3px #a88a451f; }
+.pixiv-source-form .history-option { grid-column: auto; margin: 0; }
+.pixiv-source-form .history-option input { width: 16px; height: 16px; margin: 0; }
+
+/* Expanded, static night-sky ornament for the compact timeline header */
+.night-sky-decor { display: none; }
+.dark .timeline-hero { position: relative; isolation: isolate; }
+.dark .night-sky-decor { position: absolute; top: -22px; right: 0; z-index: 0; display: block; width: min(72vw, 980px); height: 112px; overflow: hidden; pointer-events: none; }
+.dark .night-moon { position: absolute; top: 17px; right: 6%; width: 34px; height: 34px; border: 2px solid #f7e7ad; border-top-color: transparent; border-radius: 50%; box-shadow: 5px 4px 10px #e8cf7166, inset -3px -2px 5px #fff4bd22; transform: rotate(-22deg); }
+.dark .night-moon::after { position: absolute; top: 6px; left: 5px; width: 3px; height: 3px; background: #fff3bd; border-radius: 50%; box-shadow: 12px 8px 0 #cad7ff, -24px 19px 0 #889dce, -52px -5px 0 #fff, -94px 23px 0 #f3dfa0, -147px 2px 0 #a8b9e4, -205px 29px 0 #fff, -281px 7px 0 #788dbc, -365px 34px 0 #f7e7ad, -460px 13px 0 #bccaf0, -566px 38px 0 #fff, -675px 6px 0 #8699c7, -795px 26px 0 #f0dda0; content: ''; filter: drop-shadow(0 0 4px #dce6ff); }
+.dark .night-star { position: absolute; width: 12px; height: 12px; color: #f7e7ad; filter: drop-shadow(0 0 5px currentColor); }
+.dark .night-star::before, .dark .night-star::after { position: absolute; top: 50%; left: 50%; background: currentColor; border-radius: 999px; content: ''; transform: translate(-50%, -50%); }
+.dark .night-star::before { width: 100%; height: 1px; }
+.dark .night-star::after { width: 1px; height: 100%; }
+.dark .night-star.star-one { top: 12px; right: 17%; }
+.dark .night-star.star-two { top: 62px; right: 31%; width: 8px; height: 8px; color: #b9c9ef; }
+.dark .night-star.star-three { top: 27px; right: 48%; width: 7px; height: 7px; color: #fff; }
+.dark .night-star.star-four { top: 72px; right: 67%; width: 10px; height: 10px; color: #dac47c; }
+.dark .timeline-hero-copy { position: relative; z-index: 1; }
+
+@media (max-width: 760px) and (orientation: portrait) {
+  .nav-mask-symbol { width: 23px!important; height: 23px; }
+  .theme-mask-symbol { width: 22px!important; height: 22px; }
+  .dark .night-sky-decor { top: -12px; right: 42px; width: calc(100vw - 72px); height: 88px; opacity: .72; }
+  .dark .night-moon { right: 3%; width: 27px; height: 27px; }
+  .dark .night-star.star-three, .dark .night-star.star-four { display: none; }
+}
+
 .stat-icon svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-.pixiv-source-form { display: grid; grid-template-columns: 120px minmax(0, 1fr); align-items: center; gap: 12px 14px; margin-top: 18px; }
-.pixiv-source-form .history-option { grid-column: 2; }
-.pixiv-source-form .login-button { grid-column: 2; width: 100%; margin-top: 2px; }
 .dark .timeline-hero { position: relative; isolation: isolate; }
 .dark .timeline-hero::before, .dark .timeline-hero::after { position: absolute; z-index: 0; width: 2px; height: 2px; background: #f7e7ad; border-radius: 50%; content: ''; pointer-events: none; }
 .dark .timeline-hero::before { top: -8px; right: 7%; opacity: .72; box-shadow: -92px 17px 0 #cdd8ff, -188px 4px 0 #fff, -282px 30px 0 #879ccf, -410px 6px 0 #f3dfa0, -545px 24px 0 #b8c8ee, -690px 2px 0 #fff, -820px 34px 0 #7e91bf, -960px 13px 0 #f2dfa0; }
@@ -514,8 +575,6 @@ body, button, input, textarea, select { font-size: 14px; }
 .dark .stat-icon.rose { color: #d7b5c0; background: #2b2027; }
 
 @media (max-width: 760px) {
-  .pixiv-source-form { grid-template-columns: 1fr; }
-  .pixiv-source-form .history-option, .pixiv-source-form .login-button { grid-column: 1; }
   .dark .timeline-hero::before { right: 0; box-shadow: -76px 14px 0 #cdd8ff, -168px 2px 0 #fff, -254px 27px 0 #879ccf; }
   .dark .timeline-hero::after { display: none; }
 }

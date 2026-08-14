@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/hmac"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -453,7 +452,6 @@ type AuthBackup struct {
 type SessionStore struct {
 	sync.RWMutex
 	tokens map[string]time.Time
-	key    []byte
 }
 
 type AuthConfig struct {
@@ -878,26 +876,42 @@ func configurationBackupHandler(auth *AuthConfig, platforms *BilibiliStore) http
 }
 
 func (s *SessionStore) create() (string, error) {
-	expires := time.Now().Add(30 * 24 * time.Hour).Unix()
-	payload := strconv.FormatInt(expires, 10)
-	mac := hmac.New(sha256.New, s.key)
-	_, _ = mac.Write([]byte(payload))
-	return payload + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
+	random := make([]byte, 32)
+	if _, err := rand.Read(random); err != nil {
+		return "", err
+	}
+	token := base64.RawURLEncoding.EncodeToString(random)
+	s.Lock()
+	if s.tokens == nil {
+		s.tokens = make(map[string]time.Time)
+	}
+	s.tokens[token] = time.Now().Add(24 * time.Hour)
+	s.Unlock()
+	return token, nil
 }
 
 func (s *SessionStore) valid(token string) bool {
-	parts := strings.Split(token, ".")
-	if len(parts) != 2 {
+	s.Lock()
+	defer s.Unlock()
+	expires, exists := s.tokens[token]
+	if !exists {
 		return false
 	}
-	expires, err := strconv.ParseInt(parts[0], 10, 64)
-	signature, decodeErr := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil || decodeErr != nil || time.Now().Unix() > expires {
+	if time.Now().After(expires) {
+		delete(s.tokens, token)
 		return false
 	}
-	mac := hmac.New(sha256.New, s.key)
-	_, _ = mac.Write([]byte(parts[0]))
-	return hmac.Equal(signature, mac.Sum(nil))
+	return true
+}
+
+func (s *SessionStore) revoke(token string) {
+	s.Lock()
+	delete(s.tokens, token)
+	s.Unlock()
+}
+
+func clearSessionCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{Name: "lumic_session", Value: "", Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: os.Getenv("LUMIC_COOKIE_SECURE") == "true", MaxAge: -1, Expires: time.Unix(1, 0)})
 }
 
 func hashPassword(password string, salt []byte) string {
@@ -937,7 +951,7 @@ func loginHandler(sessions *SessionStore, auth *AuthConfig) http.HandlerFunc {
 			http.Error(w, "unable to create session", http.StatusInternalServerError)
 			return
 		}
-		http.SetCookie(w, &http.Cookie{Name: "lumic_session", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: os.Getenv("LUMIC_COOKIE_SECURE") == "true", MaxAge: 30 * 24 * 60 * 60, Expires: time.Now().Add(30 * 24 * time.Hour)})
+		http.SetCookie(w, &http.Cookie{Name: "lumic_session", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: os.Getenv("LUMIC_COOKIE_SECURE") == "true", MaxAge: 24 * 60 * 60, Expires: time.Now().Add(24 * time.Hour)})
 		writeJSON(w, map[string]string{"status": "ok"})
 	}
 }
@@ -950,11 +964,25 @@ func sessionHandler(sessions *SessionStore) http.HandlerFunc {
 		}
 		cookie, err := r.Cookie("lumic_session")
 		if err != nil || !sessions.valid(cookie.Value) {
-			http.SetCookie(w, &http.Cookie{Name: "lumic_session", Value: "", Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: os.Getenv("LUMIC_COOKIE_SECURE") == "true", MaxAge: -1, Expires: time.Unix(1, 0)})
+			clearSessionCookie(w)
 			writeJSON(w, map[string]bool{"authenticated": false})
 			return
 		}
 		writeJSON(w, map[string]bool{"authenticated": true})
+	}
+}
+
+func logoutHandler(sessions *SessionStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if cookie, err := r.Cookie("lumic_session"); err == nil {
+			sessions.revoke(cookie.Value)
+		}
+		clearSessionCookie(w)
+		writeJSON(w, map[string]string{"status": "logged_out"})
 	}
 }
 
@@ -1386,6 +1414,12 @@ func (s *Store) deletePosts(ids []string, source Source, author string) (int, er
 		kept = append(kept, post)
 	}
 	if len(removed) == 0 {
+		if author != "" {
+			if err := deleteSourceStorage(source, author); err != nil {
+				return 0, err
+			}
+			return 0, nil
+		}
 		return 0, os.ErrNotExist
 	}
 	for _, post := range removed {
@@ -3003,6 +3037,9 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 			}
 		}
 		if len(payload.Data.Items) == 0 || !payload.Data.HasMore || payload.Data.Offset == "" || payload.Data.Offset == offset || reachedBoundary {
+			break
+		}
+		if !full && feed.LastSyncedAt.IsZero() && !feed.IncludePast {
 			break
 		}
 		offset = payload.Data.Offset
@@ -5250,10 +5287,11 @@ func main() {
 		log.Fatal("unable to persist source storage paths: ", err)
 	}
 	bilibili.startScheduler()
-	sessions := &SessionStore{tokens: make(map[string]time.Time), key: bilibili.key}
+	sessions := &SessionStore{tokens: make(map[string]time.Time)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/login", loginHandler(sessions, auth))
 	mux.HandleFunc("/api/session", sessionHandler(sessions))
+	mux.HandleFunc("/api/logout", logoutHandler(sessions))
 	mux.HandleFunc("/api/settings", settingsHandler(auth))
 	mux.HandleFunc("/api/posts", store.postsHandler)
 	mux.HandleFunc("/api/feeds", store.feedsHandler)

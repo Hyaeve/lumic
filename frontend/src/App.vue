@@ -9,6 +9,12 @@ import weiboIcon from '../icon/weibo.png'
 import weiboLineIcon from '../icon/weibo-1.png'
 import twitterIcon from '../icon/推特.png'
 import twitterLineIcon from '../icon/推特-1.png'
+import timelineNavIcon from '../icon/动态.png'
+import favoriteNavIcon from '../icon/收藏.png'
+import subscriptionsNavIcon from '../icon/订阅平台.png'
+import settingsNavIcon from '../icon/设置.png'
+import dayThemeIcon from '../icon/日间模式.png'
+import nightThemeIcon from '../icon/夜间模式.png'
 
 const authenticated = ref(false)
 const sessionChecked = ref(false)
@@ -36,6 +42,7 @@ const activeNav = ref('all')
 const activeSource = ref('all')
 const sourcesExpanded = ref(true)
 const mobileMenuOpen = ref(false)
+const showBrandMenu = ref(false)
 const phonePortrait = ref(false)
 const selectedAuthor = ref(null)
 const selectedTag = ref('')
@@ -67,7 +74,6 @@ const pixivCredentials = ref(emptyPixivCredentials())
 const pixivBusy = ref(false)
 const pixivError = ref('')
 const pixivArtistId = ref('')
-const pixivArtistName = ref('')
 const pixivIncludePast = ref(false)
 const pixivSubscriptionTags = ref('')
 const weiboAccount = ref({ configured: false, userId: '', userName: '', avatar: '' })
@@ -98,6 +104,7 @@ const timelineOverscan = 5
 let phonePortraitQuery = null
 let timelineFrame = 0
 let postResizeObserver = null
+let sessionPollTimer = null
 const observedPostElements = new Map()
 const transientTimers = new Set()
 const lightbox = ref({ open: false, media: [], index: 0, author: '', scale: 1, rotation: 0, fit: true, x: 0, y: 0, dragging: false, motion: 'enter' })
@@ -213,8 +220,22 @@ async function login() {
     if (!response.ok) throw new Error('账号或密码不正确')
     authenticated.value = true
     await loadData()
+    await loadPlatformAccounts()
   } catch (error) { loginError.value = error.message }
   finally { loginBusy.value = false }
+}
+async function logout() {
+  try {
+    await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' })
+  } finally {
+    showBrandMenu.value = false
+    authenticated.value = false
+    posts.value = []
+    feeds.value = []
+    selectedPlatform.value = null
+    credentialPlatform.value = null
+    stopSelection()
+  }
 }
 async function loadData() {
   try {
@@ -266,6 +287,7 @@ async function syncNow() {
 }
 async function openSettings(_section = 'settings', updateHistory = true) {
   mobileMenuOpen.value = false
+  showBrandMenu.value = false
   settingsTab.value = 'settings'; showSettings.value = true; activeNav.value = 'settings'; settingsError.value = ''; proxyMessage.value = ''; pixivError.value = ''; weiboError.value = ''
   if (updateHistory) updateRoute('/settings')
   try {
@@ -526,11 +548,11 @@ async function subscribePixiv() {
   if (!/^\d+$/.test(userId)) { pixivError.value = '请输入画师主页中的数字用户 ID'; return }
   pixivBusy.value = true; pixivError.value = ''
   try {
-    const response = await fetch('/api/pixiv/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId, name: pixivArtistName.value.trim(), includePast: pixivIncludePast.value, schedule: '0 6 * * *', tags: parseTagInput(pixivSubscriptionTags.value) }) })
+    const response = await fetch('/api/pixiv/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId, includePast: pixivIncludePast.value, schedule: '0 6 * * *', tags: parseTagInput(pixivSubscriptionTags.value) }) })
     if (!response.ok) throw new Error(await responseError(response, response.status === 409 ? '已经订阅该 Pixiv 画师' : '订阅失败'))
     const saved = await response.json()
     await loadFeeds(saved)
-    pixivArtistId.value = ''; pixivArtistName.value = ''; pixivSubscriptionTags.value = ''; showPixiv.value = false
+    pixivArtistId.value = ''; pixivSubscriptionTags.value = ''; showPixiv.value = false
     navigateTo('pulls')
   } catch (error) { pixivError.value = error.message } finally { pixivBusy.value = false }
 }
@@ -692,6 +714,10 @@ function stopLightboxDrag(event) {
   lightboxDrag = null
 }
 function handleGlobalKeydown(event) {
+  if (showBrandMenu.value && event.key === 'Escape') {
+    showBrandMenu.value = false
+    return
+  }
   if (contextMenu.value.open) {
     if (event.key === 'Escape') closeContextMenu()
     return
@@ -813,15 +839,16 @@ async function unfavoriteSelectedPosts() {
 }
 async function deleteAuthorPosts(source, author) {
   const count = posts.value.filter(post => post.source === source && post.author === author).length
-  if (!count) return
-  const confirmed = await askConfirm({ title: '删除作者全部动态', message: `确定永久删除“${author}”的全部 ${count} 条动态及其 /flow 内容目录吗？订阅关系会保留，后续同步仍可重新创建目录并拉取。`, confirmText: '删除动态及文件' })
+  const countText = count ? `全部 ${count} 条动态` : '全部动态记录'
+  const confirmed = await askConfirm({ title: '删除作者全部动态', message: `确定永久删除“${author}”的${countText}及其 /flow 内容目录吗？订阅关系会保留，后续同步仍可重新创建目录并拉取。`, confirmText: '删除动态及文件' })
   if (!confirmed) return
   postActionBusy.value = `author:${source}:${author}`
   try {
     const response = await fetch('/api/posts', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source, author }) })
     if (!response.ok) throw new Error(await responseError(response, '删除作者动态失败'))
+    const result = await response.json()
     posts.value = posts.value.filter(post => post.source !== source || post.author !== author)
-    timelineMessage.value = `已删除 ${author} 的 ${count} 条动态`
+    timelineMessage.value = `已删除 ${author} 的 ${result.count ?? count} 条动态及相关文件`
   } catch (error) { timelineMessage.value = error.message } finally { postActionBusy.value = '' }
 }
 async function syncWeiboLikes() {
@@ -909,6 +936,7 @@ async function updatePostFavorite(post, liked) {
 function togglePostLike(post) { return updatePostFavorite(post, !post.liked) }
 function navigateTo(nav, source = activeSource.value) {
   stopSelection()
+  showBrandMenu.value = false
   selectedTag.value = ''
   showSettings.value = false
   selectedPlatform.value = null
@@ -1045,18 +1073,21 @@ function platformEmptyMessage(platformKey) {
   if (platformKey === 'twitter') return '推特账号连接与作者采集器尚未开放。'
   return '作者订阅连接器将在后续版本开放。'
 }
-async function checkSession() {
+async function checkSession(refreshData = true) {
   try {
     const response = await fetch('/api/session', { credentials: 'same-origin' })
     if (!response.ok) throw new Error('session unavailable')
     const session = await response.json()
     if (!session.authenticated) {
       authenticated.value = false
+      showBrandMenu.value = false
       return
     }
     authenticated.value = true
-    await loadData()
-    await loadPlatformAccounts()
+    if (refreshData) {
+      await loadData()
+      await loadPlatformAccounts()
+    }
   } catch {
     loginError.value = '暂时无法连接服务，请稍后刷新页面'
   } finally {
@@ -1069,8 +1100,8 @@ watch(platformCards, cards => {
   if (!credentialPlatform.value) return
   credentialPlatform.value = cards.find(platform => platform.key === credentialPlatform.value.key) || null
 })
-onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; phonePortraitQuery = window.matchMedia('(max-width: 760px) and (orientation: portrait)'); phonePortrait.value = phonePortraitQuery.matches; phonePortraitQuery.addEventListener('change', updatePhonePortrait); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); if (phonePortrait.value) openPhoneDefaultTimeline(); checkSession(); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', applyRoute); window.addEventListener('scroll', scheduleTimelineWindow, { passive: true }); window.addEventListener('resize', scheduleTimelineWindow) })
-onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); postResizeObserver?.disconnect(); observedPostElements.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); closeLightbox(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', applyRoute); window.removeEventListener('scroll', scheduleTimelineWindow); window.removeEventListener('resize', scheduleTimelineWindow); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
+onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; phonePortraitQuery = window.matchMedia('(max-width: 760px) and (orientation: portrait)'); phonePortrait.value = phonePortraitQuery.matches; phonePortraitQuery.addEventListener('change', updatePhonePortrait); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); if (phonePortrait.value) openPhoneDefaultTimeline(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', applyRoute); window.addEventListener('scroll', scheduleTimelineWindow, { passive: true }); window.addEventListener('resize', scheduleTimelineWindow) })
+onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); if (sessionPollTimer) window.clearInterval(sessionPollTimer); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); postResizeObserver?.disconnect(); observedPostElements.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); closeLightbox(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', applyRoute); window.removeEventListener('scroll', scheduleTimelineWindow); window.removeEventListener('resize', scheduleTimelineWindow); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
 </script>
 
 <template>
@@ -1095,21 +1126,27 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
       </form>
     </div>
   </div>
-  <div v-else class="app-shell" :class="{ dark: isDark, 'lightbox-active': lightbox.open }">
+  <div v-else class="app-shell" :class="{ dark: isDark, 'lightbox-active': lightbox.open }" @click="showBrandMenu = false">
     <button class="mobile-menu-toggle" type="button" :class="{ open: mobileMenuOpen }" :aria-expanded="mobileMenuOpen" title="打开导航" aria-label="打开导航" @click="mobileMenuOpen = !mobileMenuOpen">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h14"/></svg>
     </button>
     <button v-if="mobileMenuOpen" class="mobile-menu-scrim" type="button" aria-label="关闭导航" @click="mobileMenuOpen = false"></button>
     <aside class="sidebar" :class="{ 'mobile-open': mobileMenuOpen }">
-      <div class="brand">
-<span class="brand-mark">✦</span>
-<span>Lumic</span>
-<small>拾光</small>
-</div>
+      <div class="brand" @click.stop>
+        <button class="brand-mark-button" type="button" :aria-expanded="showBrandMenu" title="账号菜单" aria-label="打开账号菜单" @click="showBrandMenu = !showBrandMenu"><span class="brand-mark">✦</span></button>
+        <span>Lumic</span>
+        <small>拾光</small>
+        <div v-if="showBrandMenu" class="brand-account-popover">
+          <button type="button" @click="logout">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H6.5A2.5 2.5 0 0 0 4 7.5v9A2.5 2.5 0 0 0 6.5 19H10M14 8l4 4-4 4M18 12H9"/></svg>
+            <span>退出登录</span>
+          </button>
+        </div>
+      </div>
       <nav class="main-nav">
         <div class="source-nav-group">
           <div class="source-nav-heading">
-            <button class="source-nav-main" :class="{ active: activeNav === 'all' }" @click="navigateTo('all', 'all')"><span class="nav-line-symbol">⌂</span> 全部动态</button>
+            <button class="source-nav-main" :class="{ active: activeNav === 'all' }" @click="navigateTo('all', 'all')"><span class="nav-line-symbol nav-mask-symbol" :style="{ '--nav-mask': `url(${timelineNavIcon})` }" aria-hidden="true"></span> 全部动态</button>
             <button class="source-nav-toggle" type="button" :title="sourcesExpanded ? '收起平台来源' : '展开平台来源'" :aria-expanded="sourcesExpanded" @click="sourcesExpanded = !sourcesExpanded"><span :class="{ collapsed: !sourcesExpanded }">⌄</span></button>
           </div>
           <div v-show="sourcesExpanded" class="source-nav-children">
@@ -1117,15 +1154,15 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
           </div>
         </div>
         <button :class="{ active: activeNav === 'liked' }" @click="navigateTo('liked', 'all')">
-<span class="nav-line-symbol">♡</span> 收藏
+<span class="nav-line-symbol nav-mask-symbol" :style="{ '--nav-mask': `url(${favoriteNavIcon})` }" aria-hidden="true"></span> 收藏
 </button>
         <button :class="{ active: activeNav === 'pulls' }" @click="navigateTo('pulls')">
-<svg class="nav-line-symbol" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4.5" width="16" height="5" rx="1.5"/><rect x="4" y="14.5" width="16" height="5" rx="1.5"/><path d="M8 9.5v5M16 9.5v5"/><circle cx="8" cy="7" r=".8" fill="currentColor" stroke="none"/><circle cx="16" cy="17" r=".8" fill="currentColor" stroke="none"/></svg> 订阅平台
+<span class="nav-line-symbol nav-mask-symbol" :style="{ '--nav-mask': `url(${subscriptionsNavIcon})` }" aria-hidden="true"></span> 订阅平台
 </button>
       </nav>
       <div class="sidebar-bottom">
-        <button :class="{ active: activeNav === 'settings' }" @click="openSettings()"><svg class="nav-line-symbol" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.2 13.5a7.8 7.8 0 0 0 0-3l2-1.5-2-3.4-2.4 1A7.7 7.7 0 0 0 14.2 5L14 2.5h-4L9.8 5a7.7 7.7 0 0 0-2.6 1.6l-2.4-1-2 3.4 2 1.5a7.8 7.8 0 0 0 0 3l-2 1.5 2 3.4 2.4-1A7.7 7.7 0 0 0 9.8 19l.2 2.5h4l.2-2.5a7.7 7.7 0 0 0 2.6-1.6l2.4 1 2-3.4-2-1.5Z"/></svg> 设置</button>
-        <button class="sidebar-theme-button" type="button" @click="setDarkMode(!isDark)" :title="isDark ? '切换日间主题' : '切换夜间主题'" :aria-label="isDark ? '切换日间主题' : '切换夜间主题'">{{ isDark ? '☀' : '☾' }}</button>
+        <button :class="{ active: activeNav === 'settings' }" @click="openSettings()"><span class="nav-line-symbol nav-mask-symbol" :style="{ '--nav-mask': `url(${settingsNavIcon})` }" aria-hidden="true"></span> 设置</button>
+        <button class="sidebar-theme-button" type="button" @click="setDarkMode(!isDark)" :title="isDark ? '当前为夜间主题' : '当前为日间主题'" :aria-label="isDark ? '当前为夜间主题，点击切换日间主题' : '当前为日间主题，点击切换夜间主题'"><span class="theme-mask-symbol" :style="{ '--nav-mask': `url(${isDark ? nightThemeIcon : dayThemeIcon})` }" aria-hidden="true"></span></button>
       </div>
     </aside>
 
@@ -1139,10 +1176,10 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
         <div class="header-actions"><button class="danger-outline-button" :disabled="postActionBusy !== '' || !authorProfile.count" @click="deleteAuthorPosts(authorProfile.source, authorProfile.name)">删除全部动态</button></div>
       </header>
       <header v-else-if="activeNav !== 'liked'" class="topbar timeline-hero">
+<div class="night-sky-decor" aria-hidden="true"><i class="night-moon"></i><i class="night-star star-one"></i><i class="night-star star-two"></i><i class="night-star star-three"></i><i class="night-star star-four"></i></div>
 <div class="timeline-hero-copy">
 <p class="eyebrow">SAVED MOMENTS · {{ new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' }) }}</p>
-<h1>{{ selectedTag ? `#${selectedTag}` : `${localGreeting}，拾光者` }} <span>{{ selectedTag ? '#' : '☼' }}</span>
-</h1>
+<h1>{{ selectedTag ? `#${selectedTag}` : `${localGreeting}，拾光者` }}</h1>
 <p class="subtitle">{{ selectedTag ? `这里汇总了所有带有 #${selectedTag} 的动态。` : '这里有你关注的世界，和刚刚发生的一切。' }}</p>
 </div>
 </header>
@@ -1303,7 +1340,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
         <div class="bili-account"><span>已连接 B 站账号 · UID {{ biliAccount.userId }}</span><button @click="showBilibili = false; openSettings('platforms')">管理凭证</button></div>
         <form class="bili-search" @submit.prevent="searchBilibili"><input v-model="biliKeyword" placeholder="搜索 UP 主昵称" maxlength="40" required><button :disabled="biliBusy">⌕ 搜索</button></form>
         <label class="subscription-tag-field"><span>作者标签</span><input v-model="biliSubscriptionTags" placeholder="#标签1 #标签2" maxlength="120"><small>订阅搜索结果中的作者时，会同时保存这些标签。</small></label>
-        <label class="history-option"><input v-model="biliIncludePast" type="checkbox"> 首次订阅时拉取历史图文与专栏</label>
+        <label class="history-option"><input v-model="biliIncludePast" type="checkbox"> 首次订阅时拉取历史动态</label>
         <div class="bili-results">
           <article v-for="user in biliResults" :key="user.userId"><img :src="user.avatar" :alt="user.name"><div><strong>{{ user.name }}</strong><span>UID {{ user.userId }} · 粉丝 {{ formatFans(user.fans) }}</span><p>{{ user.description || '这位 UP 主还没有填写简介' }}</p></div><button @click="subscribeBilibili(user)" :disabled="biliBusy">订阅</button></article>
           <div v-if="!biliResults.length" class="bili-placeholder">输入昵称搜索 UP 主，然后选择订阅</div>
@@ -1397,12 +1434,10 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
         <h2>订阅 Pixiv 画师</h2>
         <p>填写画师主页地址中的数字用户 ID，作品将以原图归档，并保留标题与说明。</p>
         <div class="bili-account"><span>已连接 Pixiv · {{ pixivAccount.userName || `UID ${pixivAccount.userId}` }}</span><button @click="showPixiv = false; openSettings('platforms')">管理凭证</button></div>
-        <form class="settings-form pixiv-source-form" @submit.prevent="subscribePixiv">
-          <label>画师用户 ID</label><input v-model="pixivArtistId" required inputmode="numeric" pattern="[0-9]+" placeholder="例如 12345678">
-          <label>画师名称</label><input v-model="pixivArtistName" placeholder="可选，首次同步后自动更新">
-          <label>作者标签</label><input v-model="pixivSubscriptionTags" placeholder="#插画 #收藏">
+        <form class="pixiv-source-form" @submit.prevent="subscribePixiv">
+          <div class="bili-search pixiv-subscribe-row"><input v-model="pixivArtistId" required inputmode="numeric" pattern="[0-9]+" placeholder="画师用户 ID，例如 12345678"><button :disabled="pixivBusy">{{ pixivBusy ? '添加中…' : '订阅' }}</button></div>
+          <label class="subscription-tag-field"><span>作者标签</span><input v-model="pixivSubscriptionTags" placeholder="#插画 #收藏"></label>
           <label class="history-option"><input v-model="pixivIncludePast" type="checkbox"> 首次订阅时拉取历史作品</label>
-          <button class="login-button" :disabled="pixivBusy">{{ pixivBusy ? '添加中…' : '订阅画师' }}</button>
         </form>
         <p v-if="pixivError" class="login-error bili-error">{{ pixivError }}</p>
       </div>

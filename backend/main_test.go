@@ -807,6 +807,30 @@ func TestPostsHandlerDeletesMultipleAndAuthorPosts(t *testing.T) {
 	}
 }
 
+func TestAuthorDeleteRemovesResidualDirectoryWithoutPosts(t *testing.T) {
+	oldFlowRoot := flowRoot
+	flowRoot = filepath.Join(t.TempDir(), "flow")
+	t.Cleanup(func() { flowRoot = oldFlowRoot })
+	authorDirectory := sourceStoragePath(SourcePixiv, "Residual Artist")
+	if err := os.MkdirAll(authorDirectory, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(authorDirectory, "orphan.jpg"), []byte("image"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	store := &Store{posts: []Post{}, feeds: []SourceConfig{}, file: filepath.Join(t.TempDir(), "content.json")}
+	request := httptest.NewRequest(http.MethodDelete, "/api/posts", strings.NewReader(`{"source":"pixiv","author":"Residual Artist"}`))
+	response := httptest.NewRecorder()
+	store.postsHandler(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("residual directory delete failed: status=%d body=%s", response.Code, response.Body.String())
+	}
+	if _, err := os.Stat(authorDirectory); !os.IsNotExist(err) {
+		t.Fatalf("residual author directory was not deleted: %v", err)
+	}
+}
+
 func decodeTestResponse(t *testing.T, recorder *httptest.ResponseRecorder) map[string]any {
 	t.Helper()
 	var payload map[string]any
@@ -1292,36 +1316,74 @@ func TestConfigurationBackupExportAndRestore(t *testing.T) {
 	}
 }
 
-func TestSignedSessionRemainsValidAcrossStoreRestart(t *testing.T) {
-	key := []byte("persistent-session-signing-key")
-	first := &SessionStore{tokens: make(map[string]time.Time), key: key}
+func TestSessionIsInvalidatedAcrossStoreRestart(t *testing.T) {
+	first := &SessionStore{tokens: make(map[string]time.Time)}
 	token, err := first.create()
 	if err != nil {
-		t.Fatalf("create signed session: %v", err)
+		t.Fatalf("create session: %v", err)
 	}
-	restarted := &SessionStore{tokens: make(map[string]time.Time), key: key}
-	if !restarted.valid(token) {
-		t.Fatal("signed session became invalid after store restart")
+	if !first.valid(token) {
+		t.Fatal("new session was not valid in its original store")
 	}
-	if restarted.valid(token + "tampered") {
-		t.Fatal("tampered signed session was accepted")
+	restarted := &SessionStore{tokens: make(map[string]time.Time)}
+	if restarted.valid(token) {
+		t.Fatal("session remained valid after store restart")
 	}
 }
 
-func TestSessionHandlerRecognizesPersistentSignedCookie(t *testing.T) {
-	key := []byte("persistent-session-signing-key")
-	token, err := (&SessionStore{tokens: make(map[string]time.Time), key: key}).create()
+func TestSessionHandlerRejectsCookieAfterRestart(t *testing.T) {
+	token, err := (&SessionStore{tokens: make(map[string]time.Time)}).create()
 	if err != nil {
-		t.Fatalf("create signed session: %v", err)
+		t.Fatalf("create session: %v", err)
 	}
 
-	restarted := &SessionStore{tokens: make(map[string]time.Time), key: key}
+	restarted := &SessionStore{tokens: make(map[string]time.Time)}
 	request := httptest.NewRequest(http.MethodGet, "/api/session", nil)
 	request.AddCookie(&http.Cookie{Name: "lumic_session", Value: token})
 	response := httptest.NewRecorder()
 	sessionHandler(restarted)(response, request)
 
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"authenticated":true`) {
-		t.Fatalf("session was not restored: status=%d body=%s", response.Code, response.Body.String())
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"authenticated":false`) {
+		t.Fatalf("restarted session was accepted: status=%d body=%s", response.Code, response.Body.String())
+	}
+	cookies := response.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Name != "lumic_session" || cookies[0].MaxAge != -1 {
+		t.Fatalf("expired session cookie was not cleared: %#v", cookies)
+	}
+}
+
+func TestLoginCookieExpiresAfterTwentyFourHours(t *testing.T) {
+	sessions := &SessionStore{tokens: make(map[string]time.Time)}
+	auth := &AuthConfig{Username: "lumic", PasswordHash: hashPassword("correct-password", []byte("lumic-default-salt-v1"))}
+	request := httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(`{"username":"lumic","password":"correct-password"}`))
+	response := httptest.NewRecorder()
+	loginHandler(sessions, auth)(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("login failed: status=%d body=%s", response.Code, response.Body.String())
+	}
+	cookies := response.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].MaxAge != 24*60*60 {
+		t.Fatalf("unexpected login cookie lifetime: %#v", cookies)
+	}
+}
+
+func TestLogoutRevokesSessionAndClearsCookie(t *testing.T) {
+	sessions := &SessionStore{tokens: make(map[string]time.Time)}
+	token, err := sessions.create()
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/logout", nil)
+	request.AddCookie(&http.Cookie{Name: "lumic_session", Value: token})
+	response := httptest.NewRecorder()
+	logoutHandler(sessions)(response, request)
+
+	if response.Code != http.StatusOK || sessions.valid(token) {
+		t.Fatalf("logout did not revoke session: status=%d body=%s", response.Code, response.Body.String())
+	}
+	cookies := response.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].MaxAge != -1 {
+		t.Fatalf("logout did not clear cookie: %#v", cookies)
 	}
 }
