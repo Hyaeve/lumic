@@ -47,28 +47,6 @@ func TestDownloadRemoteImageAndFlowPath(t *testing.T) {
 	}
 }
 
-func TestDownloadRemoteLiveMedia(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Referer") != "https://weibo.com/" || !strings.Contains(r.Header.Get("Cookie"), "SUB=test") {
-			http.Error(w, "missing weibo headers", http.StatusForbidden)
-			return
-		}
-		w.Header().Set("Content-Type", "video/quicktime")
-		_, _ = w.Write([]byte("live-photo-video"))
-	}))
-	defer server.Close()
-	target, err := downloadRemoteLiveMedia(server.Client(), server.URL+"/live", filepath.Join(t.TempDir(), "author20260814-1"), "https://weibo.com/", "SUB=test")
-	if err != nil {
-		t.Fatalf("download live media: %v", err)
-	}
-	if filepath.Ext(target) != ".mov" {
-		t.Fatalf("unexpected live media extension: %s", target)
-	}
-	if data, err := os.ReadFile(target); err != nil || string(data) != "live-photo-video" {
-		t.Fatalf("downloaded live media mismatch: data=%q err=%v", data, err)
-	}
-}
-
 func TestInitializeFlowStorageCreatesPreviewRootAndRemovesLegacyCache(t *testing.T) {
 	root := t.TempDir()
 	configuredFlowRoot := filepath.Join(root, "flow")
@@ -310,7 +288,7 @@ func TestBilibiliDetailCaptionPrefersFullText(t *testing.T) {
 	}
 }
 
-func TestCollectWeiboPostsExtractsLivePhoto(t *testing.T) {
+func TestCollectWeiboPostsKeepsStaticOriginalForLivePhoto(t *testing.T) {
 	payload := map[string]any{
 		"id":         "123",
 		"created_at": "Fri Aug 14 12:00:00 +0800 2026",
@@ -332,11 +310,11 @@ func TestCollectWeiboPostsExtractsLivePhoto(t *testing.T) {
 	}
 	posts := make([]Post, 0)
 	collectWeiboPosts(payload, SourceConfig{ID: "weibo-42", Source: SourceWeibo, Name: "作者"}, &posts, make(map[string]bool))
-	if len(posts) != 1 || len(posts[0].Media) != 1 || len(posts[0].LiveMedia) != 1 {
-		t.Fatalf("live photo was not collected: %#v", posts)
+	if len(posts) != 1 || len(posts[0].Media) != 1 {
+		t.Fatalf("live photo static image was not collected: %#v", posts)
 	}
-	if !strings.Contains(posts[0].LiveMedia[0], "live-photo-fid.mov") || !strings.Contains(posts[0].Media[0], "/original/") {
-		t.Fatalf("unexpected live photo resources: media=%q live=%q", posts[0].Media[0], posts[0].LiveMedia[0])
+	if !strings.Contains(posts[0].Media[0], "/original/") {
+		t.Fatalf("unexpected live photo static image: media=%q", posts[0].Media[0])
 	}
 }
 
@@ -375,6 +353,52 @@ func TestPixivBrowserCredentialsRequest(t *testing.T) {
 	}
 	if credentials.UserName != "Pixiv User" || credentials.UserID != "12345" || credentials.Avatar != "https://i.pximg.net/user-profile/img/avatar.jpg" {
 		t.Fatalf("unexpected Pixiv account: %#v", credentials)
+	}
+}
+
+func TestPixivBookmarksSourceUsesDefaultTag(t *testing.T) {
+	oldFlowRoot, oldBilibiliFile := flowRoot, bilibiliFile
+	flowRoot = t.TempDir()
+	bilibiliFile = filepath.Join(t.TempDir(), "platforms.enc")
+	t.Cleanup(func() {
+		flowRoot = oldFlowRoot
+		bilibiliFile = oldBilibiliFile
+	})
+	store := &BilibiliStore{
+		key: make([]byte, 32),
+		config: BilibiliConfig{
+			Pixiv:              PixivCredentials{Cookie: "PHPSESSID=test", UserID: "12345", UserName: "收藏账号", Avatar: "https://example.com/avatar.jpg"},
+			PixivSubscriptions: []SourceConfig{},
+		},
+	}
+	body := bytes.NewBufferString(`{"bookmarks":true,"includePast":true,"tags":[]}`)
+	request := httptest.NewRequest(http.MethodPost, "/api/pixiv/subscriptions", body)
+	recorder := httptest.NewRecorder()
+	store.pixivSubscriptionsHandler(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("add Pixiv bookmarks source: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var feed SourceConfig
+	if err := json.NewDecoder(recorder.Body).Decode(&feed); err != nil {
+		t.Fatalf("decode Pixiv bookmarks source: %v", err)
+	}
+	if feed.ID != "pixiv-bookmarks-12345" || feed.Name != "P站收藏" || !containsString(feed.Tags, "P站收藏") {
+		t.Fatalf("unexpected Pixiv bookmarks source: %#v", feed)
+	}
+	if _, err := os.Stat(filepath.Join(feed.StoragePath, "source.json")); err != nil {
+		t.Fatalf("Pixiv bookmarks metadata missing: %v", err)
+	}
+}
+
+func TestBilibiliImageDownloadDelayIsThrottled(t *testing.T) {
+	old := os.Getenv("LUMIC_IMAGE_DOWNLOAD_DELAY_MS")
+	_ = os.Unsetenv("LUMIC_IMAGE_DOWNLOAD_DELAY_MS")
+	t.Cleanup(func() { _ = os.Setenv("LUMIC_IMAGE_DOWNLOAD_DELAY_MS", old) })
+	if delay := imageDownloadDelay(SourceBilibili, 0); delay < 1500*time.Millisecond {
+		t.Fatalf("Bilibili delay too short: %s", delay)
+	}
+	if delay := imageDownloadDelay(SourceWeibo, 0); delay != 180*time.Millisecond {
+		t.Fatalf("unexpected non-Bilibili delay: %s", delay)
 	}
 }
 

@@ -44,6 +44,7 @@ const isDark = ref(false)
 const showAdd = ref(false)
 const showBilibili = ref(false)
 const showWeibo = ref(false)
+const showPixiv = ref(false)
 const weiboKeyword = ref('')
 const weiboResults = ref([])
 const weiboIncludePast = ref(false)
@@ -65,6 +66,10 @@ const emptyPixivCredentials = () => ({ userAgent: '', baggage: '', cookie: '', u
 const pixivCredentials = ref(emptyPixivCredentials())
 const pixivBusy = ref(false)
 const pixivError = ref('')
+const pixivArtistId = ref('')
+const pixivArtistName = ref('')
+const pixivIncludePast = ref(false)
+const pixivSubscriptionTags = ref('')
 const weiboAccount = ref({ configured: false, userId: '', userName: '', avatar: '' })
 const weiboCredentials = ref({ cookie: '', userId: '' })
 const weiboPasswordCredentials = ref({ username: '', password: '' })
@@ -95,7 +100,7 @@ let timelineFrame = 0
 let postResizeObserver = null
 const observedPostElements = new Map()
 const transientTimers = new Set()
-const lightbox = ref({ open: false, media: [], liveMedia: [], index: 0, author: '', scale: 1, rotation: 0, fit: true, x: 0, y: 0, dragging: false, motion: 'enter' })
+const lightbox = ref({ open: false, media: [], index: 0, author: '', scale: 1, rotation: 0, fit: true, x: 0, y: 0, dragging: false, motion: 'enter' })
 let lightboxDrag = null
 
 const sourceMeta = {
@@ -105,9 +110,20 @@ const sourceMeta = {
   twitter: { label: '推特', icon: 'tw', image: twitterIcon, lineImage: twitterLineIcon, color: 'twitter' }
 }
 const validSources = new Set(Object.keys(sourceMeta))
-const likedCount = computed(() => posts.value.filter(post => post.liked).length)
+const statsPosts = computed(() => {
+  const allPosts = Array.isArray(posts.value) ? posts.value : []
+  return activeSource.value === 'all' ? allPosts : allPosts.filter(post => post.source === activeSource.value)
+})
+const totalStatsCount = computed(() => statsPosts.value.length)
+const todayStatsCount = computed(() => {
+  const today = new Date()
+  return statsPosts.value.filter(post => {
+    const published = new Date(post.published)
+    return !Number.isNaN(published.getTime()) && published.getFullYear() === today.getFullYear() && published.getMonth() === today.getMonth() && published.getDate() === today.getDate()
+  }).length
+})
+const favoriteStatsCount = computed(() => statsPosts.value.filter(post => post.liked).length)
 const selectedPostCount = computed(() => selectedPostIds.value.length)
-const currentLightboxLive = computed(() => lightbox.value.liveMedia?.[lightbox.value.index] || '')
 const filteredPosts = computed(() => {
   const allPosts = Array.isArray(posts.value) ? posts.value : []
   const timeline = activeNav.value === 'liked' ? allPosts.filter(post => post.liked) : allPosts
@@ -136,7 +152,6 @@ const authorProfile = computed(() => {
   const latest = authorPosts[0]
   return { ...selectedAuthor.value, avatar: latest?.avatar || selectedAuthor.value.avatar, count: authorPosts.length }
 })
-const sourceCount = computed(() => new Set(posts.value.map(p => p.source)).size)
 const platformCards = computed(() => [
   { key: 'bilibili', label: '哔哩哔哩', short: '哔', ...sourceMeta.bilibili, configured: biliAccount.value.configured, account: biliAccount.value.configured ? (biliAccount.value.userName || `UID ${biliAccount.value.userId}`) : '尚未连接', avatar: biliAccount.value.avatar, path: '/flow/bilibili', description: 'UP 主图文动态与专栏', feeds: feeds.value.filter(feed => feed.source === 'bilibili') },
   { key: 'weibo', label: '微博', short: '微', ...sourceMeta.weibo, configured: weiboAccount.value.configured, account: weiboAccount.value.configured ? (weiboAccount.value.userName || `UID ${weiboAccount.value.userId}`) : '尚未连接', avatar: weiboAccount.value.avatar, path: '/flow/weibo', description: '博主动态与图文媒体', feeds: feeds.value.filter(feed => feed.source === 'weibo') },
@@ -171,6 +186,7 @@ function captionSegments(post) {
   return segments.length ? segments : [{ type: 'text', value: caption }]
 }
 const hasWeiboLikesSource = computed(() => feeds.value.some(feed => feed.id?.startsWith('weibo-likes-')))
+const hasPixivBookmarksSource = computed(() => feeds.value.some(feed => feed.id?.startsWith('pixiv-bookmarks-')))
 const localGreeting = computed(() => {
   const hour = new Date().getHours()
   if (hour < 6) return '夜深了'
@@ -210,7 +226,7 @@ async function loadData() {
   await loadFeeds()
 }
 async function loadFeeds(fallbackFeed = null) {
-  const endpoints = ['/api/feeds', '/api/bilibili/subscriptions', '/api/weibo/subscriptions']
+  const endpoints = ['/api/feeds', '/api/bilibili/subscriptions', '/api/weibo/subscriptions', '/api/pixiv/subscriptions']
   const responses = await Promise.allSettled(endpoints.map(endpoint => fetch(endpoint, { cache: 'no-store' })))
   const loaded = []
   for (const result of responses) {
@@ -341,6 +357,15 @@ async function savePixivAccount() {
     if (!response.ok) throw new Error(await responseError(response, 'Pixiv 凭证验证失败'))
     pixivAccount.value = await response.json(); pixivCredentials.value = emptyPixivCredentials()
   } catch (error) { pixivError.value = error.message } finally { pixivBusy.value = false }
+}
+async function openPixiv() {
+  showAdd.value = false; pixivError.value = ''
+  try {
+    const response = await fetch('/api/pixiv/account')
+    if (response.ok) pixivAccount.value = await response.json()
+    if (!pixivAccount.value.configured) { await openSettings('platforms'); return }
+    selectedPlatform.value = null; showPixiv.value = true
+  } catch { pixivError.value = '无法读取 Pixiv 配置' }
 }
 function stopWeiboPolling() { if (weiboPollTimer) clearTimeout(weiboPollTimer); weiboPollTimer = null }
 async function pollWeiboQR() {
@@ -496,6 +521,19 @@ async function subscribeBilibili(user) {
 function openPlatformSettings(platform) {
   selectedPlatform.value = platform
 }
+async function subscribePixiv() {
+  const userId = pixivArtistId.value.trim()
+  if (!/^\d+$/.test(userId)) { pixivError.value = '请输入画师主页中的数字用户 ID'; return }
+  pixivBusy.value = true; pixivError.value = ''
+  try {
+    const response = await fetch('/api/pixiv/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId, name: pixivArtistName.value.trim(), includePast: pixivIncludePast.value, schedule: '0 6 * * *', tags: parseTagInput(pixivSubscriptionTags.value) }) })
+    if (!response.ok) throw new Error(await responseError(response, response.status === 409 ? '已经订阅该 Pixiv 画师' : '订阅失败'))
+    const saved = await response.json()
+    await loadFeeds(saved)
+    pixivArtistId.value = ''; pixivArtistName.value = ''; pixivSubscriptionTags.value = ''; showPixiv.value = false
+    navigateTo('pulls')
+  } catch (error) { pixivError.value = error.message } finally { pixivBusy.value = false }
+}
 function openCredentialSettings(platformKey) {
   credentialPlatform.value = platformCards.value.find(platform => platform.key === platformKey) || null
   biliError.value = ''
@@ -522,7 +560,7 @@ async function saveFeedSettings() {
     selectedFeed.value.tags = parseTagInput(selectedFeed.value.tagInput)
     selectedFeed.value.includeKeywords = parseKeywordInput(selectedFeed.value.includeKeywordInput)
     selectedFeed.value.excludeKeywords = parseKeywordInput(selectedFeed.value.excludeKeywordInput)
-    if ((selectedFeed.value.source === 'bilibili' && selectedFeed.value.id.startsWith('bili-')) || (selectedFeed.value.source === 'weibo' && selectedFeed.value.id.startsWith('weibo-'))) {
+    if ((selectedFeed.value.source === 'bilibili' && selectedFeed.value.id.startsWith('bili-')) || (selectedFeed.value.source === 'weibo' && selectedFeed.value.id.startsWith('weibo-')) || (selectedFeed.value.source === 'pixiv' && selectedFeed.value.id.startsWith('pixiv-'))) {
       const response = await fetch(sourceOperationEndpoint(selectedFeed.value), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(selectedFeed.value) })
       if (!response.ok) throw new Error(await responseError(response, '来源设置保存失败'))
       const saved = await response.json(); const index = feeds.value.findIndex(feed => feed.id === saved.id)
@@ -543,6 +581,7 @@ async function saveFeedSettings() {
 function sourceOperationEndpoint(feed) {
   if (feed.source === 'bilibili' && feed.id.startsWith('bili-')) return '/api/bilibili/subscriptions'
   if (feed.source === 'weibo' && feed.id.startsWith('weibo-')) return '/api/weibo/subscriptions'
+  if (feed.source === 'pixiv' && feed.id.startsWith('pixiv-')) return '/api/pixiv/subscriptions'
   return '/api/feeds'
 }
 async function syncSource(feed, full = false) {
@@ -585,10 +624,10 @@ function resetLightboxView() {
   lightboxDrag = null
 }
 function openLightbox(post, index) {
-  lightbox.value = { open: true, media: post.media || [], liveMedia: post.liveMedia || [], index, author: post.author, scale: 1, rotation: 0, fit: true, x: 0, y: 0, dragging: false, motion: 'enter' }
+  lightbox.value = { open: true, media: post.media || [], index, author: post.author, scale: 1, rotation: 0, fit: true, x: 0, y: 0, dragging: false, motion: 'enter' }
 }
 function closeLightbox() {
-  lightbox.value = { open: false, media: [], liveMedia: [], index: 0, author: '', scale: 1, rotation: 0, fit: true, x: 0, y: 0, dragging: false, motion: 'enter' }
+  lightbox.value = { open: false, media: [], index: 0, author: '', scale: 1, rotation: 0, fit: true, x: 0, y: 0, dragging: false, motion: 'enter' }
   lightboxDrag = null
 }
 function moveLightbox(step) {
@@ -806,6 +845,16 @@ async function addWeiboLikesSource() {
     sourceActionMessage.value = '已添加“我的点赞”，可设置启停、Cron 和过滤规则'
   } catch (error) { settingsError.value = error.message } finally { sourceActionBusy.value = '' }
 }
+async function addPixivBookmarksSource() {
+  sourceActionBusy.value = 'add:pixiv-bookmarks'; sourceActionMessage.value = ''; settingsError.value = ''
+  try {
+    const response = await fetch('/api/pixiv/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bookmarks: true, includePast: true, schedule: '0 6 * * *', tags: ['P站收藏'] }) })
+    if (!response.ok) throw new Error(await responseError(response, response.status === 409 ? 'P站收藏来源已添加' : '添加 P站收藏来源失败'))
+    const feed = await response.json(); await loadFeeds(feed)
+    if (selectedPlatform.value?.key === 'pixiv') selectedPlatform.value.feeds = feeds.value.filter(item => item.source === 'pixiv')
+    sourceActionMessage.value = '已添加“P站收藏”，默认标签为 #P站收藏'
+  } catch (error) { settingsError.value = error.message } finally { sourceActionBusy.value = '' }
+}
 function setMediaShape(post, mediaIndex, event) {
   const image = event.target
   if (!image.naturalWidth || !image.naturalHeight) return
@@ -992,6 +1041,7 @@ function formatFans(count) { return count >= 10000 ? `${(count / 10000).toFixed(
 function platformEmptyMessage(platformKey) {
   if (platformKey === 'bilibili') return '点击“添加 UP 主”开始订阅图文与专栏。'
   if (platformKey === 'weibo') return '点击“添加博主”开始订阅微博动态。'
+  if (platformKey === 'pixiv') return '添加画师或账号收藏来源，作品将以原图归档。'
   if (platformKey === 'twitter') return '推特账号连接与作者采集器尚未开放。'
   return '作者订阅连接器将在后续版本开放。'
 }
@@ -1070,11 +1120,11 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
 <span class="nav-line-symbol">♡</span> 收藏
 </button>
         <button :class="{ active: activeNav === 'pulls' }" @click="navigateTo('pulls')">
-<svg class="nav-line-symbol" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="18" r="1.4" fill="currentColor" stroke="none"/><path d="M5 11a8 8 0 0 1 8 8M5 5a14 14 0 0 1 14 14"/></svg> 订阅平台
+<svg class="nav-line-symbol" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4.5" width="16" height="5" rx="1.5"/><rect x="4" y="14.5" width="16" height="5" rx="1.5"/><path d="M8 9.5v5M16 9.5v5"/><circle cx="8" cy="7" r=".8" fill="currentColor" stroke="none"/><circle cx="16" cy="17" r=".8" fill="currentColor" stroke="none"/></svg> 订阅平台
 </button>
       </nav>
       <div class="sidebar-bottom">
-        <button :class="{ active: activeNav === 'settings' }" @click="openSettings()"><svg class="nav-line-symbol" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h5M15 7h5M4 17h9M19 17h1"/><circle cx="12" cy="7" r="3"/><circle cx="16" cy="17" r="3"/></svg> 设置</button>
+        <button :class="{ active: activeNav === 'settings' }" @click="openSettings()"><svg class="nav-line-symbol" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.2 13.5a7.8 7.8 0 0 0 0-3l2-1.5-2-3.4-2.4 1A7.7 7.7 0 0 0 14.2 5L14 2.5h-4L9.8 5a7.7 7.7 0 0 0-2.6 1.6l-2.4-1-2 3.4 2 1.5a7.8 7.8 0 0 0 0 3l-2 1.5 2 3.4 2.4-1A7.7 7.7 0 0 0 9.8 19l.2 2.5h4l.2-2.5a7.7 7.7 0 0 0 2.6-1.6l2.4 1 2-3.4-2-1.5Z"/></svg> 设置</button>
         <button class="sidebar-theme-button" type="button" @click="setDarkMode(!isDark)" :title="isDark ? '切换日间主题' : '切换夜间主题'" :aria-label="isDark ? '切换日间主题' : '切换夜间主题'">{{ isDark ? '☀' : '☾' }}</button>
       </div>
     </aside>
@@ -1098,30 +1148,28 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
 </header>
       <section v-if="!authorProfile" class="stats">
 <div class="stat-card">
-<div class="stat-icon mint">✦</div>
+<div class="stat-icon mint"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9h8M8 13h5"/></svg></div>
 <div>
-<span>今日新动态</span>
-<strong>{{ posts.length }} <em>+12%</em>
-</strong>
+<span>全部动态</span>
+<strong>{{ totalStatsCount }}</strong>
 </div>
-<small>较昨日</small>
+<small>{{ activeSource === 'all' ? '全部平台' : sourceMeta[activeSource]?.label }}</small>
 </div>
 <div class="stat-card">
-<div class="stat-icon rose">♡</div>
+<div class="stat-icon sand"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg></div>
 <div>
-<span>收藏</span>
-<strong>{{ likedCount }}</strong>
+<span>今日动态</span>
+<strong>{{ todayStatsCount }}</strong>
 </div>
-<small>持续增长中</small>
+<small>本地日期</small>
 </div>
 <div class="stat-card">
-<div class="stat-icon sand">◷</div>
+<div class="stat-icon rose"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20.5S4.5 16.2 4.5 10.2A4.2 4.2 0 0 1 12 7.6a4.2 4.2 0 0 1 7.5 2.6c0 6-7.5 10.3-7.5 10.3Z"/></svg></div>
 <div>
-<span>关注来源</span>
-<strong>{{ sourceCount }} <em class="neutral">个</em>
-</strong>
+<span>收藏动态</span>
+<strong>{{ favoriteStatsCount }}</strong>
 </div>
-<small>同步正常</small>
+<small>{{ activeSource === 'all' ? '全部平台' : sourceMeta[activeSource]?.label }}</small>
 </div>
 </section>
       <div class="section-heading">
@@ -1152,7 +1200,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
 </div>
 <p v-if="post.caption" class="caption"><template v-for="(segment, segmentIndex) in captionSegments(post)" :key="`${post.id}-caption-${segmentIndex}`"><span v-if="segment.type === 'emoji'" class="caption-emoji" role="img" :aria-label="segment.text" :title="segment.text"><img :src="segment.url" alt="" loading="lazy" decoding="async" @error="$event.currentTarget.parentElement.classList.add('failed')"><span>{{ segment.text }}</span></span><span v-else>{{ segment.value }}</span></template></p>
 <div v-if="post.media?.length" :class="['media-grid', `media-count-${Math.min(post.media.length, 9)}`]">
-<button v-for="(media, mediaIndex) in post.media.slice(0, 9)" :key="media" :class="['media-frame', mediaShape(post, mediaIndex)]" type="button" :aria-label="`查看 ${post.author} 的第 ${mediaIndex + 1} 张图片`" @click="openLightbox(post, mediaIndex)"><img :src="previewMedia(media)" alt="" loading="lazy" decoding="async" fetchpriority="low" @load="setMediaShape(post, mediaIndex, $event); scheduleTimelineWindow()"><span v-if="post.liveMedia?.[mediaIndex]" class="media-live-badge"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10-6.5z"/></svg>LIVE</span><span v-if="mediaIndex === 8 && post.media.length > 9" class="media-more-count">+{{ post.media.length - 9 }}</span></button>
+<button v-for="(media, mediaIndex) in post.media.slice(0, 9)" :key="media" :class="['media-frame', mediaShape(post, mediaIndex)]" type="button" :aria-label="`查看 ${post.author} 的第 ${mediaIndex + 1} 张图片`" @click="openLightbox(post, mediaIndex)"><img :src="previewMedia(media)" alt="" loading="lazy" decoding="async" fetchpriority="low" @load="setMediaShape(post, mediaIndex, $event); scheduleTimelineWindow()"><span v-if="mediaIndex === 8 && post.media.length > 9" class="media-more-count">+{{ post.media.length - 9 }}</span></button>
 </div>
 <div class="post-foot">
 <div class="tag-row"><button v-for="tag in post.tags" :key="tag" type="button" :class="{ active: selectedTag === tag }" @click="openTag(tag)">#{{ tag }}</button></div>
@@ -1206,9 +1254,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
       <button class="lightbox-close" type="button" title="关闭大图" aria-label="关闭大图" @click="closeLightbox">×</button>
       <figure @click.self="closeLightbox">
         <div :key="`${lightbox.media[lightbox.index]}:${lightbox.motion}`" :class="['lightbox-image-stage', `motion-${lightbox.motion}`]">
-          <video v-if="currentLightboxLive" :key="currentLightboxLive" :src="currentLightboxLive" :poster="lightbox.media[lightbox.index]" :class="{ dragging: lightbox.dragging, 'original-size': !lightbox.fit }" :style="{ transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) rotate(${lightbox.rotation}deg) scale(${lightbox.scale})` }" autoplay muted loop playsinline draggable="false" @pointerdown.prevent="startLightboxDrag" @pointermove.prevent="moveLightboxDrag" @pointerup="stopLightboxDrag" @pointercancel="stopLightboxDrag"></video>
-          <img v-else :src="lightbox.media[lightbox.index]" :alt="`${lightbox.author} 的动态图片 ${lightbox.index + 1}`" :class="{ dragging: lightbox.dragging, 'original-size': !lightbox.fit }" :style="{ transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) rotate(${lightbox.rotation}deg) scale(${lightbox.scale})` }" draggable="false" @pointerdown.prevent="startLightboxDrag" @pointermove.prevent="moveLightboxDrag" @pointerup="stopLightboxDrag" @pointercancel="stopLightboxDrag">
-          <span v-if="currentLightboxLive" class="lightbox-live-badge"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10-6.5z"/></svg>LIVE</span>
+          <img :src="lightbox.media[lightbox.index]" :alt="`${lightbox.author} 的动态图片 ${lightbox.index + 1}`" :class="{ dragging: lightbox.dragging, 'original-size': !lightbox.fit }" :style="{ transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) rotate(${lightbox.rotation}deg) scale(${lightbox.scale})` }" draggable="false" @pointerdown.prevent="startLightboxDrag" @pointermove.prevent="moveLightboxDrag" @pointerup="stopLightboxDrag" @pointercancel="stopLightboxDrag">
         </div>
       </figure>
       <div class="lightbox-dock" role="toolbar" aria-label="图片查看工具">
@@ -1241,8 +1287,8 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
 <img class="source-icon" :src="sourceMeta.bilibili.image" alt="哔哩哔哩图标">连接哔哩哔哩</button>
 <button @click="openWeibo">
 <img class="source-icon" :src="sourceMeta.weibo.image" alt="微博图标">添加微博博主</button>
-<button @click="showAdd = false; openSettings('platforms')">
-<img class="source-icon" :src="sourceMeta.pixiv.image" alt="pixiv图标">连接 pixiv</button>
+<button @click="openPixiv">
+<img class="source-icon" :src="sourceMeta.pixiv.image" alt="pixiv图标">添加 Pixiv 画师</button>
 <button @click="showAdd = false; openSettings('platforms')">
 <img class="source-icon" :src="sourceMeta.twitter.image" alt="推特图标">连接推特</button>
 </div>
@@ -1344,12 +1390,29 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
         <div v-else class="credential-unavailable"><img :src="credentialPlatform.image" alt="推特图标"><strong>连接能力开发中</strong><p>账号授权与作者采集器将在后续版本开放。</p></div>
       </div>
     </div>
+    <div v-if="showPixiv" class="modal-backdrop" @click.self="showPixiv = false">
+      <div class="modal bili-modal pixiv-source-modal">
+        <button class="modal-close" @click="showPixiv = false">×</button>
+        <p class="eyebrow">PIXIV SOURCE</p>
+        <h2>订阅 Pixiv 画师</h2>
+        <p>填写画师主页地址中的数字用户 ID，作品将以原图归档，并保留标题与说明。</p>
+        <div class="bili-account"><span>已连接 Pixiv · {{ pixivAccount.userName || `UID ${pixivAccount.userId}` }}</span><button @click="showPixiv = false; openSettings('platforms')">管理凭证</button></div>
+        <form class="settings-form pixiv-source-form" @submit.prevent="subscribePixiv">
+          <label>画师用户 ID</label><input v-model="pixivArtistId" required inputmode="numeric" pattern="[0-9]+" placeholder="例如 12345678">
+          <label>画师名称</label><input v-model="pixivArtistName" placeholder="可选，首次同步后自动更新">
+          <label>作者标签</label><input v-model="pixivSubscriptionTags" placeholder="#插画 #收藏">
+          <label class="history-option"><input v-model="pixivIncludePast" type="checkbox"> 首次订阅时拉取历史作品</label>
+          <button class="login-button" :disabled="pixivBusy">{{ pixivBusy ? '添加中…' : '订阅画师' }}</button>
+        </form>
+        <p v-if="pixivError" class="login-error bili-error">{{ pixivError }}</p>
+      </div>
+    </div>
     <div v-if="selectedPlatform" class="modal-backdrop platform-detail-backdrop" @click.self="selectedPlatform = null">
       <div class="modal platform-detail-modal">
         <button class="modal-close" @click="selectedPlatform = null">×</button>
         <div class="platform-detail-title"><img class="source-icon" :src="selectedPlatform.image" alt="平台图标"><div><p class="eyebrow">PLATFORM SOURCE</p><h2>{{ selectedPlatform.label }}</h2></div><span :class="['connection-dot', { online: selectedPlatform.configured }]">{{ selectedPlatform.configured ? '已连接' : '未连接' }}</span></div>
         <div class="platform-detail-summary"><div><span>当前账号</span><strong>{{ selectedPlatform.account }}</strong></div><div><span>内容目录</span><strong>{{ selectedPlatform.path }}</strong></div><div><span>作者来源</span><strong>{{ selectedPlatform.feeds.length }} 个</strong></div></div>
-        <div class="platform-detail-actions"><button v-if="selectedPlatform.key !== 'twitter'" class="secondary-button" @click="managePlatformCredentials(selectedPlatform.key)">{{ selectedPlatform.configured ? '管理账号凭证' : '连接平台账号' }}</button><button v-if="selectedPlatform.key === 'weibo' && selectedPlatform.configured && !hasWeiboLikesSource" class="secondary-button" :disabled="sourceActionBusy !== ''" @click="addWeiboLikesSource">添加我的点赞</button><button v-if="selectedPlatform.key === 'bilibili' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openBilibili()">添加 UP 主</button><button v-if="selectedPlatform.key === 'weibo' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openWeibo()">添加博主</button></div>
+        <div class="platform-detail-actions"><button v-if="selectedPlatform.key !== 'twitter'" class="secondary-button" @click="managePlatformCredentials(selectedPlatform.key)">{{ selectedPlatform.configured ? '管理账号凭证' : '连接平台账号' }}</button><button v-if="selectedPlatform.key === 'weibo' && selectedPlatform.configured && !hasWeiboLikesSource" class="secondary-button" :disabled="sourceActionBusy !== ''" @click="addWeiboLikesSource">添加我的点赞</button><button v-if="selectedPlatform.key === 'pixiv' && selectedPlatform.configured && !hasPixivBookmarksSource" class="secondary-button" :disabled="sourceActionBusy !== ''" @click="addPixivBookmarksSource">添加 P站收藏</button><button v-if="selectedPlatform.key === 'bilibili' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openBilibili()">添加 UP 主</button><button v-if="selectedPlatform.key === 'weibo' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openWeibo()">添加博主</button><button v-if="selectedPlatform.key === 'pixiv' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openPixiv()">添加画师</button></div>
         <p v-if="sourceActionMessage" class="success-message source-action-message">{{ sourceActionMessage }}</p><p v-if="settingsError" class="login-error">{{ settingsError }}</p>
         <div class="configured-source-list">
           <div class="configured-source-heading"><h3>已配置作者</h3><span>{{ selectedPlatform.feeds.length }} 个</span></div>

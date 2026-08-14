@@ -63,7 +63,6 @@ type Post struct {
 	Emojis           []PostEmoji `json:"emojis,omitempty"`
 	Tags             []string    `json:"tags"`
 	Media            []string    `json:"media"`
-	LiveMedia        []string    `json:"liveMedia,omitempty"`
 	OriginalURL      string      `json:"originalUrl,omitempty"`
 	Published        time.Time   `json:"published"`
 	Liked            bool        `json:"liked"`
@@ -381,6 +380,7 @@ type BilibiliConfig struct {
 	Weibo              WeiboCredentials    `json:"weibo"`
 	Subscriptions      []SourceConfig      `json:"subscriptions"`
 	WeiboSubscriptions []SourceConfig      `json:"weiboSubscriptions"`
+	PixivSubscriptions []SourceConfig      `json:"pixivSubscriptions"`
 	ProxyURL           string              `json:"proxyUrl,omitempty"`
 }
 
@@ -419,9 +419,10 @@ type WeiboUser struct {
 func (b *BilibiliStore) allSourceConfigs() []SourceConfig {
 	b.RLock()
 	defer b.RUnlock()
-	feeds := make([]SourceConfig, 0, len(b.config.Subscriptions)+len(b.config.WeiboSubscriptions))
+	feeds := make([]SourceConfig, 0, len(b.config.Subscriptions)+len(b.config.WeiboSubscriptions)+len(b.config.PixivSubscriptions))
 	feeds = append(feeds, b.config.Subscriptions...)
 	feeds = append(feeds, b.config.WeiboSubscriptions...)
+	feeds = append(feeds, b.config.PixivSubscriptions...)
 	return feeds
 }
 
@@ -566,7 +567,7 @@ func loadBilibiliStore() (*BilibiliStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	store := &BilibiliStore{key: key, config: BilibiliConfig{Subscriptions: []SourceConfig{}, WeiboSubscriptions: []SourceConfig{}}, bilibiliQR: make(map[string]BilibiliQRSession), bilibiliClients: make(map[string]*http.Client), weiboQR: make(map[string]WeiboQRSession), weiboClients: make(map[string]*http.Client)}
+	store := &BilibiliStore{key: key, config: BilibiliConfig{Subscriptions: []SourceConfig{}, WeiboSubscriptions: []SourceConfig{}, PixivSubscriptions: []SourceConfig{}}, bilibiliQR: make(map[string]BilibiliQRSession), bilibiliClients: make(map[string]*http.Client), weiboQR: make(map[string]WeiboQRSession), weiboClients: make(map[string]*http.Client)}
 	if data, err := os.ReadFile(bilibiliFile); err == nil {
 		if err := decryptJSON(key, data, &store.config); err != nil {
 			return nil, fmt.Errorf("decrypt bilibili configuration: %w", err)
@@ -582,6 +583,9 @@ func loadBilibiliStore() (*BilibiliStore, error) {
 	}
 	if store.config.WeiboSubscriptions == nil {
 		store.config.WeiboSubscriptions = []SourceConfig{}
+	}
+	if store.config.PixivSubscriptions == nil {
+		store.config.PixivSubscriptions = []SourceConfig{}
 	}
 	return store, nil
 }
@@ -701,7 +705,7 @@ func prepareSourceStorage(feed SourceConfig) (SourceConfig, error) {
 func (b *BilibiliStore) reconcileFlowStorage() error {
 	b.Lock()
 	defer b.Unlock()
-	lists := []*[]SourceConfig{&b.config.Subscriptions, &b.config.WeiboSubscriptions}
+	lists := []*[]SourceConfig{&b.config.Subscriptions, &b.config.WeiboSubscriptions, &b.config.PixivSubscriptions}
 	for _, list := range lists {
 		for index, feed := range *list {
 			oldStoragePath := feed.StoragePath
@@ -833,6 +837,9 @@ func configurationBackupHandler(auth *AuthConfig, platforms *BilibiliStore) http
 			}
 			if backup.Platforms.WeiboSubscriptions == nil {
 				backup.Platforms.WeiboSubscriptions = []SourceConfig{}
+			}
+			if backup.Platforms.PixivSubscriptions == nil {
+				backup.Platforms.PixivSubscriptions = []SourceConfig{}
 			}
 			auth.Lock()
 			previousUsername, previousHash := auth.Username, auth.PasswordHash
@@ -1146,12 +1153,6 @@ func (s *Store) rewriteMediaPrefix(oldPrefix, newPrefix string) error {
 				changed = true
 			}
 		}
-		for mediaIndex, media := range s.posts[postIndex].LiveMedia {
-			if strings.HasPrefix(media, oldPrefix) {
-				s.posts[postIndex].LiveMedia[mediaIndex] = newPrefix + strings.TrimPrefix(media, oldPrefix)
-				changed = true
-			}
-		}
 		for emojiIndex, emoji := range s.posts[postIndex].Emojis {
 			if strings.HasPrefix(emoji.URL, oldPrefix) {
 				s.posts[postIndex].Emojis[emojiIndex].URL = newPrefix + strings.TrimPrefix(emoji.URL, oldPrefix)
@@ -1319,7 +1320,7 @@ func postBelongsToSourcePath(post *Post, feed SourceConfig) bool {
 	}
 	if strings.HasPrefix(feed.ID, "weibo-likes-") {
 		prefix := flowPublicPath(SourceWeibo, canonicalSourceName(feed), "")
-		for _, media := range append(append(append([]string(nil), post.Media...), post.LiveMedia...), postEmojiURLs(post.Emojis)...) {
+		for _, media := range append(append([]string(nil), post.Media...), postEmojiURLs(post.Emojis)...) {
 			if strings.HasPrefix(media, prefix) {
 				return true
 			}
@@ -1333,7 +1334,7 @@ func postBelongsToSourcePath(post *Post, feed SourceConfig) bool {
 		return true
 	}
 	prefix := flowPublicPath(feed.Source, feed.Name, "")
-	for _, media := range append(append(append([]string(nil), post.Media...), post.LiveMedia...), postEmojiURLs(post.Emojis)...) {
+	for _, media := range append(append([]string(nil), post.Media...), postEmojiURLs(post.Emojis)...) {
 		if strings.HasPrefix(media, prefix) {
 			return true
 		}
@@ -1388,7 +1389,7 @@ func (s *Store) deletePosts(ids []string, source Source, author string) (int, er
 		return 0, os.ErrNotExist
 	}
 	for _, post := range removed {
-		media := append(append([]string(nil), post.Media...), post.LiveMedia...)
+		media := append([]string(nil), post.Media...)
 		for _, emoji := range post.Emojis {
 			media = append(media, emoji.URL)
 		}
@@ -2326,84 +2327,6 @@ func normalizeWeiboOriginalImage(value string) string {
 	return parsed.String()
 }
 
-func weiboLivePhotoURL(fid string) string {
-	fid = strings.TrimSpace(strings.TrimSuffix(fid, ".mov"))
-	if fid == "" || strings.ContainsAny(fid, `/\\?#`) {
-		return ""
-	}
-	return "https://video.weibo.com/media/play?livephoto=//us.sinaimg.cn/" + url.PathEscape(fid) + ".mov&KID=unistore,videomovSrc"
-}
-
-func weiboLivePhotoFIDs(value any) map[string]string {
-	result := make(map[string]string)
-	var collect func(any)
-	collect = func(current any) {
-		switch typed := current.(type) {
-		case string:
-			trimmed := strings.TrimSpace(typed)
-			if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
-				var nested any
-				decoder := json.NewDecoder(strings.NewReader(trimmed))
-				decoder.UseNumber()
-				if decoder.Decode(&nested) == nil {
-					collect(nested)
-					return
-				}
-			}
-			for _, item := range strings.Split(trimmed, ",") {
-				pair := strings.SplitN(strings.TrimSpace(item), ":", 2)
-				if len(pair) == 2 && strings.TrimSpace(pair[0]) != "" && strings.TrimSpace(pair[1]) != "" {
-					result[strings.TrimSpace(pair[0])] = strings.TrimSpace(pair[1])
-				}
-			}
-		case []any:
-			for _, item := range typed {
-				collect(item)
-			}
-		case map[string]any:
-			for key, item := range typed {
-				switch scalar := item.(type) {
-				case string, json.Number, float64:
-					if fid := jsonValueString(scalar); fid != "" && fid != "<nil>" {
-						result[key] = fid
-					}
-				default:
-					collect(item)
-				}
-			}
-		}
-	}
-	collect(value)
-	return result
-}
-
-func weiboLivePhotoCandidate(value any) string {
-	switch typed := value.(type) {
-	case string:
-		candidate := normalizeRemoteImage(typed)
-		if strings.HasPrefix(candidate, "http://") || strings.HasPrefix(candidate, "https://") {
-			return candidate
-		}
-		return weiboLivePhotoURL(candidate)
-	case map[string]any:
-		for _, key := range []string{"url", "video_url", "videoUrl", "mp4_hd_url", "mp4_sd_url", "stream_url", "live_photo_url", "fid"} {
-			if candidate := weiboLivePhotoCandidate(typed[key]); candidate != "" {
-				return candidate
-			}
-		}
-	}
-	return ""
-}
-
-func weiboPictureLivePhoto(picture map[string]any, fallbackFID string) string {
-	for _, key := range []string{"video", "video_object", "live_photo", "live_photo_url", "video_url", "videoUrl", "fid"} {
-		if candidate := weiboLivePhotoCandidate(picture[key]); candidate != "" {
-			return candidate
-		}
-	}
-	return weiboLivePhotoURL(fallbackFID)
-}
-
 func cleanRemoteText(value string) string {
 	value = htmlLineBreakPattern.ReplaceAllString(value, "\n")
 	// Preserve platform emoji labels from HTML image nodes instead of dropping them with other tags.
@@ -2784,85 +2707,6 @@ func downloadRemoteImage(client *http.Client, remoteURL, targetBase, referer, co
 	return target, nil
 }
 
-func liveMediaFileExtension(remoteURL, contentType string) string {
-	extension := strings.ToLower(filepath.Ext(path.Base(strings.Split(remoteURL, "?")[0])))
-	if extension == ".mov" || extension == ".mp4" || extension == ".m4v" || extension == ".webm" {
-		return extension
-	}
-	switch strings.ToLower(strings.Split(contentType, ";")[0]) {
-	case "video/mp4":
-		return ".mp4"
-	case "video/webm":
-		return ".webm"
-	default:
-		return ".mov"
-	}
-}
-
-func downloadRemoteLiveMedia(client *http.Client, remoteURL, targetBase, referer, cookie string) (string, error) {
-	remoteURL = normalizeRemoteImage(remoteURL)
-	if remoteURL == "" || strings.HasPrefix(remoteURL, "/flow/") {
-		return remoteURL, nil
-	}
-	request, err := http.NewRequest(http.MethodGet, remoteURL, nil)
-	if err != nil {
-		return "", err
-	}
-	request.Header.Set("Accept", "video/mp4,video/quicktime,video/webm,video/*;q=0.9,*/*;q=0.5")
-	request.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36")
-	if referer != "" {
-		request.Header.Set("Referer", referer)
-	}
-	if cookie != "" {
-		request.Header.Set("Cookie", cookie)
-	}
-	response, err := client.Do(request)
-	if err != nil {
-		return "", err
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("HTTP %d", response.StatusCode)
-	}
-	contentType := strings.ToLower(response.Header.Get("Content-Type"))
-	if !strings.HasPrefix(contentType, "video/") && !strings.HasPrefix(contentType, "application/octet-stream") {
-		return "", fmt.Errorf("unexpected content type %s", contentType)
-	}
-	resolvedURL := remoteURL
-	if response.Request != nil && response.Request.URL != nil {
-		resolvedURL = response.Request.URL.String()
-	}
-	target := targetBase + liveMediaFileExtension(resolvedURL, contentType)
-	if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
-		return "", err
-	}
-	temporary, err := os.CreateTemp(filepath.Dir(target), ".lumic-live-*.tmp")
-	if err != nil {
-		return "", err
-	}
-	temporaryName := temporary.Name()
-	defer os.Remove(temporaryName)
-	written, copyErr := io.CopyBuffer(temporary, response.Body, make([]byte, 64<<10))
-	if copyErr != nil || written == 0 {
-		temporary.Close()
-		if copyErr != nil {
-			return "", copyErr
-		}
-		return "", errors.New("empty live media")
-	}
-	if err := temporary.Sync(); err != nil {
-		temporary.Close()
-		return "", err
-	}
-	if err := temporary.Close(); err != nil {
-		return "", err
-	}
-	if err := replaceFile(temporaryName, target); err != nil {
-		return "", err
-	}
-	return target, nil
-}
-
 func replaceFile(temporaryName, target string) error {
 	if err := os.Rename(temporaryName, target); err == nil {
 		return nil
@@ -2873,8 +2717,11 @@ func replaceFile(temporaryName, target string) error {
 	return os.Rename(temporaryName, target)
 }
 
-func imageDownloadDelay() time.Duration {
+func imageDownloadDelay(source Source, sequence int) time.Duration {
 	delay := 180 * time.Millisecond
+	if source == SourceBilibili {
+		delay = 1500*time.Millisecond + time.Duration(sequence%4)*150*time.Millisecond
+	}
 	if raw := strings.TrimSpace(os.Getenv("LUMIC_IMAGE_DOWNLOAD_DELAY_MS")); raw != "" {
 		if milliseconds, err := strconv.Atoi(raw); err == nil && milliseconds >= 0 && milliseconds <= 5000 {
 			delay = time.Duration(milliseconds) * time.Millisecond
@@ -2922,6 +2769,8 @@ func (b *BilibiliStore) archiveSourceContent(feed SourceConfig, posts []Post) (S
 	referer, cookie := "https://www.bilibili.com/", bilibiliCookie(b.config.Credentials)
 	if feed.Source == SourceWeibo {
 		referer, cookie = "https://weibo.com/", b.config.Weibo.Cookie
+	} else if feed.Source == SourcePixiv {
+		referer, cookie = "https://www.pixiv.net/", b.config.Pixiv.Cookie
 	}
 	if prepared.Avatar != "" && !strings.HasPrefix(prepared.Avatar, "/flow/") {
 		avatarPath, downloadErr := downloadRemoteImage(client, prepared.Avatar, filepath.Join(prepared.StoragePath, "avatar"), referer, cookie)
@@ -2934,59 +2783,22 @@ func (b *BilibiliStore) archiveSourceContent(feed SourceConfig, posts []Post) (S
 			posts[postIndex].Avatar = prepared.Avatar
 		}
 		localMedia := make([]string, 0, len(posts[postIndex].Media))
-		localLiveMedia := make([]string, 0, len(posts[postIndex].Media))
 		for mediaIndex, remoteURL := range posts[postIndex].Media {
-			base := ""
 			if strings.HasPrefix(remoteURL, "/flow/") {
 				localMedia = append(localMedia, remoteURL)
-				parsed, _ := url.Parse(remoteURL)
-				filename := path.Base(parsed.Path)
-				base = filepath.Join(prepared.StoragePath, strings.TrimSuffix(filename, filepath.Ext(filename)))
 			} else {
-				base = availableMediaTargetBase(prepared.StoragePath, postMediaBaseName(posts[postIndex], mediaIndex))
+				base := availableMediaTargetBase(prepared.StoragePath, postMediaBaseName(posts[postIndex], mediaIndex))
 				localPath, downloadErr := downloadRemoteImage(client, remoteURL, base, referer, cookie)
 				if downloadErr != nil {
 					return feed, posts, fmt.Errorf("下载动态 %s 的第 %d 张图片失败: %w", posts[postIndex].ID, mediaIndex+1, downloadErr)
 				}
 				localMedia = append(localMedia, flowPublicPath(prepared.Source, prepared.Name, filepath.Base(localPath)))
-				if delay := imageDownloadDelay(); delay > 0 {
+				if delay := imageDownloadDelay(feed.Source, postIndex+mediaIndex); delay > 0 {
 					time.Sleep(delay)
 				}
 			}
-			liveURL := ""
-			if mediaIndex < len(posts[postIndex].LiveMedia) {
-				liveURL = posts[postIndex].LiveMedia[mediaIndex]
-			}
-			if liveURL == "" {
-				localLiveMedia = append(localLiveMedia, "")
-				continue
-			}
-			if strings.HasPrefix(liveURL, "/flow/") {
-				localLiveMedia = append(localLiveMedia, liveURL)
-				continue
-			}
-			localLivePath, downloadErr := downloadRemoteLiveMedia(client, liveURL, base, referer, cookie)
-			if downloadErr != nil {
-				return feed, posts, fmt.Errorf("下载动态 %s 的第 %d 个 LIVE 文件失败: %w", posts[postIndex].ID, mediaIndex+1, downloadErr)
-			}
-			localLiveMedia = append(localLiveMedia, flowPublicPath(prepared.Source, prepared.Name, filepath.Base(localLivePath)))
-			if delay := imageDownloadDelay(); delay > 0 {
-				time.Sleep(delay)
-			}
 		}
 		posts[postIndex].Media = localMedia
-		hasLiveMedia := false
-		for _, live := range localLiveMedia {
-			if live != "" {
-				hasLiveMedia = true
-				break
-			}
-		}
-		if hasLiveMedia {
-			posts[postIndex].LiveMedia = localLiveMedia
-		} else {
-			posts[postIndex].LiveMedia = nil
-		}
 		localEmojis := make([]PostEmoji, 0, len(posts[postIndex].Emojis))
 		for emojiIndex, emoji := range posts[postIndex].Emojis {
 			if strings.HasPrefix(emoji.URL, "/flow/") {
@@ -3226,12 +3038,10 @@ func collectWeiboPosts(value any, feed SourceConfig, posts *[]Post, seen map[str
 			if parseErr != nil {
 				published = time.Now()
 			}
-			media, liveMedia := make([]string, 0), make([]string, 0)
+			media := make([]string, 0)
 			mediaIndexes := make(map[string]int)
-			livePhotoFIDs := weiboLivePhotoFIDs(mblog["pic_video"])
-			appendMedia := func(pictureID, image, live string) {
+			appendMedia := func(pictureID, image string) {
 				image = normalizeWeiboOriginalImage(image)
-				live = normalizeRemoteImage(live)
 				if image == "" || image == "<nil>" {
 					return
 				}
@@ -3239,15 +3049,11 @@ func collectWeiboPosts(value any, feed SourceConfig, posts *[]Post, seen map[str
 				if key == "" {
 					key = image
 				}
-				if index, exists := mediaIndexes[key]; exists {
-					if liveMedia[index] == "" && live != "" {
-						liveMedia[index] = live
-					}
+				if _, exists := mediaIndexes[key]; exists {
 					return
 				}
 				mediaIndexes[key] = len(media)
 				media = append(media, image)
-				liveMedia = append(liveMedia, live)
 			}
 			if pictures, ok := mblog["pics"].([]any); ok {
 				for _, rawPicture := range pictures {
@@ -3262,7 +3068,7 @@ func collectWeiboPosts(value any, feed SourceConfig, posts *[]Post, seen map[str
 					if image == "" {
 						image = normalizeWeiboOriginalImage(jsonValueString(picture["url"]))
 					}
-					appendMedia(pictureID, image, weiboPictureLivePhoto(picture, livePhotoFIDs[pictureID]))
+					appendMedia(pictureID, image)
 				}
 			}
 			if picInfos, ok := mblog["pic_infos"].(map[string]any); ok {
@@ -3274,18 +3080,8 @@ func collectWeiboPosts(value any, feed SourceConfig, posts *[]Post, seen map[str
 						large, _ := picture["large"].(map[string]any)
 						image = normalizeWeiboOriginalImage(jsonValueString(large["url"]))
 					}
-					appendMedia(pictureID, image, weiboPictureLivePhoto(picture, livePhotoFIDs[pictureID]))
+					appendMedia(pictureID, image)
 				}
-			}
-			hasLiveMedia := false
-			for _, live := range liveMedia {
-				if live != "" {
-					hasLiveMedia = true
-					break
-				}
-			}
-			if !hasLiveMedia {
-				liveMedia = nil
 			}
 			rawCaption := jsonValueString(mblog["text"])
 			captionEmojis := weiboCaptionEmojis(rawCaption)
@@ -3301,7 +3097,7 @@ func collectWeiboPosts(value any, feed SourceConfig, posts *[]Post, seen map[str
 			if profileID != "" {
 				originalURL = "https://weibo.com/" + url.PathEscape(profileID) + "/" + url.PathEscape(id)
 			}
-			*posts = append(*posts, Post{ID: "weibo-status-" + id, Source: SourceWeibo, FeedIDs: []string{feed.ID}, Author: name, Avatar: avatar, Caption: caption, Emojis: captionEmojis, Tags: append([]string(nil), feed.Tags...), Media: media, LiveMedia: liveMedia, OriginalURL: originalURL, Published: published})
+			*posts = append(*posts, Post{ID: "weibo-status-" + id, Source: SourceWeibo, FeedIDs: []string{feed.ID}, Author: name, Avatar: avatar, Caption: caption, Emojis: captionEmojis, Tags: append([]string(nil), feed.Tags...), Media: media, OriginalURL: originalURL, Published: published})
 		}
 		for _, child := range object {
 			collectWeiboPosts(child, feed, posts, seen)
@@ -3475,9 +3271,6 @@ func (s *Store) postsAfterOrCaptionRepair(posts []Post, boundary time.Time) []Po
 		if len(stored.Media) > 0 {
 			post.Media = append([]string(nil), stored.Media...)
 		}
-		if len(stored.LiveMedia) > 0 {
-			post.LiveMedia = append([]string(nil), stored.LiveMedia...)
-		}
 		post.Emojis = mergePostEmojis(stored.Emojis, post.Emojis)
 		if strings.HasPrefix(stored.Avatar, "/flow/") {
 			post.Avatar = stored.Avatar
@@ -3512,9 +3305,6 @@ func (s *Store) postsAfterOrSourceMembership(posts []Post, boundary time.Time, f
 		}
 		if len(stored.Media) > 0 {
 			post.Media = append([]string(nil), stored.Media...)
-		}
-		if len(stored.LiveMedia) > 0 {
-			post.LiveMedia = append([]string(nil), stored.LiveMedia...)
 		}
 		post.Emojis = mergePostEmojis(stored.Emojis, post.Emojis)
 		if strings.HasPrefix(stored.Avatar, "/flow/") {
@@ -3567,6 +3357,8 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 		} else {
 			posts, err = b.fetchWeiboPosts(feed, full)
 		}
+	case SourcePixiv:
+		posts, err = b.fetchPixivPosts(feed, full)
 	default:
 		err = errors.New("该来源尚未配置采集器")
 	}
@@ -3582,7 +3374,7 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 			}
 		}
 		posts = filterSourcePosts(posts, feed)
-		if len(posts) > 0 && !strings.HasPrefix(feed.ID, "weibo-likes-") {
+		if len(posts) > 0 && !strings.HasPrefix(feed.ID, "weibo-likes-") && !strings.HasPrefix(feed.ID, "pixiv-bookmarks-") {
 			if strings.TrimSpace(posts[0].Author) != "" {
 				feed.Name = posts[0].Author
 			}
@@ -3602,7 +3394,7 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 	}
 	now := time.Now()
 	b.Lock()
-	lists := []*[]SourceConfig{&b.config.Subscriptions, &b.config.WeiboSubscriptions}
+	lists := []*[]SourceConfig{&b.config.Subscriptions, &b.config.WeiboSubscriptions, &b.config.PixivSubscriptions}
 	for _, list := range lists {
 		for index := range *list {
 			if (*list)[index].ID != feed.ID && (*list)[index].ID != originalID {
@@ -3643,7 +3435,7 @@ func (b *BilibiliStore) syncHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	b.RLock()
-	feeds := append(append([]SourceConfig{}, b.config.Subscriptions...), b.config.WeiboSubscriptions...)
+	feeds := append(append(append([]SourceConfig{}, b.config.Subscriptions...), b.config.WeiboSubscriptions...), b.config.PixivSubscriptions...)
 	b.RUnlock()
 	results := make([]SourceConfig, 0, len(feeds))
 	for _, feed := range feeds {
@@ -3658,7 +3450,7 @@ func (b *BilibiliStore) syncHandler(w http.ResponseWriter, r *http.Request) {
 
 func (b *BilibiliStore) runScheduledSync(at time.Time) {
 	b.RLock()
-	feeds := append(append([]SourceConfig{}, b.config.Subscriptions...), b.config.WeiboSubscriptions...)
+	feeds := append(append(append([]SourceConfig{}, b.config.Subscriptions...), b.config.WeiboSubscriptions...), b.config.PixivSubscriptions...)
 	b.RUnlock()
 	for _, feed := range feeds {
 		if !feed.Enabled || !cronMatches(normalizeSchedule(feed.Schedule), at) {
@@ -3796,6 +3588,378 @@ func (b *BilibiliStore) pixivHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"configured": true, "userId": credentials.UserID, "userName": credentials.UserName, "avatar": credentials.Avatar})
+}
+
+func pixivRequestJSON(client *http.Client, endpoint string, credentials PixivCredentials, target any) error {
+	request, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	setPixivBrowserHeaders(request, credentials)
+	response, err := client.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("Pixiv HTTP %d", response.StatusCode)
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 16<<20)).Decode(target); err != nil {
+		return err
+	}
+	return nil
+}
+
+func fetchPixivUserProfile(client *http.Client, credentials PixivCredentials, userID string) (BilibiliUser, error) {
+	var payload map[string]any
+	endpoint := "https://www.pixiv.net/ajax/user/" + url.PathEscape(userID) + "?full=1&lang=zh"
+	if err := pixivRequestJSON(client, endpoint, credentials, &payload); err != nil {
+		return BilibiliUser{}, err
+	}
+	if pixivPayloadFailed(payload) {
+		return BilibiliUser{}, errors.New("Pixiv 用户接口拒绝访问")
+	}
+	body, ok := payload["body"].(map[string]any)
+	if !ok {
+		return BilibiliUser{}, errors.New("Pixiv 用户资料无效")
+	}
+	name := firstNonEmptyRemoteText(jsonValueString(body["name"]), "Pixiv 画师 "+userID)
+	avatar := firstNonEmptyRemoteText(jsonValueString(body["imageBig"]), jsonValueString(body["image"]))
+	return BilibiliUser{UserID: userID, Name: name, Avatar: normalizeRemoteImage(avatar), Description: cleanRemoteText(jsonValueString(body["comment"]))}, nil
+}
+
+func pixivNumericID(value string) bool {
+	if value == "" {
+		return false
+	}
+	_, err := strconv.ParseUint(value, 10, 64)
+	return err == nil
+}
+
+func collectPixivIDs(value any, ids *[]string, seen map[string]bool) {
+	switch typed := value.(type) {
+	case []any:
+		for _, item := range typed {
+			collectPixivIDs(item, ids, seen)
+		}
+	case map[string]any:
+		for key, item := range typed {
+			if key == "illusts" || key == "manga" {
+				if grouped, ok := item.(map[string]any); ok {
+					for id := range grouped {
+						if pixivNumericID(id) && !seen[id] {
+							seen[id] = true
+							*ids = append(*ids, id)
+						}
+					}
+				}
+			}
+			if key == "id" {
+				id := jsonValueString(item)
+				if pixivNumericID(id) && !seen[id] {
+					seen[id] = true
+					*ids = append(*ids, id)
+				}
+			}
+			collectPixivIDs(item, ids, seen)
+		}
+	}
+}
+
+func parsePixivTime(value string) time.Time {
+	value = strings.TrimSpace(value)
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05-07:00", "2006-01-02 15:04:05"} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed
+		}
+	}
+	return time.Now()
+}
+
+func pixivOriginalURLs(client *http.Client, credentials PixivCredentials, id string, detail map[string]any) []string {
+	urls := make([]string, 0)
+	if body, ok := detail["body"].(map[string]any); ok {
+		if urlsMap, ok := body["urls"].(map[string]any); ok {
+			if original := normalizeRemoteImage(jsonValueString(urlsMap["original"])); original != "" {
+				urls = append(urls, original)
+			}
+		}
+	}
+	var pages map[string]any
+	endpoint := "https://www.pixiv.net/ajax/illust/" + url.PathEscape(id) + "/pages?lang=zh"
+	if pixivRequestJSON(client, endpoint, credentials, &pages) == nil {
+		if body, ok := pages["body"].([]any); ok {
+			for _, page := range body {
+				if item, ok := page.(map[string]any); ok {
+					if urlsMap, ok := item["urls"].(map[string]any); ok {
+						if original := normalizeRemoteImage(jsonValueString(urlsMap["original"])); original != "" {
+							urls = append(urls, original)
+						}
+					}
+				}
+			}
+		}
+	}
+	return mergeUniqueStrings(urls)
+}
+
+func pixivPayloadFailed(payload map[string]any) bool {
+	failed, _ := payload["error"].(bool)
+	return failed
+}
+
+func (b *BilibiliStore) fetchPixivPosts(feed SourceConfig, full bool) ([]Post, error) {
+	b.RLock()
+	credentials, proxyURL := b.config.Pixiv, b.config.ProxyURL
+	b.RUnlock()
+	if credentials.Cookie == "" || credentials.UserID == "" {
+		return nil, errors.New("Pixiv 账号未连接")
+	}
+	client, err := externalHTTPClient(proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0)
+	if strings.HasPrefix(feed.ID, "pixiv-bookmarks-") {
+		seen := make(map[string]bool)
+		pageLimit := 1
+		if full {
+			pageLimit = 40
+		}
+		for page := 0; page < pageLimit; page++ {
+			offset := page * 48
+			endpoint := "https://www.pixiv.net/ajax/user/" + url.PathEscape(credentials.UserID) + "/illusts/bookmarks?tag=&offset=" + strconv.Itoa(offset) + "&limit=48&rest=show&lang=zh"
+			var payload map[string]any
+			if err := pixivRequestJSON(client, endpoint, credentials, &payload); err != nil {
+				return nil, fmt.Errorf("Pixiv 收藏请求失败: %w", err)
+			}
+			if pixivPayloadFailed(payload) {
+				return nil, errors.New("Pixiv 收藏接口拒绝访问")
+			}
+			before := len(ids)
+			collectPixivIDs(payload["body"], &ids, seen)
+			if len(ids) == before || len(ids)-before < 48 {
+				break
+			}
+			if page+1 < pageLimit {
+				time.Sleep(250 * time.Millisecond)
+			}
+		}
+	} else {
+		userID := strings.TrimPrefix(feed.ID, "pixiv-")
+		endpoint := "https://www.pixiv.net/ajax/user/" + url.PathEscape(userID) + "/profile/all?lang=zh"
+		var payload map[string]any
+		if err := pixivRequestJSON(client, endpoint, credentials, &payload); err != nil {
+			return nil, fmt.Errorf("Pixiv 画师请求失败: %w", err)
+		}
+		if pixivPayloadFailed(payload) {
+			return nil, errors.New("Pixiv 画师接口拒绝访问")
+		}
+		collectPixivIDs(payload["body"], &ids, make(map[string]bool))
+	}
+	sort.SliceStable(ids, func(i, j int) bool {
+		left, _ := strconv.ParseUint(ids[i], 10, 64)
+		right, _ := strconv.ParseUint(ids[j], 10, 64)
+		return left > right
+	})
+	if !full && len(ids) > 24 {
+		ids = ids[:24]
+	}
+	posts := make([]Post, 0, len(ids))
+	for _, id := range ids {
+		var detail map[string]any
+		if err := pixivRequestJSON(client, "https://www.pixiv.net/ajax/illust/"+url.PathEscape(id)+"?lang=zh", credentials, &detail); err != nil {
+			continue
+		}
+		body, ok := detail["body"].(map[string]any)
+		if !ok {
+			continue
+		}
+		user, _ := body["user"].(map[string]any)
+		author := firstNonEmptyRemoteText(jsonValueString(body["userName"]), jsonValueString(user["name"]), feed.Name)
+		avatar := firstNonEmptyRemoteText(jsonValueString(body["profileImageUrl"]), jsonValueString(user["imageBig"]), feed.Avatar)
+		avatar = normalizeRemoteImage(avatar)
+		if avatar == "" {
+			avatar = feed.Avatar
+		}
+		caption := combineRemoteText(jsonValueString(body["title"]), jsonValueString(body["description"]))
+		media := pixivOriginalURLs(client, credentials, id, detail)
+		if len(media) == 0 {
+			continue
+		}
+		published := parsePixivTime(jsonValueString(body["createDate"]))
+		posts = append(posts, Post{ID: "pixiv-illust-" + id, Source: SourcePixiv, FeedIDs: []string{feed.ID}, Author: author, Avatar: avatar, Caption: caption, Tags: append([]string(nil), feed.Tags...), Media: media, OriginalURL: "https://www.pixiv.net/artworks/" + id, Published: published})
+	}
+	return posts, nil
+}
+
+func (b *BilibiliStore) pixivSubscriptionsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		b.RLock()
+		result := append([]SourceConfig{}, b.config.PixivSubscriptions...)
+		b.RUnlock()
+		writeJSON(w, result)
+		return
+	}
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	if r.Method == http.MethodDelete {
+		b.Lock()
+		for index, feed := range b.config.PixivSubscriptions {
+			if feed.ID == id {
+				previous := b.config.PixivSubscriptions
+				b.config.PixivSubscriptions = append(append([]SourceConfig(nil), previous[:index]...), previous[index+1:]...)
+				b.Unlock()
+				if err := b.save(); err != nil {
+					writeAPIError(w, http.StatusInternalServerError, "无法保存 Pixiv 来源")
+					return
+				}
+				writeJSON(w, map[string]string{"status": "deleted"})
+				return
+			}
+		}
+		b.Unlock()
+		writeAPIError(w, http.StatusNotFound, "Pixiv 来源不存在")
+		return
+	}
+	if r.Method == http.MethodPost && (r.URL.Query().Get("action") == "sync" || r.URL.Query().Get("action") == "resync") {
+		b.RLock()
+		var feed SourceConfig
+		for _, candidate := range b.config.PixivSubscriptions {
+			if candidate.ID == id {
+				feed = candidate
+				break
+			}
+		}
+		b.RUnlock()
+		if feed.ID == "" {
+			writeAPIError(w, http.StatusNotFound, "Pixiv 来源不存在")
+			return
+		}
+		updated, err := b.syncSource(feed, r.URL.Query().Get("action") == "resync")
+		if err != nil {
+			writeJSON(w, map[string]any{"status": "failed", "message": err.Error(), "source": updated})
+			return
+		}
+		writeJSON(w, map[string]any{"status": "completed", "message": updated.LastSyncMessage, "source": updated})
+		return
+	}
+	if r.Method == http.MethodPut {
+		var input SourceConfig
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&input) != nil || !strings.HasPrefix(input.ID, "pixiv-") {
+			writeAPIError(w, http.StatusBadRequest, "Pixiv 来源设置无效")
+			return
+		}
+		input.Schedule = normalizeSchedule(input.Schedule)
+		if !validCron(input.Schedule) {
+			writeAPIError(w, http.StatusBadRequest, "Cron 表达式无效")
+			return
+		}
+		b.Lock()
+		found := false
+		for index := range b.config.PixivSubscriptions {
+			if b.config.PixivSubscriptions[index].ID == input.ID {
+				b.config.PixivSubscriptions[index].Enabled = input.Enabled
+				b.config.PixivSubscriptions[index].IncludePast = input.IncludePast
+				b.config.PixivSubscriptions[index].Schedule = input.Schedule
+				b.config.PixivSubscriptions[index].Tags = normalizeTags(input.Tags)
+				b.config.PixivSubscriptions[index].OnlyWithImages = input.OnlyWithImages
+				b.config.PixivSubscriptions[index].IncludeKeywords = normalizeKeywords(input.IncludeKeywords)
+				b.config.PixivSubscriptions[index].ExcludeKeywords = normalizeKeywords(input.ExcludeKeywords)
+				input = b.config.PixivSubscriptions[index]
+				found = true
+				break
+			}
+		}
+		b.Unlock()
+		if !found {
+			writeAPIError(w, http.StatusNotFound, "Pixiv 来源不存在")
+			return
+		}
+		if err := b.save(); err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "无法保存 Pixiv 来源")
+			return
+		}
+		if b.content != nil {
+			_ = b.content.setSourceTags(input, b.allSourceConfigs())
+		}
+		writeJSON(w, input)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var input struct {
+		UserID      string   `json:"userId"`
+		Name        string   `json:"name"`
+		Avatar      string   `json:"avatar"`
+		IncludePast bool     `json:"includePast"`
+		Schedule    string   `json:"schedule"`
+		Tags        []string `json:"tags"`
+		Bookmarks   bool     `json:"bookmarks"`
+	}
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&input) != nil {
+		writeAPIError(w, http.StatusBadRequest, "Pixiv 来源信息无效")
+		return
+	}
+	b.RLock()
+	credentials, proxyURL := b.config.Pixiv, b.config.ProxyURL
+	b.RUnlock()
+	if credentials.Cookie == "" || credentials.UserID == "" {
+		writeAPIError(w, http.StatusPreconditionFailed, "请先连接 Pixiv 账号")
+		return
+	}
+	userID := strings.TrimSpace(input.UserID)
+	if input.Bookmarks {
+		userID = credentials.UserID
+		input.Name = "P站收藏"
+		input.Avatar = credentials.Avatar
+	}
+	if !pixivNumericID(userID) {
+		writeAPIError(w, http.StatusBadRequest, "Pixiv 用户 ID 无效")
+		return
+	}
+	if !input.Bookmarks {
+		if client, err := externalHTTPClient(proxyURL); err == nil {
+			if profile, profileErr := fetchPixivUserProfile(client, credentials, userID); profileErr == nil {
+				input.Name, input.Avatar = profile.Name, profile.Avatar
+			}
+		}
+	}
+	if strings.TrimSpace(input.Name) == "" {
+		input.Name = "Pixiv 画师 " + userID
+	}
+	if input.Schedule == "" {
+		input.Schedule = "0 6 * * *"
+	}
+	idPrefix := "pixiv-"
+	tags := normalizeTags(input.Tags)
+	if input.Bookmarks {
+		idPrefix = "pixiv-bookmarks-"
+		tags = mergeUniqueStrings([]string{"P站收藏"}, tags)
+	}
+	feed := SourceConfig{ID: idPrefix + userID, Source: SourcePixiv, Name: strings.TrimSpace(input.Name), Handle: "UID " + userID, Avatar: normalizeRemoteImage(input.Avatar), Enabled: true, IncludePast: input.IncludePast, Schedule: normalizeSchedule(input.Schedule), Tags: tags, OnlyWithImages: true}
+	if prepared, err := prepareSourceStorage(feed); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "无法创建 Pixiv 来源目录")
+		return
+	} else {
+		feed = prepared
+	}
+	b.Lock()
+	for _, existing := range b.config.PixivSubscriptions {
+		if existing.ID == feed.ID {
+			b.Unlock()
+			writeAPIError(w, http.StatusConflict, "Pixiv 来源已经存在")
+			return
+		}
+	}
+	b.config.PixivSubscriptions = append(b.config.PixivSubscriptions, feed)
+	b.Unlock()
+	if err := b.save(); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "无法保存 Pixiv 来源")
+		return
+	}
+	writeJSON(w, feed)
 }
 
 func browserClient(proxyURL string) (*http.Client, error) {
@@ -5097,6 +5261,7 @@ func main() {
 	mux.HandleFunc("/api/bilibili/account", bilibili.accountHandler)
 	mux.HandleFunc("/api/bilibili/qr", bilibili.bilibiliQRHandler)
 	mux.HandleFunc("/api/pixiv/account", bilibili.pixivHandler)
+	mux.HandleFunc("/api/pixiv/subscriptions", bilibili.pixivSubscriptionsHandler)
 	mux.HandleFunc("/api/weibo/account", bilibili.weiboAccountHandler)
 	mux.HandleFunc("/api/weibo/qr", bilibili.weiboQRHandler)
 	mux.HandleFunc("/api/weibo/search", bilibili.weiboSearchHandler)

@@ -42,11 +42,9 @@ button { border: 0; font: inherit; cursor: pointer; color: inherit; }
 .lightbox-image-stage.motion-enter { animation: lightbox-image-enter .3s cubic-bezier(.2,.8,.2,1); }
 .lightbox-image-stage.motion-next { animation: lightbox-image-next .26s cubic-bezier(.2,.75,.25,1); }
 .lightbox-image-stage.motion-previous { animation: lightbox-image-previous .26s cubic-bezier(.2,.75,.25,1); }
-.lightbox-layer figure :is(img, video) { display: block; max-width: min(1180px, 92vw); max-height: calc(100vh - 142px); object-fit: contain; cursor: grab; transform-origin: center; transition: transform .12s ease-out; user-select: none; -webkit-user-drag: none; touch-action: none; }
-.lightbox-layer figure :is(img, video).original-size { max-width: none; max-height: none; }
-.lightbox-layer figure :is(img, video).dragging { cursor: grabbing; transition: none; }
-.lightbox-live-badge { position: absolute; right: 12px; bottom: 12px; z-index: 2; display: inline-flex; align-items: center; gap: 5px; padding: 5px 8px; color: #fff; background: #151c19c7; border: 1px solid #ffffff24; border-radius: 6px; font-size: 10px; font-weight: 700; letter-spacing: .04em; pointer-events: none; backdrop-filter: blur(10px); }
-.lightbox-live-badge svg { width: 13px; height: 13px; fill: currentColor; stroke: none; }
+.lightbox-layer figure img { display: block; max-width: min(1180px, 92vw); max-height: calc(100vh - 142px); object-fit: contain; cursor: grab; transform-origin: center; transition: transform .12s ease-out; user-select: none; -webkit-user-drag: none; touch-action: none; }
+.lightbox-layer figure img.original-size { max-width: none; max-height: none; }
+.lightbox-layer figure img.dragging { cursor: grabbing; transition: none; }
 .lightbox-close { position: fixed; top: 18px; right: 20px; z-index: 4; display: grid; place-items: center; width: 40px; height: 40px; padding: 0; color: #fff; background: #1117159c; border: 1px solid #ffffff24; border-radius: 50%; font-size: 27px; line-height: 1; backdrop-filter: blur(12px); }
 .lightbox-close:hover { background: #ffffff29; }
 .lightbox-dock { position: fixed; bottom: 20px; left: 50%; z-index: 5; display: flex; align-items: center; gap: 5px; min-height: 58px; padding: 7px 12px; color: #eef3ef; background: #171c1bd9; border: 1px solid #ffffff14; border-radius: 29px; box-shadow: 0 18px 48px #0008; transform: translateX(-50%); backdrop-filter: blur(18px); }
@@ -330,8 +328,6 @@ body, button, input, textarea, select { font-size: 14px; }
 .caption-emoji.failed { width: auto; height: auto; margin: 0; vertical-align: baseline; }
 .caption-emoji.failed img { display: none; }
 .caption-emoji.failed > span { display: inline; }
-.media-live-badge { position: absolute; right: 8px; bottom: 8px; z-index: 2; display: inline-flex; align-items: center; gap: 4px; padding: 4px 7px; color: #fff; background: #26312dcc; border: 1px solid #ffffff24; border-radius: 5px; font-size: 10px; font-weight: 700; letter-spacing: .04em; pointer-events: none; backdrop-filter: blur(7px); }
-.media-live-badge svg { width: 12px; height: 12px; fill: currentColor; stroke: none; }
 @media (max-width: 620px) {
   .media-grid { gap: 5px; width: 100%; }
   .media-count-2, .media-count-4 { width: 100%; }
@@ -437,7 +433,7 @@ body, button, input, textarea, select { font-size: 14px; }
   .pull-actions { margin-left: auto; }
   .settings-window-grid, .settings-page .platform-auth-grid { grid-template-columns: 1fr; overflow: visible; }
   .lightbox-layer { padding: 48px 10px 98px; }
-  .lightbox-layer figure :is(img, video) { max-width: 96vw; max-height: calc(100vh - 132px); }
+  .lightbox-layer figure img { max-width: 96vw; max-height: calc(100vh - 132px); }
   .lightbox-close { top: 10px; right: 10px; width: 38px; height: 38px; }
   .lightbox-dock { bottom: 12px; max-width: calc(100vw - 16px); min-height: 52px; gap: 1px; padding: 5px 7px; overflow-x: auto; border-radius: 26px; }
   .lightbox-dock button { width: 38px; height: 38px; }
@@ -502,6 +498,27 @@ body, button, input, textarea, select { font-size: 14px; }
 .dark .sidebar { box-shadow: inset -1px 0 #ffffff05, 18px 0 48px #0004; }
 .dark .media-grid .media-frame { background: #111319; border-color: #282b33; }
 .dark .selection-cancel-button:hover, .dark .selection-select-all-button:hover { background: #24272f; }
+
+.stat-icon svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.pixiv-source-form { display: grid; grid-template-columns: 120px minmax(0, 1fr); align-items: center; gap: 12px 14px; margin-top: 18px; }
+.pixiv-source-form .history-option { grid-column: 2; }
+.pixiv-source-form .login-button { grid-column: 2; width: 100%; margin-top: 2px; }
+.dark .timeline-hero { position: relative; isolation: isolate; }
+.dark .timeline-hero::before, .dark .timeline-hero::after { position: absolute; z-index: 0; width: 2px; height: 2px; background: #f7e7ad; border-radius: 50%; content: ''; pointer-events: none; }
+.dark .timeline-hero::before { top: -8px; right: 7%; opacity: .72; box-shadow: -92px 17px 0 #cdd8ff, -188px 4px 0 #fff, -282px 30px 0 #879ccf, -410px 6px 0 #f3dfa0, -545px 24px 0 #b8c8ee, -690px 2px 0 #fff, -820px 34px 0 #7e91bf, -960px 13px 0 #f2dfa0; }
+.dark .timeline-hero::after { top: 30px; right: 16%; width: 3px; height: 3px; opacity: .9; box-shadow: -145px -8px 0 #fff, -342px 7px 0 #9fb3e1, -590px -11px 0 #f7e7ad, -778px 8px 0 #fff; filter: drop-shadow(0 0 5px #d7c37a); }
+.dark .timeline-hero-copy { position: relative; z-index: 1; }
+.dark .stat-card { background: #15171d; border-color: #2d313a; }
+.dark .stat-icon.mint { color: #b7c8ed; background: #202637; }
+.dark .stat-icon.sand { color: #eedb9e; background: #2d281c; }
+.dark .stat-icon.rose { color: #d7b5c0; background: #2b2027; }
+
+@media (max-width: 760px) {
+  .pixiv-source-form { grid-template-columns: 1fr; }
+  .pixiv-source-form .history-option, .pixiv-source-form .login-button { grid-column: 1; }
+  .dark .timeline-hero::before { right: 0; box-shadow: -76px 14px 0 #cdd8ff, -168px 2px 0 #fff, -254px 27px 0 #879ccf; }
+  .dark .timeline-hero::after { display: none; }
+}
 
 /* Complete night palette: black panels, cool starlight, and no legacy mint surfaces */
 svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
