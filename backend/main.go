@@ -264,6 +264,11 @@ type PixivCredentials struct {
 	RefreshToken string `json:"refreshToken,omitempty"`
 	ClientID     string `json:"clientId,omitempty"`
 	ClientSecret string `json:"clientSecret,omitempty"`
+	UserAgent    string `json:"userAgent,omitempty"`
+	Baggage      string `json:"baggage,omitempty"`
+	Cookie       string `json:"cookie,omitempty"`
+	SentryTrace  string `json:"sentryTrace,omitempty"`
+	CSRFToken    string `json:"csrfToken,omitempty"`
 	UserID       string `json:"userId,omitempty"`
 	UserName     string `json:"userName,omitempty"`
 }
@@ -1855,9 +1860,38 @@ func combineRemoteText(values ...string) string {
 	return strings.Join(parts, "\n\n")
 }
 
+func mergeDetailedRemoteText(values ...string) string {
+	result := ""
+	for _, value := range values {
+		value = cleanRemoteText(value)
+		if value == "" || value == result {
+			continue
+		}
+		if result == "" || strings.Contains(value, result) {
+			result = value
+			continue
+		}
+		if strings.Contains(result, value) {
+			continue
+		}
+		result = combineRemoteText(result, value)
+	}
+	return result
+}
+
 func collectBilibiliRichText(value any, parts *[]string) {
 	switch typed := value.(type) {
 	case string:
+		trimmed := strings.TrimSpace(typed)
+		if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+			var nested any
+			decoder := json.NewDecoder(strings.NewReader(trimmed))
+			decoder.UseNumber()
+			if decoder.Decode(&nested) == nil {
+				collectBilibiliRichText(nested, parts)
+				return
+			}
+		}
 		if text := cleanRemoteText(typed); text != "" {
 			*parts = append(*parts, text)
 		}
@@ -1869,7 +1903,7 @@ func collectBilibiliRichText(value any, parts *[]string) {
 		if text, ok := typed["text"].(string); ok {
 			collectBilibiliRichText(text, parts)
 		}
-		for _, key := range []string{"rich_text_nodes", "nodes", "paragraphs", "content", "summary", "desc", "title", "text_content", "opus", "draw", "article", "major", "modules", "module_dynamic", "item"} {
+		for _, key := range []string{"rich_text_nodes", "nodes", "paragraphs", "content", "summary", "desc", "description", "title", "text_content", "opus", "draw", "article", "major", "modules", "module_dynamic", "item", "items"} {
 			if nested, exists := typed[key]; exists {
 				collectBilibiliRichText(nested, parts)
 			}
@@ -1915,7 +1949,9 @@ func (b *BilibiliStore) fetchBilibiliDynamicCaption(dynamicID string, credential
 	endpoints := []string{
 		"https://api.bilibili.com/x/polymer/web-dynamic/v1/detail?id=" + url.QueryEscape(dynamicID),
 		"https://api.bilibili.com/x/polymer/web-dynamic/v1/opus/detail?id=" + url.QueryEscape(dynamicID),
+		"https://api.bilibili.com/x/polymer/web-dynamic/v1/opus/detail?opus_id=" + url.QueryEscape(dynamicID),
 	}
+	captions := make([]string, 0, len(endpoints))
 	for _, endpoint := range endpoints {
 		var payload map[string]any
 		if err := bilibiliRequest(endpoint, credentials, proxyURL, &payload); err != nil {
@@ -1926,10 +1962,17 @@ func (b *BilibiliStore) fetchBilibiliDynamicCaption(dynamicID string, credential
 			continue
 		}
 		if caption := bilibiliObjectText(payload["data"]); caption != "" {
-			return caption
+			captions = append(captions, caption)
 		}
 	}
-	return ""
+	return mergeDetailedRemoteText(captions...)
+}
+
+func shouldFetchBilibiliDynamicDetail(dynamicType, caption string) bool {
+	if strings.TrimSpace(caption) == "" {
+		return true
+	}
+	return dynamicType == "DYNAMIC_TYPE_OPUS" || dynamicType == "DYNAMIC_TYPE_ARTICLE"
 }
 
 func mediaFileExtension(remoteURL, contentType string) string {
@@ -2255,8 +2298,9 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 			}
 			captionParts = append(captionParts, bilibiliCaptionFromRaw(rawItem))
 			caption := combineRemoteText(captionParts...)
-			if caption == "" {
-				caption = b.fetchBilibiliDynamicCaption(item.ID, credentials, proxyURL)
+			if shouldFetchBilibiliDynamicDetail(item.Type, caption) {
+				detailCaption := b.fetchBilibiliDynamicCaption(item.ID, credentials, proxyURL)
+				caption = mergeDetailedRemoteText(caption, detailCaption)
 			}
 			publishedAt := parseRemoteTimestamp(item.Modules.Author.PubTs)
 			published := time.Unix(publishedAt, 0)
@@ -2653,50 +2697,76 @@ func (b *BilibiliStore) startScheduler() {
 	}()
 }
 
-func pixivTokenRequest(refreshToken, clientID, clientSecret, proxyURL string) (PixivCredentials, error) {
-	if strings.TrimSpace(refreshToken) == "" {
-		return PixivCredentials{}, errors.New("refresh_token 不能为空")
+func setPixivBrowserHeaders(request *http.Request, credentials PixivCredentials) {
+	request.Header.Set("User-Agent", strings.TrimSpace(credentials.UserAgent))
+	request.Header.Set("Accept", "application/json, text/plain, */*")
+	request.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	request.Header.Set("Referer", "https://www.pixiv.net/users/"+url.PathEscape(strings.TrimSpace(credentials.UserID)))
+	request.Header.Set("Cookie", strings.TrimSpace(credentials.Cookie))
+	if value := strings.TrimSpace(credentials.Baggage); value != "" {
+		request.Header.Set("Baggage", value)
 	}
-	clientID, clientSecret = strings.TrimSpace(clientID), strings.TrimSpace(clientSecret)
-	if clientID == "" {
-		clientID = strings.TrimSpace(os.Getenv("LUMIC_PIXIV_CLIENT_ID"))
+	if value := strings.TrimSpace(credentials.SentryTrace); value != "" {
+		request.Header.Set("Sentry-Trace", value)
 	}
-	if clientSecret == "" {
-		clientSecret = strings.TrimSpace(os.Getenv("LUMIC_PIXIV_CLIENT_SECRET"))
+	if value := strings.TrimSpace(credentials.CSRFToken); value != "" {
+		request.Header.Set("X-CSRF-Token", value)
 	}
-	if clientID == "" || clientSecret == "" {
-		return PixivCredentials{}, errors.New("请填写 Pixiv OAuth Client ID 和 Client Secret")
+}
+
+func pixivBrowserCredentialsRequest(credentials PixivCredentials, proxyURL, baseURL string) (PixivCredentials, error) {
+	credentials.UserAgent = strings.TrimSpace(credentials.UserAgent)
+	credentials.Baggage = strings.TrimSpace(credentials.Baggage)
+	credentials.Cookie = strings.TrimSpace(credentials.Cookie)
+	credentials.SentryTrace = strings.TrimSpace(credentials.SentryTrace)
+	credentials.CSRFToken = strings.TrimSpace(credentials.CSRFToken)
+	credentials.UserID = strings.TrimSpace(credentials.UserID)
+	if credentials.UserAgent == "" || credentials.Cookie == "" || credentials.UserID == "" {
+		return PixivCredentials{}, errors.New("请填写浏览器 UA、Cookie 和用户 ID")
 	}
-	form := url.Values{"client_id": {clientID}, "client_secret": {clientSecret}, "grant_type": {"refresh_token"}, "refresh_token": {refreshToken}}
-	request, err := http.NewRequest(http.MethodPost, "https://oauth.secure.pixiv.net/auth/token", strings.NewReader(form.Encode()))
+	endpoint := strings.TrimRight(baseURL, "/") + "/ajax/user/" + url.PathEscape(credentials.UserID) + "?full=1&lang=zh"
+	request, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
 		return PixivCredentials{}, err
 	}
-	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	request.Header.Set("User-Agent", "PixivIOSApp/7.13.0")
+	setPixivBrowserHeaders(request, credentials)
 	client, err := externalHTTPClient(proxyURL)
 	if err != nil {
 		return PixivCredentials{}, err
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return PixivCredentials{}, err
+		return PixivCredentials{}, fmt.Errorf("无法连接 Pixiv：%w", err)
 	}
 	defer response.Body.Close()
-	var payload struct {
-		Error string `json:"error"`
-		User  struct {
-			ID   string `json:"id"`
-			Name string `json:"name"`
-		} `json:"user"`
+	var payload map[string]any
+	if err := json.NewDecoder(io.LimitReader(response.Body, 4<<20)).Decode(&payload); err != nil {
+		return PixivCredentials{}, errors.New("Pixiv 用户接口响应无法解析")
 	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(&payload); err != nil {
-		return PixivCredentials{}, err
+	if response.StatusCode != http.StatusOK {
+		return PixivCredentials{}, errors.New("Pixiv 浏览器凭证无效或已过期")
 	}
-	if response.StatusCode != http.StatusOK || payload.Error != "" {
-		return PixivCredentials{}, errors.New("Pixiv refresh_token 无效或已过期")
+	if failed, _ := payload["error"].(bool); failed {
+		message := strings.TrimSpace(jsonValueString(payload["message"]))
+		if message == "" {
+			message = "Pixiv 浏览器凭证无效或已过期"
+		}
+		return PixivCredentials{}, errors.New(message)
 	}
-	return PixivCredentials{RefreshToken: refreshToken, ClientID: clientID, ClientSecret: clientSecret, UserID: payload.User.ID, UserName: payload.User.Name}, nil
+	body, ok := payload["body"].(map[string]any)
+	if !ok {
+		return PixivCredentials{}, errors.New("Pixiv 用户接口未返回账号资料")
+	}
+	userID := strings.TrimSpace(jsonValueString(body["userId"]))
+	if userID == "" {
+		return PixivCredentials{}, errors.New("Pixiv 用户接口未返回用户 ID")
+	}
+	if userID != credentials.UserID {
+		return PixivCredentials{}, errors.New("Pixiv 用户 ID 与浏览器登录账号不一致")
+	}
+	credentials.UserName = strings.TrimSpace(jsonValueString(body["name"]))
+	credentials.RefreshToken, credentials.ClientID, credentials.ClientSecret = "", "", ""
+	return credentials, nil
 }
 
 func (b *BilibiliStore) pixivHandler(w http.ResponseWriter, r *http.Request) {
@@ -2704,24 +2774,19 @@ func (b *BilibiliStore) pixivHandler(w http.ResponseWriter, r *http.Request) {
 	proxyURL, current := b.config.ProxyURL, b.config.Pixiv
 	b.RUnlock()
 	if r.Method == http.MethodGet {
-		current.RefreshToken = ""
-		writeJSON(w, map[string]any{"configured": current.UserID != "", "userId": current.UserID, "userName": current.UserName})
+		writeJSON(w, map[string]any{"configured": current.Cookie != "" && current.UserID != "", "userId": current.UserID, "userName": current.UserName})
 		return
 	}
 	if r.Method != http.MethodPut {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var input struct {
-		RefreshToken string `json:"refreshToken"`
-		ClientID     string `json:"clientId"`
-		ClientSecret string `json:"clientSecret"`
-	}
-	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&input) != nil {
+	var input PixivCredentials
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&input) != nil {
 		writeAPIError(w, http.StatusBadRequest, "Pixiv 凭证格式无效")
 		return
 	}
-	credentials, err := pixivTokenRequest(strings.TrimSpace(input.RefreshToken), input.ClientID, input.ClientSecret, proxyURL)
+	credentials, err := pixivBrowserCredentialsRequest(input, proxyURL, "https://www.pixiv.net")
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return

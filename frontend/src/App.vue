@@ -60,7 +60,8 @@ const biliQRImage = ref('')
 const biliQRStatus = ref('')
 let biliPollTimer = null
 const pixivAccount = ref({ configured: false, userId: '', userName: '' })
-const pixivCredentials = ref({ refreshToken: '', clientId: '', clientSecret: '' })
+const emptyPixivCredentials = () => ({ userAgent: '', baggage: '', cookie: '', userId: '', sentryTrace: '', csrfToken: '' })
+const pixivCredentials = ref(emptyPixivCredentials())
 const pixivBusy = ref(false)
 const pixivError = ref('')
 const weiboAccount = ref({ configured: false, userId: '', userName: '', avatar: '' })
@@ -77,7 +78,9 @@ const postActionBusy = ref('')
 const timelineMessage = ref('')
 const selectionMode = ref(false)
 const selectedPostIds = ref([])
+const contextMenu = ref({ open: false, x: 0, y: 0, post: null })
 const timelineSort = ref('newest')
+const timelineSearch = ref('')
 const mediaShapes = ref({})
 const timelineStart = ref(0)
 const timelineEnd = ref(15)
@@ -90,7 +93,7 @@ let timelineFrame = 0
 let postResizeObserver = null
 const observedPostElements = new Map()
 const transientTimers = new Set()
-const lightbox = ref({ open: false, media: [], index: 0, author: '', scale: 1, x: 0, y: 0, dragging: false })
+const lightbox = ref({ open: false, media: [], index: 0, author: '', scale: 1, rotation: 0, fit: true, x: 0, y: 0, dragging: false, motion: 'enter' })
 let lightboxDrag = null
 
 const sourceMeta = {
@@ -103,11 +106,14 @@ const validSources = new Set(Object.keys(sourceMeta))
 const likedCount = computed(() => posts.value.filter(post => post.liked).length)
 const selectedPostCount = computed(() => selectedPostIds.value.length)
 const filteredPosts = computed(() => {
-  const timeline = activeNav.value === 'liked' ? posts.value.filter(post => post.liked) : posts.value
+  const allPosts = Array.isArray(posts.value) ? posts.value : []
+  const timeline = activeNav.value === 'liked' ? allPosts.filter(post => post.liked) : allPosts
   const sourceTimeline = activeSource.value === 'all' ? timeline : timeline.filter(post => post.source === activeSource.value)
   let result = sourceTimeline
   if (selectedTag.value) result = result.filter(post => post.tags?.includes(selectedTag.value))
   else if (selectedAuthor.value) result = result.filter(post => post.source === selectedAuthor.value.source && post.author === selectedAuthor.value.name)
+  const keyword = timelineSearch.value.trim().toLocaleLowerCase()
+  if (keyword) result = result.filter(post => [post.caption, post.author, ...(post.tags || [])].some(value => String(value || '').toLocaleLowerCase().includes(keyword)))
   return [...result].sort((left, right) => {
     const difference = new Date(right.published).getTime() - new Date(left.published).getTime()
     return timelineSort.value === 'newest' ? difference : -difference
@@ -163,7 +169,8 @@ async function loadData() {
   try {
     const postResponse = await fetch('/api/posts', { cache: 'no-store' })
     if (!postResponse.ok) throw new Error('api unavailable')
-    posts.value = await postResponse.json()
+    const payload = await postResponse.json()
+    posts.value = Array.isArray(payload) ? payload : []
   } catch { posts.value = [] }
   await loadFeeds()
 }
@@ -186,6 +193,16 @@ async function loadFeeds(fallbackFeed = null) {
   }
   feeds.value = [...unique.values()]
   return true
+}
+async function loadPlatformAccounts() {
+  const [biliResponse, weiboResponse, pixivResponse] = await Promise.allSettled([
+    fetch('/api/bilibili/account', { cache: 'no-store' }),
+    fetch('/api/weibo/account', { cache: 'no-store' }),
+    fetch('/api/pixiv/account', { cache: 'no-store' })
+  ])
+  if (biliResponse.status === 'fulfilled' && biliResponse.value.ok) biliAccount.value = await biliResponse.value.json()
+  if (weiboResponse.status === 'fulfilled' && weiboResponse.value.ok) weiboAccount.value = await weiboResponse.value.json()
+  if (pixivResponse.status === 'fulfilled' && pixivResponse.value.ok) pixivAccount.value = await pixivResponse.value.json()
 }
 function setDarkMode(value) {
   isDark.value = Boolean(value)
@@ -285,9 +302,9 @@ async function saveBilibiliAccount() {
 async function savePixivAccount() {
   pixivBusy.value = true; pixivError.value = ''
   try {
-    const response = await fetch('/api/pixiv/account', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refreshToken: pixivCredentials.value.refreshToken.trim(), clientId: pixivCredentials.value.clientId.trim(), clientSecret: pixivCredentials.value.clientSecret.trim() }) })
+    const response = await fetch('/api/pixiv/account', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.fromEntries(Object.entries(pixivCredentials.value).map(([key, value]) => [key, value.trim()]))) })
     if (!response.ok) throw new Error(await responseError(response, 'Pixiv 凭证验证失败'))
-    pixivAccount.value = await response.json(); pixivCredentials.value = { refreshToken: '', clientId: '', clientSecret: '' }
+    pixivAccount.value = await response.json(); pixivCredentials.value = emptyPixivCredentials()
   } catch (error) { pixivError.value = error.message } finally { pixivBusy.value = false }
 }
 function stopWeiboPolling() { if (weiboPollTimer) clearTimeout(weiboPollTimer); weiboPollTimer = null }
@@ -517,16 +534,18 @@ function askConfirm({ title, message, confirmText = '确认', cancelText = '取�
 }
 function resetLightboxView() {
   lightbox.value.scale = 1
+  lightbox.value.rotation = 0
+  lightbox.value.fit = true
   lightbox.value.x = 0
   lightbox.value.y = 0
   lightbox.value.dragging = false
   lightboxDrag = null
 }
 function openLightbox(post, index) {
-  lightbox.value = { open: true, media: post.media || [], index, author: post.author, scale: 1, x: 0, y: 0, dragging: false }
+  lightbox.value = { open: true, media: post.media || [], index, author: post.author, scale: 1, rotation: 0, fit: true, x: 0, y: 0, dragging: false, motion: 'enter' }
 }
 function closeLightbox() {
-  lightbox.value = { open: false, media: [], index: 0, author: '', scale: 1, x: 0, y: 0, dragging: false }
+  lightbox.value = { open: false, media: [], index: 0, author: '', scale: 1, rotation: 0, fit: true, x: 0, y: 0, dragging: false, motion: 'enter' }
   lightboxDrag = null
 }
 function moveLightbox(step) {
@@ -534,18 +553,50 @@ function moveLightbox(step) {
   if (total > 1) {
     lightbox.value.index = (lightbox.value.index + step + total) % total
     resetLightboxView()
+    lightbox.value.motion = step > 0 ? 'next' : 'previous'
   }
 }
 function zoomLightbox(event) {
-  const step = event.deltaY < 0 ? 0.15 : -0.15
-  lightbox.value.scale = Math.min(5, Math.max(0.5, Number((lightbox.value.scale + step).toFixed(2))))
-  if (lightbox.value.scale <= 1) {
-    lightbox.value.x = 0
-    lightbox.value.y = 0
+  zoomLightboxBy(event.deltaY < 0 ? 0.15 : -0.15)
+}
+function zoomLightboxBy(step) {
+  lightbox.value.scale = Math.min(5, Math.max(0.25, Number((lightbox.value.scale + step).toFixed(2))))
+}
+function toggleLightboxFit() {
+  lightbox.value.fit = !lightbox.value.fit
+  lightbox.value.scale = 1
+  lightbox.value.x = 0
+  lightbox.value.y = 0
+}
+function rotateLightbox() {
+  lightbox.value.rotation = (lightbox.value.rotation + 90) % 360
+}
+function lightboxBackgroundStyle() {
+  return { backgroundImage: `url(${JSON.stringify(lightbox.value.media[lightbox.value.index] || '')})` }
+}
+async function downloadLightboxImage() {
+  const source = lightbox.value.media[lightbox.value.index]
+  if (!source) return
+  const fallbackName = `${lightbox.value.author || 'Lumic'}-${lightbox.value.index + 1}.jpg`
+  try {
+    const response = await fetch(source)
+    if (!response.ok) throw new Error('download failed')
+    const blobURL = URL.createObjectURL(await response.blob())
+    const link = document.createElement('a')
+    link.href = blobURL
+    link.download = decodeURIComponent(source.split('/').pop()?.split('?')[0] || fallbackName)
+    link.click()
+    URL.revokeObjectURL(blobURL)
+  } catch {
+    const link = document.createElement('a')
+    link.href = source
+    link.download = fallbackName
+    link.target = '_blank'
+    link.rel = 'noopener'
+    link.click()
   }
 }
 function startLightboxDrag(event) {
-  if (lightbox.value.scale <= 1) return
   event.currentTarget.setPointerCapture(event.pointerId)
   lightbox.value.dragging = true
   lightboxDrag = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, imageX: lightbox.value.x, imageY: lightbox.value.y }
@@ -562,10 +613,17 @@ function stopLightboxDrag(event) {
   lightboxDrag = null
 }
 function handleGlobalKeydown(event) {
+  if (contextMenu.value.open) {
+    if (event.key === 'Escape') closeContextMenu()
+    return
+  }
   if (lightbox.value.open) {
     if (event.key === 'Escape') closeLightbox()
     if (event.key === 'ArrowLeft') moveLightbox(-1)
     if (event.key === 'ArrowRight') moveLightbox(1)
+    if (event.key === '+' || event.key === '=') zoomLightboxBy(0.15)
+    if (event.key === '-') zoomLightboxBy(-0.15)
+    if (event.key.toLowerCase() === 'r') rotateLightbox()
     return
   }
   if (!confirmDialog.value.open) return
@@ -610,6 +668,22 @@ function togglePostSelection(post) {
   selectedPostIds.value = selectedPostIds.value.includes(post.id) ? selectedPostIds.value.filter(id => id !== post.id) : [...selectedPostIds.value, post.id]
 }
 function stopSelection() { selectionMode.value = false; selectedPostIds.value = [] }
+function closeContextMenu() { contextMenu.value = { open: false, x: 0, y: 0, post: null } }
+function openContextMenu(event, post = null) {
+  const width = 218
+  const height = post ? 118 : 76
+  contextMenu.value = { open: true, x: Math.min(event.clientX, window.innerWidth - width - 12), y: Math.min(event.clientY, window.innerHeight - height - 12), post }
+}
+function startMultiSelectMode() {
+  closeContextMenu()
+  navigateTo('all', 'all')
+  selectionMode.value = true
+}
+function deleteContextPost() {
+  const post = contextMenu.value.post
+  closeContextMenu()
+  if (post) deletePost(post)
+}
 async function deleteSelectedPosts() {
   if (!selectedPostCount.value) return
   const confirmed = await askConfirm({ title: '批量删除动态', message: `确定永久删除选中的 ${selectedPostCount.value} 条动态吗？关联媒体文件也会一并删除。`, confirmText: '删除所选动态' })
@@ -714,6 +788,7 @@ function navigateTo(nav, source = activeSource.value) {
   mobileMenuOpen.value = false
   const path = nav === 'source' ? `/source/${source}` : nav === 'liked' ? '/liked' : nav === 'pulls' ? '/pulls' : '/'
   updateRoute(path)
+  if (nav === 'pulls') void Promise.all([loadFeeds(), loadPlatformAccounts()])
 }
 function openTag(tag) {
   stopSelection(); showSettings.value = false; selectedAuthor.value = null; selectedTag.value = tag; activeNav.value = 'tag'; activeSource.value = 'all'
@@ -816,6 +891,7 @@ function applyRoute() {
   }
   if (segments[0] === 'pulls') {
     activeNav.value = 'pulls'; activeSource.value = 'all'
+    void Promise.all([loadFeeds(), loadPlatformAccounts()])
     return
   }
   if (segments[0] === 'settings') {
@@ -848,8 +924,7 @@ async function checkSession() {
     }
     authenticated.value = true
     await loadData()
-    const weiboAccountResponse = await fetch('/api/weibo/account', { credentials: 'same-origin' })
-    if (weiboAccountResponse.ok) weiboAccount.value = await weiboAccountResponse.json()
+    await loadPlatformAccounts()
   } catch {
     loginError.value = '暂时无法连接服务，请稍后刷新页面'
   } finally {
@@ -859,7 +934,7 @@ async function checkSession() {
 watch(filteredPosts, resetTimelineWindow)
 watch(posts, prunePostCaches)
 onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; phonePortraitQuery = window.matchMedia('(max-width: 760px) and (orientation: portrait)'); phonePortrait.value = phonePortraitQuery.matches; phonePortraitQuery.addEventListener('change', updatePhonePortrait); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); if (phonePortrait.value) openPhoneDefaultTimeline(); checkSession(); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', applyRoute); window.addEventListener('scroll', scheduleTimelineWindow, { passive: true }); window.addEventListener('resize', scheduleTimelineWindow) })
-onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); postResizeObserver?.disconnect(); observedPostElements.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); closeLightbox(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', applyRoute); window.removeEventListener('scroll', scheduleTimelineWindow); window.removeEventListener('resize', scheduleTimelineWindow); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
+onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); postResizeObserver?.disconnect(); observedPostElements.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); closeLightbox(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', applyRoute); window.removeEventListener('scroll', scheduleTimelineWindow); window.removeEventListener('resize', scheduleTimelineWindow); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
 </script>
 
 <template>
@@ -918,7 +993,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
       </div>
     </aside>
 
-    <main v-if="!showSettings && activeNav !== 'pulls'" :class="['content', { 'liked-page': activeNav === 'liked' }]">
+    <main v-if="!showSettings && activeNav !== 'pulls'" :class="['content', { 'liked-page': activeNav === 'liked' }]" @click="closeContextMenu" @contextmenu.prevent="openContextMenu($event)">
       <header v-if="authorProfile" class="topbar author-page-header">
         <div class="author-profile-main">
           <button class="author-back-button" type="button" title="返回时间线" aria-label="返回时间线" @click="closeAuthor">←</button>
@@ -966,14 +1041,19 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
       <div class="section-heading">
 <div v-if="!authorProfile" class="filters">
 <button :class="{ selected: activeSource === 'all' }" @click="activeSource = 'all'"><span>✦</span>全部</button>
-<div class="timeline-sort" role="group" aria-label="动态时间排序"><button type="button" :class="{ selected: timelineSort === 'newest' }" @click="timelineSort = 'newest'">最新</button><button type="button" :class="{ selected: timelineSort === 'oldest' }" @click="timelineSort = 'oldest'">最早</button></div>
 </div>
-<div class="selection-actions"><button class="secondary-button" @click="selectionMode ? stopSelection() : selectionMode = true">{{ selectionMode ? '取消选择' : '多选删除' }}</button><button v-if="selectionMode" class="danger-outline-button" :disabled="!selectedPostCount || postActionBusy === 'batch-delete'" @click="deleteSelectedPosts">删除所选（{{ selectedPostCount }}）</button></div>
+<div v-if="!authorProfile" class="timeline-tools">
+  <label class="timeline-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><input v-model="timelineSearch" type="search" placeholder="搜索动态内容" aria-label="搜索动态内容"></label>
+  <div class="timeline-sort" role="group" aria-label="动态时间排序">
+    <button type="button" :class="{ selected: timelineSort === 'newest' }" title="最新优先" aria-label="最新优先" @click="timelineSort = 'newest'"><svg viewBox="0 0 24 24"><circle cx="9" cy="9" r="5"/><path d="M9 6v3l2 1M15 15h6M18 12v6l3-3"/></svg></button>
+    <button type="button" :class="{ selected: timelineSort === 'oldest' }" title="最早优先" aria-label="最早优先" @click="timelineSort = 'oldest'"><svg viewBox="0 0 24 24"><circle cx="9" cy="9" r="5"/><path d="M9 6v3l2 1M15 15h6M18 18v-6l3 3"/></svg></button>
+  </div>
+</div>
 </div>
       <p v-if="timelineMessage" class="timeline-message">{{ timelineMessage }}</p>
       <section ref="feedListElement" class="feed-list">
 <div v-if="timelineTopSpace" class="timeline-spacer" :style="{ height: `${timelineTopSpace}px` }" aria-hidden="true"></div>
-<article v-for="post in visiblePosts" :key="post.id" :ref="element => setPostCard(post, element)" :class="['post-card', { selected: selectedPostIds.includes(post.id) }]" :data-post-id="post.id">
+<article v-for="post in visiblePosts" :key="post.id" :ref="element => setPostCard(post, element)" :class="['post-card', { selected: selectedPostIds.includes(post.id) }]" :data-post-id="post.id" @contextmenu.stop.prevent="openContextMenu($event, post)">
 <label v-if="selectionMode" class="post-select-control" :title="`选择 ${post.author} 的这条动态`"><input type="checkbox" :checked="selectedPostIds.includes(post.id)" @change="togglePostSelection(post)"><span></span></label>
 <div class="post-head">
 <button class="post-author-avatar" type="button" :title="`查看 ${post.author} 的动态`" @click="openAuthor(post)"><img :src="post.avatar" :alt="post.author"></button>
@@ -993,7 +1073,6 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
 <div class="post-foot-actions">
 <button :class="['post-like-button', { liked: post.liked }]" :disabled="postActionBusy === `like:${post.id}`" :title="post.liked ? '取消点赞' : '点赞'" :aria-label="post.liked ? '取消点赞' : '点赞'" @click="togglePostLike(post)">{{ post.liked ? '♥' : '♡' }}</button>
 <button :disabled="!post.originalUrl" :title="post.originalUrl ? '打开原动态' : '旧动态暂无原始链接，请重新拉取'" aria-label="打开原动态" @click="openOriginalPost(post)">↗</button>
-<button class="post-delete-button" :disabled="postActionBusy === post.id" title="删除这条动态" @click="deletePost(post)"><span>⌫</span>{{ postActionBusy === post.id ? '删除中…' : '删除' }}</button>
 </div>
 </div>
 </article>
@@ -1020,18 +1099,46 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
           <img class="pull-avatar" :src="feed.avatar || sourceMeta[feed.source]?.image || '/favicon.ico'" :alt="feed.name" @error="$event.target.src = sourceMeta[feed.source]?.image || '/favicon.ico'">
           <div class="pull-info"><div class="pull-title"><strong>{{ feed.name }}</strong><span :class="['source-pill', sourceMeta[feed.source].color]"><img class="source-icon" :src="sourceMeta[feed.source].image" :alt="sourceMeta[feed.source].label">{{ sourceMeta[feed.source].label }}</span></div><span class="pull-handle">{{ feed.handle }}</span><small>{{ feed.lastSyncMessage || (feed.lastSyncedAt ? `上次拉取：${relativeTime(feed.lastSyncedAt)}` : '尚未拉取') }}</small></div>
           <div class="pull-status"><i :class="['pull-dot', feed.lastSyncStatus]"></i><span>{{ feed.lastSyncStatus === 'success' ? `新增 ${feed.lastSyncCount || 0} 条` : feed.lastSyncStatus === 'failed' ? '拉取失败' : '待拉取' }}</span></div>
-          <div class="pull-actions"><button class="pull-action" :disabled="sourceActionBusy !== ''" @click="syncSource(feed)">{{ sourceActionBusy === `sync:${feed.id}` ? '拉取中…' : '立即拉取' }}</button><button class="pull-action secondary" :disabled="sourceActionBusy !== ''" @click="syncSource(feed, true)">{{ sourceActionBusy === `resync:${feed.id}` ? '重拉中…' : '重新拉取' }}</button></div>
+          <div class="pull-actions"><button class="pull-action" :disabled="sourceActionBusy !== ''" :title="sourceActionBusy === `sync:${feed.id}` ? '正在同步' : '立即同步'" @click="syncSource(feed)"><svg :class="{ spin: sourceActionBusy === `sync:${feed.id}` }" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 9a7 7 0 0 1 11.4-2.5L20 9M4 15l2.5 2.5A7 7 0 0 0 17.9 15"/></svg><span>{{ sourceActionBusy === `sync:${feed.id}` ? '同步中' : '立即同步' }}</span></button></div>
         </article>
         <div v-if="!feeds.length" class="empty">还没有订阅作者，请先添加 UP 主或微博博主。</div>
       </section>
     </main>
-    <div v-if="lightbox.open" class="lightbox-layer" role="dialog" aria-modal="true" :aria-label="`${lightbox.author} 的动态图片`" @click.self="closeLightbox" @wheel.prevent="zoomLightbox">
-      <button class="lightbox-close" type="button" title="关闭大图" @click="closeLightbox">×</button>
-      <button v-if="lightbox.media.length > 1" class="lightbox-nav lightbox-prev" type="button" title="上一张" @click="moveLightbox(-1)">‹</button>
-      <figure><img :src="lightbox.media[lightbox.index]" :alt="`${lightbox.author} 的动态图片 ${lightbox.index + 1}`" :class="{ dragging: lightbox.dragging, pannable: lightbox.scale > 1 }" :style="{ transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) scale(${lightbox.scale})` }" draggable="false" @pointerdown.prevent="startLightboxDrag" @pointermove.prevent="moveLightboxDrag" @pointerup="stopLightboxDrag" @pointercancel="stopLightboxDrag"><figcaption>{{ lightbox.media.length > 1 ? `${lightbox.index + 1} / ${lightbox.media.length} · ` : '' }}{{ Math.round(lightbox.scale * 100) }}%</figcaption></figure>
-      <button v-if="lightbox.media.length > 1" class="lightbox-nav lightbox-next" type="button" title="下一张" @click="moveLightbox(1)">›</button>
+    <div v-if="contextMenu.open" class="timeline-context-menu" :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }" role="menu" @click.stop>
+      <button type="button" role="menuitem" @click="startMultiSelectMode"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 12h8M8 15h5"/></svg><span>多选删除</span></button>
+      <button v-if="contextMenu.post" type="button" class="danger" role="menuitem" @click="deleteContextPost"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg><span>删除这条动态</span></button>
     </div>
-    <button v-if="!showSettings" class="add-fab" @click="showAdd = true">＋ <span>添加来源</span>
+    <div v-if="selectionMode" class="selection-dock">
+      <button type="button" class="selection-cancel-button" title="取消多选" aria-label="取消多选" @click="stopSelection"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+      <span>已选择 {{ selectedPostCount }} 条</span>
+      <button type="button" class="selection-delete-button" :disabled="!selectedPostCount || postActionBusy === 'batch-delete'" title="删除所选动态" aria-label="删除所选动态" @click="deleteSelectedPosts"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg><b>删除</b></button>
+    </div>
+    <div v-if="lightbox.open" class="lightbox-layer" role="dialog" aria-modal="true" :aria-label="`${lightbox.author} 的动态图片`" @click.self="closeLightbox" @wheel.prevent="zoomLightbox">
+      <div :key="`background:${lightbox.media[lightbox.index]}`" class="lightbox-blur-background" :style="lightboxBackgroundStyle()" @click="closeLightbox"></div>
+      <button class="lightbox-close" type="button" title="关闭大图" aria-label="关闭大图" @click="closeLightbox">×</button>
+      <figure @click.self="closeLightbox">
+        <div :key="`${lightbox.media[lightbox.index]}:${lightbox.motion}`" :class="['lightbox-image-stage', `motion-${lightbox.motion}`]">
+          <img :src="lightbox.media[lightbox.index]" :alt="`${lightbox.author} 的动态图片 ${lightbox.index + 1}`" :class="{ dragging: lightbox.dragging, 'original-size': !lightbox.fit }" :style="{ transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) rotate(${lightbox.rotation}deg) scale(${lightbox.scale})` }" draggable="false" @pointerdown.prevent="startLightboxDrag" @pointermove.prevent="moveLightboxDrag" @pointerup="stopLightboxDrag" @pointercancel="stopLightboxDrag">
+        </div>
+      </figure>
+      <div class="lightbox-dock" role="toolbar" aria-label="图片查看工具">
+        <button type="button" title="上一张" aria-label="上一张" :disabled="lightbox.media.length < 2" @click="moveLightbox(-1)"><svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg></button>
+        <span class="lightbox-counter">{{ lightbox.index + 1 }}/{{ lightbox.media.length }}</span>
+        <button type="button" title="下一张" aria-label="下一张" :disabled="lightbox.media.length < 2" @click="moveLightbox(1)"><svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></button>
+        <i></i>
+        <button type="button" title="缩小" aria-label="缩小" @click="zoomLightboxBy(-0.15)"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M8 11h6M16 16l5 5"/></svg></button>
+        <span class="lightbox-scale">{{ Math.round(lightbox.scale * 100) }}%</span>
+        <button type="button" title="放大" aria-label="放大" @click="zoomLightboxBy(0.15)"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M8 11h6M11 8v6M16 16l5 5"/></svg></button>
+        <button type="button" :title="lightbox.fit ? '原始尺寸' : '适应页面'" :aria-label="lightbox.fit ? '原始尺寸' : '适应页面'" :class="{ active: !lightbox.fit }" @click="toggleLightboxFit">
+          <svg v-if="lightbox.fit" viewBox="0 0 24 24"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/><rect x="8" y="8" width="8" height="8" rx="2"/></svg>
+          <svg v-else viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9v6M16 9v6M10.5 10.5 12 9v6"/></svg>
+        </button>
+        <i></i>
+        <button type="button" title="顺时针旋转" aria-label="顺时针旋转" @click="rotateLightbox"><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/><rect x="9" y="9" width="6" height="6"/></svg></button>
+        <button type="button" title="下载原图" aria-label="下载原图" @click="downloadLightboxImage"><svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M4 20h16"/></svg></button>
+      </div>
+    </div>
+    <button v-if="!showSettings && activeNav === 'pulls'" class="add-fab" @click="showAdd = true">＋ <span>添加来源</span>
 </button>
     <div v-if="showAdd" class="modal-backdrop" @click.self="showAdd = false">
 <div class="modal">
@@ -1103,9 +1210,9 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); phonePortraitQuer
               <div v-if="weiboQR" class="weibo-qr"><img :src="weiboQR.image.startsWith('//') ? `https:${weiboQR.image}` : weiboQR.image" alt="微博登录二维码"><span>请在二维码过期前扫码并确认</span></div><button class="login-button platform-login-button" type="button" @click="startWeiboQR" :disabled="weiboBusy && !weiboQR">{{ weiboQR ? '刷新二维码' : weiboBusy ? '获取中…' : weiboAccount.configured ? '扫码切换微博账号' : '扫码连接微博' }}</button><details class="manual-credential"><summary>高级：手动导入 Cookie</summary><form class="settings-form bili-credentials" @submit.prevent="saveWeiboAccount" autocomplete="off"><label>微博 UID</label><input v-model="weiboCredentials.userId" inputmode="numeric" required placeholder="个人主页地址中的数字 UID"><label>完整 Cookie</label><textarea v-model="weiboCredentials.cookie" rows="4" required placeholder="可粘贴浏览器请求头中的 Cookie: 完整内容"></textarea><p class="credential-note">请使用已成功打开微博的同一网络出口获取 Cookie；保存前会验证账号资料，不会回显原始 Cookie。</p><button class="login-button" :disabled="weiboBusy">{{ weiboBusy ? '验证中…' : '验证并保存 Cookie' }}</button></form></details><p v-if="weiboError" class="login-error">{{ weiboError }}</p>
             </article>
             <article class="platform-auth-card pixiv">
-              <header class="platform-auth-head"><img class="source-icon" :src="sourceMeta.pixiv.image" alt="Pixiv图标"><div><h3>Pixiv</h3><span>OAuth refresh_token</span></div><em :class="['connection-dot', { online: pixivAccount.configured }]">{{ pixivAccount.configured ? '已连接' : '未连接' }}</em></header>
-              <p v-if="pixivAccount.configured">当前账号：{{ pixivAccount.userName || pixivAccount.userId }}。重新保存时需填写新 token。</p><p v-else>使用 OAuth refresh_token 连接，不保存账号密码。</p>
-              <details class="platform-auth-details"><summary>配置 OAuth 凭证</summary><form class="settings-form platform-auth-form" @submit.prevent="savePixivAccount"><label>Client ID</label><input v-model="pixivCredentials.clientId" required autocomplete="off"><label>Client Secret</label><input v-model="pixivCredentials.clientSecret" type="password" required autocomplete="off"><label>refresh_token</label><input v-model="pixivCredentials.refreshToken" type="password" required autocomplete="off"><p class="credential-note">OAuth 应用凭证和 token 均由服务端加密保存。</p><button class="login-button" :disabled="pixivBusy">{{ pixivBusy ? '验证中…' : '验证并保存 Pixiv' }}</button></form></details><p v-if="pixivError" class="login-error">{{ pixivError }}</p>
+              <header class="platform-auth-head"><img class="source-icon" :src="sourceMeta.pixiv.image" alt="Pixiv图标"><div><h3>Pixiv</h3><span>浏览器请求头凭证</span></div><em :class="['connection-dot', { online: pixivAccount.configured }]">{{ pixivAccount.configured ? '已连接' : '未连接' }}</em></header>
+              <p v-if="pixivAccount.configured">当前账号：{{ pixivAccount.userName || `UID ${pixivAccount.userId}` }}。重新保存可更新浏览器凭证。</p><p v-else>导入已登录 Pixiv 的浏览器请求头建立连接。</p>
+              <details class="platform-auth-details pixiv-browser-details"><summary>配置浏览器凭证</summary><form class="settings-form platform-auth-form pixiv-browser-form" @submit.prevent="savePixivAccount"><label>浏览器 UA</label><input v-model="pixivCredentials.userAgent" required autocomplete="off" placeholder="Mozilla/5.0 ..."><label>浏览器 Baggage</label><textarea v-model="pixivCredentials.baggage" rows="2" autocomplete="off"></textarea><label>浏览器 Cookie</label><textarea v-model="pixivCredentials.cookie" rows="4" required autocomplete="off"></textarea><label>用户 ID</label><input v-model="pixivCredentials.userId" required inputmode="numeric" autocomplete="off"><label>浏览器 Sentry-Trace</label><input v-model="pixivCredentials.sentryTrace" autocomplete="off"><label>浏览器 X-CSRF-TOKEN</label><input v-model="pixivCredentials.csrfToken" autocomplete="off"><button class="login-button" :disabled="pixivBusy">{{ pixivBusy ? '验证中…' : '验证并保存 Pixiv' }}</button></form></details><p v-if="pixivError" class="login-error">{{ pixivError }}</p>
             </article>
             <article class="platform-auth-card twitter">
               <header class="platform-auth-head"><img class="source-icon" :src="sourceMeta.twitter.image" alt="推特图标"><div><h3>推特</h3><span>账号连接与作者采集</span></div><em class="connection-dot">未开放</em></header>

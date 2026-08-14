@@ -121,6 +121,60 @@ func TestBilibiliCaptionFromRawItemPreservesUnknownNestedText(t *testing.T) {
 	}
 }
 
+func TestBilibiliCaptionDecodesJSONStringContent(t *testing.T) {
+	raw := json.RawMessage(`{"content":"{\"paragraphs\":[{\"nodes\":[{\"text\":\"full opus caption\"}]}]}"}`)
+	if got := bilibiliRichText(raw); got != "full opus caption" {
+		t.Fatalf("JSON string caption was not extracted: %q", got)
+	}
+}
+
+func TestBilibiliDetailCaptionPrefersFullText(t *testing.T) {
+	if got := mergeDetailedRemoteText("caption preview", "caption preview with the complete body"); got != "caption preview with the complete body" {
+		t.Fatalf("detail caption did not replace preview: %q", got)
+	}
+	if !shouldFetchBilibiliDynamicDetail("DYNAMIC_TYPE_OPUS", "preview") || shouldFetchBilibiliDynamicDetail("DYNAMIC_TYPE_DRAW", "complete draw caption") {
+		t.Fatal("unexpected Bilibili detail request decision")
+	}
+}
+
+func TestPixivBrowserCredentialsRequest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ajax/user/12345" || r.URL.Query().Get("full") != "1" {
+			http.Error(w, "unexpected Pixiv endpoint", http.StatusNotFound)
+			return
+		}
+		for header, want := range map[string]string{
+			"User-Agent":   "Mozilla/5.0 Test",
+			"Baggage":      "sentry-environment=production",
+			"Cookie":       "PHPSESSID=test_session",
+			"Sentry-Trace": "trace-value",
+			"X-CSRF-Token": "csrf-value",
+		} {
+			if got := r.Header.Get(header); got != want {
+				t.Fatalf("unexpected %s header: %q", header, got)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"error":false,"message":"","body":{"userId":"12345","name":"Pixiv User"}}`))
+	}))
+	defer server.Close()
+
+	credentials, err := pixivBrowserCredentialsRequest(PixivCredentials{
+		UserAgent:   "Mozilla/5.0 Test",
+		Baggage:     "sentry-environment=production",
+		Cookie:      "PHPSESSID=test_session",
+		UserID:      "12345",
+		SentryTrace: "trace-value",
+		CSRFToken:   "csrf-value",
+	}, "", server.URL)
+	if err != nil {
+		t.Fatalf("validate Pixiv browser credentials: %v", err)
+	}
+	if credentials.UserName != "Pixiv User" || credentials.UserID != "12345" {
+		t.Fatalf("unexpected Pixiv account: %#v", credentials)
+	}
+}
+
 func TestCollectedWeiboPostIncludesOriginalURL(t *testing.T) {
 	payload := map[string]any{"mblog": map[string]any{"id": "AbCd", "text_raw": "正文", "created_at": "Mon Aug 12 10:00:00 +0800 2024", "user": map[string]any{"idstr": "12345", "screen_name": "博主"}}}
 	posts := make([]Post, 0)
