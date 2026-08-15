@@ -425,7 +425,7 @@ body, button, input, textarea, select { font-size: 14px; }
 }
 
 /* Phone portrait navigation */
-.mobile-menu-toggle, .mobile-menu-scrim { display: none; }
+.mobile-menu-toggle, .mobile-timeline-toggle, .mobile-menu-scrim, .mobile-source-shortcuts { display: none; }
 @media (max-width: 760px) and (orientation: portrait) {
   body { min-width: 0; }
   .app-shell { display: block; min-width: 0; }
@@ -1082,6 +1082,34 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
     border-radius: 10px;
     box-shadow: 0 10px 30px #11182724;
   }
+  .phone-ui .mobile-timeline-toggle {
+    position: fixed;
+    top: max(12px, env(safe-area-inset-top));
+    left: max(12px, env(safe-area-inset-left));
+    z-index: 62;
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    color: var(--ink);
+    background: color-mix(in srgb, var(--card) 94%, transparent);
+    border: 1px solid color-mix(in srgb, var(--line) 86%, transparent);
+    border-radius: 10px;
+    box-shadow: 0 10px 30px #11182724;
+    backdrop-filter: blur(14px);
+  }
+  .phone-ui .mobile-timeline-toggle .nav-mask-symbol { width: 22px!important; height: 22px; }
+  .phone-ui .mobile-timeline-toggle.active { color: #80611c; }
+  .phone-ui .mobile-timeline-toggle.open { color: #f8f3df; background: #786536; border-color: #b8a365; box-shadow: 0 0 16px #d5bd7152, 0 12px 30px #1118272e; }
+  .phone-ui.dark .mobile-timeline-toggle {
+    color: #dfe7f8;
+    background: #151820ed;
+    border-color: #343947;
+    box-shadow: 0 10px 32px #0009, 0 0 14px #7189cd20;
+  }
+  .phone-ui.dark .mobile-timeline-toggle.active { color: #f4e5a5; filter: drop-shadow(0 0 6px #d9e6ff8f); }
+  .phone-ui.dark .mobile-timeline-toggle.open { color: #f7f2df; background: #252a3a; border-color: #8899c8; box-shadow: 0 0 18px #758de34a, 0 12px 32px #0007; }
   .phone-ui .mobile-menu-toggle .menu-line {
     transform-box: fill-box;
     transform-origin: center;
@@ -1106,6 +1134,41 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
     background: #07090db8;
     backdrop-filter: blur(5px);
   }
+  .phone-ui .mobile-source-shortcuts {
+    position: fixed;
+    top: calc(max(12px, env(safe-area-inset-top)) + 54px);
+    left: max(12px, env(safe-area-inset-left));
+    z-index: 60;
+    display: grid;
+    gap: 5px;
+    width: 52px;
+    padding: 4px;
+    background: color-mix(in srgb, var(--card) 96%, transparent);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    box-shadow: 0 20px 48px #0006;
+    backdrop-filter: blur(18px);
+    transform-origin: top left;
+    animation: mobile-menu-enter .2s cubic-bezier(.2, .8, .25, 1);
+  }
+  .phone-ui .mobile-source-shortcuts button {
+    display: grid;
+    place-items: center;
+    width: 42px;
+    height: 42px;
+    padding: 0;
+    color: var(--muted);
+    background: transparent;
+    border-radius: 8px;
+  }
+  .phone-ui .mobile-source-shortcuts button.active {
+    background: #eee2be;
+    box-shadow: inset 0 0 0 1px #dbc58c;
+  }
+  .phone-ui.dark .mobile-source-shortcuts { background: #111319f2; border-color: #30343e; box-shadow: 0 20px 48px #000a; }
+  .phone-ui.dark .mobile-source-shortcuts button.active { background: #202433; box-shadow: inset 0 0 0 1px #7185bc66, 0 0 13px #7189cd35; }
+  .phone-ui .mobile-source-shortcuts .sidebar-source-icon { width: 22px; height: 22px; }
+  .phone-ui .mobile-source-shortcuts .sidebar-pixiv-icon { transform: scale(.86); }
   .phone-ui .sidebar {
     top: calc(max(12px, env(safe-area-inset-top)) + 54px);
     right: max(12px, env(safe-area-inset-right));
@@ -1126,6 +1189,7 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
   }
   .phone-ui .sidebar.mobile-open { animation: mobile-menu-enter .2s cubic-bezier(.2, .8, .25, 1); }
   .phone-ui .sidebar .brand { display: none; }
+  .phone-ui .sidebar .source-nav-group { display: none; }
   .phone-ui .main-nav,
   .phone-ui .source-nav-group,
   .phone-ui .source-nav-children { gap: 5px; }
@@ -1586,7 +1650,7 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
   .phone-ui .masonry-video-mark { right: 6px; bottom: 6px; width: 25px; height: 25px; }
   .phone-ui .masonry-select-control { top: 6px; right: 6px; }
   .phone-ui .mobile-post-detail-page { width: 100%; margin: 0; padding: env(safe-area-inset-top) 0 0; }
-  .phone-ui .mobile-post-detail-head { position: sticky; top: 0; z-index: 5; }
+  .phone-ui .mobile-post-detail-head { position: sticky; top: 0; z-index: 5; padding-right: 62px; padding-left: 62px; }
 
   .phone-ui .subscription-list-heading { grid-template-columns: minmax(0, 1fr) auto; align-items: end; }
   .phone-ui .subscription-list-heading p { display: none; }

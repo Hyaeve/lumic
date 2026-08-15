@@ -50,6 +50,7 @@ const activeNav = ref('all')
 const activeSource = ref('all')
 const sourcesExpanded = ref(true)
 const mobileMenuOpen = ref(false)
+const mobileSourcesOpen = ref(false)
 const showBrandMenu = ref(false)
 const phonePortrait = ref(false)
 const selectedAuthor = ref(null)
@@ -216,16 +217,17 @@ const filteredPosts = computed(() => {
 })
 const effectiveTimelineView = computed(() => timelineView.value)
 const isMasonryView = computed(() => effectiveTimelineView.value === 'masonry')
+const mobileAtAllTimeline = computed(() => activeNav.value === 'all' && activeSource.value === 'all' && !showSettings.value && !masonryDetailPost.value)
 const visiblePosts = computed(() => filteredPosts.value.slice(timelineStart.value, timelineEnd.value))
 function estimateMasonryPostHeight(post) {
   const width = masonryColumnWidth.value
   const inset = phonePortrait.value ? 9 : 12
   let height = inset * 2 + 40
-  const firstMedia = post.media?.[0]
+  const firstMedia = masonryCover(post)
   const firstVideo = primaryVideo(post)
   const firstPoster = firstVideo?.poster
   if (firstMedia || firstVideo) {
-    const ratioKey = `${post.id}:${firstMedia ? 0 : 'video'}`
+    const ratioKey = `${post.id}:${masonryCoverIsVideo(post) ? 'video' : 0}`
     const ratio = mediaRatios.value[ratioKey] || videoRatios.value[post.id] || (firstMedia ? (mediaShapes.value[`${post.id}:0`] === 'portrait' ? 0.74 : mediaShapes.value[`${post.id}:0`] === 'landscape' ? 1.42 : 1) : 16 / 9)
     height += Math.min(width * 1.75, Math.max(width * 0.56, width / ratio)) + 9
   }
@@ -356,6 +358,7 @@ async function logout() {
   } finally {
     showBrandMenu.value = false
     mobileMenuOpen.value = false
+    mobileSourcesOpen.value = false
     authenticated.value = false
     posts.value = []
     feeds.value = []
@@ -472,6 +475,7 @@ async function syncNow() {
 }
 async function openSettings(_section = 'settings', updateHistory = true) {
   mobileMenuOpen.value = false
+  mobileSourcesOpen.value = false
   showBrandMenu.value = false
   settingsTab.value = 'settings'; showSettings.value = true; activeNav.value = 'settings'; settingsError.value = ''; proxyMessage.value = ''; pixivError.value = ''; weiboError.value = ''
   if (updateHistory) updateRoute('/settings')
@@ -1134,7 +1138,23 @@ function stopLightboxGesture(event) {
 }
 function closeMobileNavigationOnInputFocus() {
   timelineSearchFocused.value = true
-  if (phonePortrait.value) mobileMenuOpen.value = false
+  if (phonePortrait.value) {
+    mobileMenuOpen.value = false
+    mobileSourcesOpen.value = false
+  }
+}
+function toggleMobileTimelineShortcut() {
+  mobileMenuOpen.value = false
+  if (!mobileAtAllTimeline.value) {
+    mobileSourcesOpen.value = false
+    navigateTo('all', 'all')
+    return
+  }
+  mobileSourcesOpen.value = !mobileSourcesOpen.value
+}
+function navigateToMobileSource(source) {
+  mobileSourcesOpen.value = false
+  navigateTo('source', source)
 }
 function releaseTimelineSearchFocus() {
   timelineSearchFocused.value = false
@@ -1345,10 +1365,10 @@ function mediaShape(post, mediaIndex) {
   return mediaShapes.value[`${post.id}:${mediaIndex}`] || 'unknown'
 }
 function masonryCover(post) {
-  return post.media?.[0] || primaryVideo(post)?.poster || ''
+  return primaryVideo(post)?.poster || post.media?.[0] || ''
 }
 function masonryCoverIsVideo(post) {
-  return !post.media?.length && Boolean(primaryVideo(post))
+  return Boolean(primaryVideo(post)?.poster)
 }
 function masonryPostHasVideo(post) {
   return Boolean(primaryVideo(post))
@@ -1505,7 +1525,7 @@ function previewMedia(media) {
   const value = String(media || '')
   if (!value.startsWith('/flow/')) return value
   const path = value.split('?', 1)[0]
-  return `/preview/${path.slice('/flow/'.length)}?v=4`
+  return `/preview/${path.slice('/flow/'.length)}?v=${phonePortrait.value ? 'mobile-1' : '4'}${phonePortrait.value ? '&mobile=1' : ''}`
 }
 function scheduleTransient(callback, delay) {
   const timer = window.setTimeout(() => {
@@ -1565,12 +1585,13 @@ function navigateTo(nav, source = activeSource.value) {
   activeSource.value = source
   selectedAuthor.value = null
   mobileMenuOpen.value = false
+  mobileSourcesOpen.value = false
   const path = nav === 'source' ? `/source/${source}` : nav === 'liked' ? '/favorites' : nav === 'pulls' ? '/pulls' : '/'
   updateRoute(path)
   if (nav === 'pulls') void Promise.all([loadFeeds(), loadPlatformAccounts()])
 }
 function openTag(tag) {
-  stopSelection(); masonryDetailPost.value = null; showSettings.value = false; selectedAuthor.value = null; selectedTag.value = tag; activeNav.value = 'tag'; activeSource.value = 'all'
+  stopSelection(); masonryDetailPost.value = null; showSettings.value = false; selectedAuthor.value = null; selectedTag.value = tag; activeNav.value = 'tag'; activeSource.value = 'all'; mobileSourcesOpen.value = false
   updateRoute(`/tag/${encodeURIComponent(tag)}`)
 }
 function masonryMediaPending(element) {
@@ -1663,6 +1684,7 @@ function updatePhonePortrait() {
   if (phonePortrait.value === nextPhonePortrait) return
   phonePortrait.value = nextPhonePortrait
   mobileMenuOpen.value = false
+  mobileSourcesOpen.value = false
   if (lightbox.value.open && !nextPhonePortrait) showLightboxDock(true)
   if (nextPhonePortrait && masonryDetailPost.value && !window.location.pathname.startsWith('/post/')) {
     mobilePostReturnPath.value = window.location.pathname
@@ -1681,6 +1703,7 @@ function openPhoneDefaultTimeline() {
   updateRoute('/', true)
 }
 function openAuthor(post) {
+  mobileSourcesOpen.value = false
   masonryDetailPost.value = null
   authorReturnState.value = { nav: activeNav.value, source: activeSource.value }
   showSettings.value = false
@@ -1821,10 +1844,16 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
     </div>
   </div>
   <div v-else class="app-shell" :class="{ dark: isDark, 'lightbox-active': lightbox.open, 'phone-ui': phonePortrait, 'timeline-search-focused': timelineSearchFocused }" @click="showBrandMenu = false">
-    <button v-if="phonePortrait && !timelineSearchFocused && !masonryDetailPost && !selectedPlatform && !credentialPlatform && !showFeedSettings" class="mobile-menu-toggle" type="button" :class="{ open: mobileMenuOpen }" :aria-expanded="mobileMenuOpen" :title="mobileMenuOpen ? '关闭导航' : '打开导航'" :aria-label="mobileMenuOpen ? '关闭导航' : '打开导航'" @pointerdown.stop @click.stop="mobileMenuOpen = !mobileMenuOpen">
+    <button v-if="phonePortrait && !lightbox.open" class="mobile-timeline-toggle" type="button" :class="{ open: mobileSourcesOpen, active: mobileAtAllTimeline }" :aria-expanded="mobileSourcesOpen" :title="mobileAtAllTimeline ? (mobileSourcesOpen ? '收起平台动态' : '展开平台动态') : '返回全部动态'" :aria-label="mobileAtAllTimeline ? (mobileSourcesOpen ? '收起平台动态' : '展开平台动态') : '返回全部动态'" @pointerdown.stop @click.stop="toggleMobileTimelineShortcut">
+      <span class="nav-line-symbol nav-mask-symbol" :style="{ '--nav-mask': `url(${timelineNavIcon})` }" aria-hidden="true"></span>
+    </button>
+    <nav v-if="phonePortrait && mobileSourcesOpen && !lightbox.open" class="mobile-source-shortcuts" aria-label="平台动态">
+      <button v-for="(meta, key) in sourceMeta" :key="`mobile-source-${key}`" type="button" :class="{ active: activeNav === 'source' && activeSource === key }" :title="`查看${meta.label}动态`" :aria-label="`查看${meta.label}动态`" @click.stop="navigateToMobileSource(key)"><img :class="['sidebar-source-icon', `sidebar-${key}-icon`]" :src="meta.lineImage" alt=""></button>
+    </nav>
+    <button v-if="phonePortrait && !lightbox.open" class="mobile-menu-toggle" type="button" :class="{ open: mobileMenuOpen }" :aria-expanded="mobileMenuOpen" :title="mobileMenuOpen ? '关闭导航' : '打开导航'" :aria-label="mobileMenuOpen ? '关闭导航' : '打开导航'" @pointerdown.stop @click.stop="mobileSourcesOpen = false; mobileMenuOpen = !mobileMenuOpen">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path class="menu-line menu-line-top" d="M5 7h14"/><path class="menu-line menu-line-middle" d="M5 12h14"/><path class="menu-line menu-line-bottom" d="M5 17h14"/></svg>
     </button>
-    <button v-if="mobileMenuOpen" class="mobile-menu-scrim" type="button" aria-label="关闭导航" @click="mobileMenuOpen = false"></button>
+    <button v-if="mobileMenuOpen || mobileSourcesOpen" class="mobile-menu-scrim" type="button" aria-label="关闭导航" @click="mobileMenuOpen = false; mobileSourcesOpen = false"></button>
     <aside class="sidebar" :class="{ 'mobile-open': mobileMenuOpen }">
       <div class="brand" @click.stop>
         <button class="brand-mark-button" type="button" :aria-expanded="showBrandMenu" title="账号菜单" aria-label="打开账号菜单" @click="showBrandMenu = !showBrandMenu"><span class="brand-mark">✦</span></button>
@@ -1964,7 +1993,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
   <label v-if="selectionMode" class="post-select-control masonry-select-control" :title="`选择 ${item.post.author} 的这条动态`" @click.prevent><input type="checkbox" :checked="selectedPostIds.includes(item.post.id)" tabindex="-1"><span></span></label>
   <div v-if="masonryCover(item.post)" class="masonry-cover">
     <img :src="previewMedia(masonryCover(item.post))" alt="" loading="lazy" decoding="async" fetchpriority="low" @load="setMasonryCoverRatio(item.post, $event, masonryCoverIsVideo(item.post))">
-    <span v-if="item.post.media?.length > 1" class="masonry-media-count">1 / {{ item.post.media.length }}</span>
+    <span v-if="!masonryCoverIsVideo(item.post) && item.post.media?.length > 1" class="masonry-media-count">1 / {{ item.post.media.length }}</span>
     <span v-if="masonryPostHasVideo(item.post)" class="masonry-video-mark" aria-label="视频动态"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 7 8 5-8 5Z"/></svg></span>
   </div>
   <div v-else-if="primaryVideo(item.post)" class="masonry-cover masonry-video-cover">

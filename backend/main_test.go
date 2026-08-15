@@ -127,6 +127,26 @@ func TestMediaPreviewHandlerCompressesAndCleansCache(t *testing.T) {
 	if _, err := os.Stat(previewPath); err != nil {
 		t.Fatalf("preview cache missing: %v", err)
 	}
+	mobileRequest := httptest.NewRequest(http.MethodGet, "/preview/weibo/author/post.png?mobile=1", nil)
+	mobileResponse := httptest.NewRecorder()
+	mediaPreviewHandler(mobileResponse, mobileRequest)
+	if mobileResponse.Code != http.StatusOK {
+		t.Fatalf("unexpected mobile preview response: status=%d", mobileResponse.Code)
+	}
+	mobileConfig, _, err := image.DecodeConfig(bytes.NewReader(mobileResponse.Body.Bytes()))
+	if err != nil {
+		t.Fatalf("decode mobile preview: %v", err)
+	}
+	if mobileConfig.Width != 720 || mobileConfig.Height != 480 {
+		t.Fatalf("unexpected mobile preview dimensions: %dx%d", mobileConfig.Width, mobileConfig.Height)
+	}
+	mobilePreviewPath, ok := mediaPreviewMobileCachePath(root, sourcePath)
+	if !ok {
+		t.Fatal("mobile preview path was rejected")
+	}
+	if _, err := os.Stat(mobilePreviewPath); err != nil {
+		t.Fatalf("mobile preview cache missing: %v", err)
+	}
 
 	if err := deletePostMedia([]string{"/flow/weibo/author/post.png"}); err != nil {
 		t.Fatalf("delete media: %v", err)
@@ -136,6 +156,9 @@ func TestMediaPreviewHandlerCompressesAndCleansCache(t *testing.T) {
 	}
 	if _, err := os.Stat(previewPath); !os.IsNotExist(err) {
 		t.Fatalf("preview cache still exists: %v", err)
+	}
+	if _, err := os.Stat(mobilePreviewPath); !os.IsNotExist(err) {
+		t.Fatalf("mobile preview cache still exists: %v", err)
 	}
 }
 
@@ -165,12 +188,16 @@ func TestCleanupMediaPreviewCacheRemovesExpiredOrphanedAndLegacyFiles(t *testing
 	writeFile(staleSource, now.Add(-60*24*time.Hour))
 	keepPreview, _ := mediaPreviewCachePath(flowRoot, keepSource)
 	stalePreview, _ := mediaPreviewCachePath(flowRoot, staleSource)
+	keepMobilePreview, _ := mediaPreviewMobileCachePath(flowRoot, keepSource)
+	staleMobilePreview, _ := mediaPreviewMobileCachePath(flowRoot, staleSource)
 	orphanPreview := filepath.Join(previewRoot, "weibo", "missing", "orphan.png") + mediaPreviewCacheSuffix
 	legacyPreview := strings.TrimSuffix(keepPreview, mediaPreviewCacheSuffix) + ".v3.jpg"
 	oldTemporary := filepath.Join(previewRoot, "weibo", ".lumic-preview-old.tmp")
 	recentTemporary := filepath.Join(previewRoot, "weibo", ".lumic-preview-recent.tmp")
 	writeFile(keepPreview, now.Add(-7*24*time.Hour))
 	writeFile(stalePreview, now.Add(-31*24*time.Hour))
+	writeFile(keepMobilePreview, now.Add(-7*24*time.Hour))
+	writeFile(staleMobilePreview, now.Add(-31*24*time.Hour))
 	writeFile(orphanPreview, now.Add(-24*time.Hour))
 	writeFile(legacyPreview, now.Add(-24*time.Hour))
 	writeFile(oldTemporary, now.Add(-2*time.Hour))
@@ -180,15 +207,15 @@ func TestCleanupMediaPreviewCacheRemovesExpiredOrphanedAndLegacyFiles(t *testing
 	if err != nil {
 		t.Fatalf("cleanup preview cache: %v", err)
 	}
-	if removed != 4 || reclaimed <= 0 {
+	if removed != 5 || reclaimed <= 0 {
 		t.Fatalf("unexpected cleanup result: removed=%d reclaimed=%d", removed, reclaimed)
 	}
-	for _, retained := range []string{keepPreview, recentTemporary} {
+	for _, retained := range []string{keepPreview, keepMobilePreview, recentTemporary} {
 		if _, err := os.Stat(retained); err != nil {
 			t.Fatalf("expected retained cache %s: %v", retained, err)
 		}
 	}
-	for _, deleted := range []string{stalePreview, orphanPreview, legacyPreview, oldTemporary} {
+	for _, deleted := range []string{stalePreview, staleMobilePreview, orphanPreview, legacyPreview, oldTemporary} {
 		if _, err := os.Stat(deleted); !os.IsNotExist(err) {
 			t.Fatalf("expected cache removal %s: %v", deleted, err)
 		}

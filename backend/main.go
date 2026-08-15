@@ -1850,6 +1850,7 @@ func deletePostMedia(media []string) error {
 			continue
 		}
 		preview, hasPreview := mediaPreviewCachePath(root, absolute)
+		mobilePreview, hasMobilePreview := mediaPreviewMobileCachePath(root, absolute)
 		obsoletePreviews := obsoleteMediaPreviewCachePaths(root, absolute)
 		if info, err := os.Stat(absolute); err == nil {
 			if info.IsDir() {
@@ -1866,6 +1867,11 @@ func deletePostMedia(media []string) error {
 				return err
 			}
 		}
+		if hasMobilePreview {
+			if _, _, err := removeMediaPreviewCacheFile(mobilePreview); err != nil {
+				return err
+			}
+		}
 		for _, obsoletePreview := range obsoletePreviews {
 			if err := os.Remove(obsoletePreview); err != nil && !os.IsNotExist(err) {
 				return err
@@ -1876,13 +1882,16 @@ func deletePostMedia(media []string) error {
 }
 
 const (
-	mediaPreviewMaxDimension    = 900
-	mediaPreviewJPEGQuality     = 88
-	mediaPreviewCacheSuffix     = ".v4.jpg"
-	mediaPreviewMaxAge          = 30 * 24 * time.Hour
-	mediaPreviewTouchInterval   = 24 * time.Hour
-	mediaPreviewCleanupPeriod   = 12 * time.Hour
-	mediaPreviewTemporaryMaxAge = time.Hour
+	mediaPreviewMaxDimension       = 900
+	mediaPreviewJPEGQuality        = 88
+	mediaPreviewCacheSuffix        = ".v4.jpg"
+	mediaPreviewMobileMaxDimension = 720
+	mediaPreviewMobileJPEGQuality  = 80
+	mediaPreviewMobileCacheSuffix  = ".mobile.v1.jpg"
+	mediaPreviewMaxAge             = 30 * 24 * time.Hour
+	mediaPreviewTouchInterval      = 24 * time.Hour
+	mediaPreviewCleanupPeriod      = 12 * time.Hour
+	mediaPreviewTemporaryMaxAge    = time.Hour
 )
 
 type mediaPreviewLock struct {
@@ -1919,6 +1928,14 @@ func acquireMediaPreviewLock(previewPath string) func() {
 }
 
 func mediaPreviewCachePath(root, source string) (string, bool) {
+	return mediaPreviewCachePathWithSuffix(root, source, mediaPreviewCacheSuffix)
+}
+
+func mediaPreviewMobileCachePath(root, source string) (string, bool) {
+	return mediaPreviewCachePathWithSuffix(root, source, mediaPreviewMobileCacheSuffix)
+}
+
+func mediaPreviewCachePathWithSuffix(root, source, suffix string) (string, bool) {
 	relative, err := filepath.Rel(root, source)
 	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		return "", false
@@ -1927,7 +1944,7 @@ func mediaPreviewCachePath(root, source string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	return filepath.Join(previewBase, relative) + mediaPreviewCacheSuffix, true
+	return filepath.Join(previewBase, relative) + suffix, true
 }
 
 func obsoleteMediaPreviewCachePaths(root, source string) []string {
@@ -1951,7 +1968,7 @@ func resizeMediaPreview(source image.Image, width, height int) *image.RGBA {
 	return preview
 }
 
-func generateMediaPreview(sourcePath, previewPath string) error {
+func generateMediaPreview(sourcePath, previewPath string, maxDimension, jpegQuality int) error {
 	sourceFile, err := os.Open(sourcePath)
 	if err != nil {
 		return err
@@ -1966,13 +1983,13 @@ func generateMediaPreview(sourcePath, previewPath string) error {
 	if width <= 0 || height <= 0 {
 		return errors.New("invalid image dimensions")
 	}
-	if width > mediaPreviewMaxDimension || height > mediaPreviewMaxDimension {
+	if width > maxDimension || height > maxDimension {
 		if width >= height {
-			height = max(1, height*mediaPreviewMaxDimension/width)
-			width = mediaPreviewMaxDimension
+			height = max(1, height*maxDimension/width)
+			width = maxDimension
 		} else {
-			width = max(1, width*mediaPreviewMaxDimension/height)
-			height = mediaPreviewMaxDimension
+			width = max(1, width*maxDimension/height)
+			height = maxDimension
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(previewPath), 0700); err != nil {
@@ -1984,7 +2001,7 @@ func generateMediaPreview(sourcePath, previewPath string) error {
 	}
 	temporaryName := temporary.Name()
 	defer os.Remove(temporaryName)
-	if err := jpeg.Encode(temporary, resizeMediaPreview(decoded, width, height), &jpeg.Options{Quality: mediaPreviewJPEGQuality}); err != nil {
+	if err := jpeg.Encode(temporary, resizeMediaPreview(decoded, width, height), &jpeg.Options{Quality: jpegQuality}); err != nil {
 		temporary.Close()
 		return err
 	}
@@ -2011,6 +2028,15 @@ func removeMediaPreviewCacheFile(previewPath string) (int64, bool, error) {
 		return 0, false, err
 	}
 	return info.Size(), true, nil
+}
+
+func mediaPreviewSourceRelative(relative string) (string, bool) {
+	for _, suffix := range []string{mediaPreviewCacheSuffix, mediaPreviewMobileCacheSuffix} {
+		if strings.HasSuffix(relative, suffix) {
+			return strings.TrimSuffix(relative, suffix), true
+		}
+	}
+	return "", false
 }
 
 func cleanupMediaPreviewCache(now time.Time) (int, int64, error) {
@@ -2054,10 +2080,12 @@ func cleanupMediaPreviewCache(now time.Time) (int, int64, error) {
 		switch {
 		case strings.HasPrefix(name, ".lumic-preview-") && strings.HasSuffix(name, ".tmp"):
 			remove = now.Sub(info.ModTime()) >= mediaPreviewTemporaryMaxAge
-		case !strings.HasSuffix(relative, mediaPreviewCacheSuffix):
-			remove = true
 		default:
-			sourceRelative := strings.TrimSuffix(relative, mediaPreviewCacheSuffix)
+			sourceRelative, supported := mediaPreviewSourceRelative(relative)
+			if !supported {
+				remove = true
+				break
+			}
 			sourcePath := filepath.Join(flowBase, sourceRelative)
 			sourceInfo, sourceErr := os.Stat(sourcePath)
 			if os.IsNotExist(sourceErr) || (sourceErr == nil && sourceInfo.IsDir()) {
@@ -2137,7 +2165,13 @@ func mediaPreviewHandler(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	mobile := r.URL.Query().Get("mobile") == "1"
+	maxDimension, jpegQuality := mediaPreviewMaxDimension, mediaPreviewJPEGQuality
 	previewPath, ok := mediaPreviewCachePath(root, sourcePath)
+	if mobile {
+		maxDimension, jpegQuality = mediaPreviewMobileMaxDimension, mediaPreviewMobileJPEGQuality
+		previewPath, ok = mediaPreviewMobileCachePath(root, sourcePath)
+	}
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -2154,7 +2188,7 @@ func mediaPreviewHandler(w http.ResponseWriter, r *http.Request) {
 		mediaPreviewGenerationSlots <- struct{}{}
 		generationErr := func() error {
 			defer func() { <-mediaPreviewGenerationSlots }()
-			return generateMediaPreview(sourcePath, previewPath)
+			return generateMediaPreview(sourcePath, previewPath, maxDimension, jpegQuality)
 		}()
 		if generationErr != nil {
 			w.Header().Set("Cache-Control", "public, max-age=3600")
