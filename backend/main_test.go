@@ -993,6 +993,132 @@ func TestPostDeleteHandlesEncodedFlowURLWithQuery(t *testing.T) {
 	}
 }
 
+func TestAuthorTextArchiveCombinesPostsAndPreservesEmoji(t *testing.T) {
+	root := t.TempDir()
+	oldFlowRoot := flowRoot
+	flowRoot = root
+	t.Cleanup(func() { flowRoot = oldFlowRoot })
+	store := &Store{posts: []Post{
+		{ID: "later", Source: SourceWeibo, Author: "拾光/作者", Caption: "今天很开心 😄 [doge]\n第二行", Published: time.Date(2026, time.August, 13, 9, 30, 0, 0, time.Local)},
+		{ID: "earlier", Source: SourceWeibo, Author: "拾光/作者", Caption: "更早的一条", Published: time.Date(2026, time.August, 12, 8, 0, 0, 0, time.Local)},
+	}}
+
+	changed, err := store.reconcileTextArchives()
+	if err != nil {
+		t.Fatalf("reconcile author text archive: %v", err)
+	}
+	if !changed {
+		t.Fatal("post text paths were not updated")
+	}
+	expectedPublicPath := flowPublicPath(SourceWeibo, "拾光/作者", "post_contents.txt")
+	if store.posts[0].TextFile != expectedPublicPath || store.posts[1].TextFile != expectedPublicPath {
+		t.Fatalf("posts do not share one author archive: %#v", store.posts)
+	}
+	data, err := os.ReadFile(filepath.Join(sourceStoragePath(SourceWeibo, "拾光/作者"), "post_contents.txt"))
+	if err != nil {
+		t.Fatalf("read archived text: %v", err)
+	}
+	want := "[2026-08-12 08:00:00]\n更早的一条\n\n[2026-08-13 09:30:00]\n今天很开心 😄 [doge]\n第二行\n"
+	if got := string(data); got != want {
+		t.Fatalf("archived text changed: got %q want %q", got, want)
+	}
+}
+
+func TestMergePostsRebuildsSingleAuthorTextArchive(t *testing.T) {
+	root := t.TempDir()
+	oldFlowRoot := flowRoot
+	flowRoot = root
+	t.Cleanup(func() { flowRoot = oldFlowRoot })
+	published := time.Date(2026, time.August, 13, 10, 0, 0, 0, time.Local)
+	store := &Store{posts: []Post{{ID: "first", Source: SourceBilibili, Author: "同日作者", Caption: "第一条", Published: published}}, file: filepath.Join(root, "content.json")}
+	if _, err := store.reconcileTextArchives(); err != nil {
+		t.Fatal(err)
+	}
+	_, err := store.mergePosts([]Post{
+		{ID: "first", Source: SourceBilibili, Author: "同日作者", Caption: "更新后的第一条", Published: published},
+		{ID: "second", Source: SourceBilibili, Author: "同日作者", Caption: "第二条", Published: published.Add(time.Hour)},
+	})
+	if err != nil {
+		t.Fatalf("merge posts: %v", err)
+	}
+	if store.posts[0].TextFile == "" || store.posts[0].TextFile != store.posts[1].TextFile {
+		t.Fatalf("merged posts do not share one archive: %#v", store.posts)
+	}
+	data, err := os.ReadFile(filepath.Join(sourceStoragePath(SourceBilibili, "同日作者"), "post_contents.txt"))
+	if err != nil || !bytes.Contains(data, []byte("更新后的第一条")) || !bytes.Contains(data, []byte("第二条")) {
+		t.Fatalf("updated author archive mismatch: data=%q err=%v", data, err)
+	}
+}
+
+func TestLoadStoreFileMergesLegacyTextArchivesAndDeleteRebuildsIt(t *testing.T) {
+	root := t.TempDir()
+	oldFlowRoot := flowRoot
+	flowRoot = filepath.Join(root, "flow")
+	t.Cleanup(func() { flowRoot = oldFlowRoot })
+	path := filepath.Join(root, "content.json")
+	authorDirectory := sourceStoragePath(SourcePixiv, "历史画师")
+	if err := os.MkdirAll(authorDirectory, 0755); err != nil {
+		t.Fatal(err)
+	}
+	legacyFirst := filepath.Join(authorDirectory, "历史画师-20260812.txt")
+	legacySecond := filepath.Join(authorDirectory, "历史画师-20260813.txt")
+	if err := os.WriteFile(legacyFirst, []byte("旧文件一"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacySecond, []byte("旧文件二"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	legacy := ContentData{Posts: []Post{
+		{ID: "legacy-first", Source: SourcePixiv, Author: "历史画师", Caption: "旧动态正文 🌙", Published: time.Date(2026, time.August, 12, 8, 0, 0, 0, time.Local), TextFile: flowPublicPath(SourcePixiv, "历史画师", filepath.Base(legacyFirst))},
+		{ID: "legacy-second", Source: SourcePixiv, Author: "历史画师", Caption: "另一条正文", Published: time.Date(2026, time.August, 13, 8, 0, 0, 0, time.Local), TextFile: flowPublicPath(SourcePixiv, "历史画师", filepath.Base(legacySecond))},
+	}, Feeds: []SourceConfig{}}
+	data, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := loadStoreFile(path)
+	if err != nil {
+		t.Fatalf("load store: %v", err)
+	}
+	if len(store.posts) != 2 || store.posts[0].TextFile == "" || store.posts[0].TextFile != store.posts[1].TextFile {
+		t.Fatalf("text archive path was not backfilled: %#v", store.posts)
+	}
+	textPath, ok := localFlowArchivePath(store.posts[0].TextFile)
+	if !ok {
+		t.Fatalf("invalid archived text path: %q", store.posts[0].TextFile)
+	}
+	if archived, readErr := os.ReadFile(textPath); readErr != nil || !bytes.Contains(archived, []byte("旧动态正文 🌙")) || !bytes.Contains(archived, []byte("另一条正文")) {
+		t.Fatalf("backfilled text mismatch: data=%q err=%v", archived, readErr)
+	}
+	if _, err := os.Stat(legacyFirst); !os.IsNotExist(err) {
+		t.Fatalf("first per-post archive was not removed: %v", err)
+	}
+	if _, err := os.Stat(legacySecond); !os.IsNotExist(err) {
+		t.Fatalf("second per-post archive was not removed: %v", err)
+	}
+	persisted, err := os.ReadFile(path)
+	if err != nil || !bytes.Contains(persisted, []byte(`"textFile"`)) {
+		t.Fatalf("text archive path was not persisted: data=%s err=%v", persisted, err)
+	}
+	if deleted, deleteErr := store.deletePosts([]string{"legacy-first"}, "", ""); deleteErr != nil || deleted != 1 {
+		t.Fatalf("delete post: deleted=%d err=%v", deleted, deleteErr)
+	}
+	remaining, err := os.ReadFile(textPath)
+	if err != nil || bytes.Contains(remaining, []byte("旧动态正文 🌙")) || !bytes.Contains(remaining, []byte("另一条正文")) {
+		t.Fatalf("author archive was not rebuilt after deleting one post: data=%q err=%v", remaining, err)
+	}
+	if deleted, deleteErr := store.deletePosts([]string{"legacy-second"}, "", ""); deleteErr != nil || deleted != 1 {
+		t.Fatalf("delete final post: deleted=%d err=%v", deleted, deleteErr)
+	}
+	if _, err := os.Stat(textPath); !os.IsNotExist(err) {
+		t.Fatalf("empty author archive was not deleted: %v", err)
+	}
+}
+
 func TestRegularFeedSyncAndDelete(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "content.json")
 	store := &Store{posts: []Post{}, feeds: []SourceConfig{{ID: "feed-demo", Source: SourceBilibili, Name: "演示来源", Enabled: true}}, file: path}

@@ -58,6 +58,7 @@ type Post struct {
 	Avatar           string      `json:"avatar"`
 	Caption          string      `json:"caption"`
 	Emojis           []PostEmoji `json:"emojis,omitempty"` // Legacy image metadata, removed while loading.
+	TextFile         string      `json:"textFile,omitempty"`
 	Tags             []string    `json:"tags"`
 	Media            []string    `json:"media"`
 	OriginalURL      string      `json:"originalUrl,omitempty"`
@@ -1094,6 +1095,11 @@ func loadStoreFile(path string) (*Store, error) {
 		if cleanupErr != nil {
 			return nil, fmt.Errorf("remove legacy emoji images: %w", cleanupErr)
 		}
+		textChanged, textErr := store.reconcileTextArchives()
+		if textErr != nil {
+			return nil, fmt.Errorf("archive post text: %w", textErr)
+		}
+		changed = changed || textChanged
 		if changed {
 			store.Lock()
 			cleanupErr = store.saveLocked()
@@ -1135,6 +1141,10 @@ func (s *Store) removeLegacyEmojiImages() (bool, error) {
 	return changed, nil
 }
 
+func (s *Store) reconcileTextArchives() (bool, error) {
+	return s.reconcileTextArchivesFor(nil)
+}
+
 func (s *Store) saveLocked() error {
 	if s.file == "" {
 		return nil
@@ -1157,14 +1167,20 @@ func (s *Store) mergePosts(incoming []Post) (int, error) {
 		indexes[post.ID] = index
 	}
 	previous := append([]Post(nil), s.posts...)
+	affectedArchives := make(map[textArchiveKey]bool)
 	added, changed := 0, false
 	for _, post := range incoming {
 		if post.ID == "" {
 			continue
 		}
+		affectedArchives[textArchiveKeyForPost(post)] = true
 		post.Emojis = nil
 		if index, exists := indexes[post.ID]; exists {
 			stored := s.posts[index]
+			affectedArchives[textArchiveKeyForPost(stored)] = true
+			if post.TextFile == "" {
+				post.TextFile = stored.TextFile
+			}
 			post.FeedIDs = mergeUniqueStrings(stored.FeedIDs, post.FeedIDs)
 			post.Tags = mergeUniqueStrings(stored.Tags, post.Tags)
 			post.FavoriteExplicit = stored.FavoriteExplicit
@@ -1188,6 +1204,10 @@ func (s *Store) mergePosts(incoming []Post) (int, error) {
 		return 0, nil
 	}
 	sort.SliceStable(s.posts, func(i, j int) bool { return s.posts[i].Published.After(s.posts[j].Published) })
+	if _, err := s.reconcileTextArchivesFor(affectedArchives); err != nil {
+		s.posts = previous
+		return 0, err
+	}
 	if err := s.saveLocked(); err != nil {
 		s.posts = previous
 		return 0, err
@@ -1209,6 +1229,10 @@ func (s *Store) rewriteMediaPrefix(oldPrefix, newPrefix string) error {
 				changed = true
 			}
 		}
+		if strings.HasPrefix(s.posts[postIndex].TextFile, oldPrefix) {
+			s.posts[postIndex].TextFile = newPrefix + strings.TrimPrefix(s.posts[postIndex].TextFile, oldPrefix)
+			changed = true
+		}
 	}
 	if !changed {
 		return nil
@@ -1225,6 +1249,9 @@ func (s *Store) reconcileWeiboLikesPosts(feed SourceConfig) error {
 	for index := range s.posts {
 		post := &s.posts[index]
 		belongsToSource := containsString(post.FeedIDs, feed.ID)
+		if !belongsToSource && strings.HasPrefix(post.TextFile, prefix) {
+			belongsToSource = true
+		}
 		if !belongsToSource {
 			for _, media := range post.Media {
 				if strings.HasPrefix(media, prefix) {
@@ -1370,6 +1397,9 @@ func postBelongsToSourcePath(post *Post, feed SourceConfig) bool {
 	}
 	if strings.HasPrefix(feed.ID, "weibo-likes-") {
 		prefix := flowPublicPath(SourceWeibo, canonicalSourceName(feed), "")
+		if strings.HasPrefix(post.TextFile, prefix) {
+			return true
+		}
 		for _, media := range post.Media {
 			if strings.HasPrefix(media, prefix) {
 				return true
@@ -1384,6 +1414,9 @@ func postBelongsToSourcePath(post *Post, feed SourceConfig) bool {
 		return true
 	}
 	prefix := flowPublicPath(feed.Source, feed.Name, "")
+	if strings.HasPrefix(post.TextFile, prefix) {
+		return true
+	}
 	for _, media := range post.Media {
 		if strings.HasPrefix(media, prefix) {
 			return true
@@ -1436,8 +1469,10 @@ func (s *Store) deletePosts(ids []string, source Source, author string) (int, er
 		}
 		return 0, os.ErrNotExist
 	}
+	affectedArchives := make(map[textArchiveKey]bool)
 	for _, post := range removed {
 		media := append([]string(nil), post.Media...)
+		affectedArchives[textArchiveKeyForPost(post)] = true
 		for _, emoji := range post.Emojis {
 			media = append(media, emoji.URL)
 		}
@@ -1447,6 +1482,12 @@ func (s *Store) deletePosts(ids []string, source Source, author string) (int, er
 	}
 	previous := s.posts
 	s.posts = kept
+	if author == "" {
+		if _, err := s.reconcileTextArchivesFor(affectedArchives); err != nil {
+			s.posts = previous
+			return 0, err
+		}
+	}
 	if err := s.saveLocked(); err != nil {
 		s.posts = previous
 		return 0, err
@@ -2703,6 +2744,150 @@ func postMediaBaseName(post Post, mediaIndex int) string {
 	return base
 }
 
+type textArchiveKey struct {
+	Source          Source
+	AuthorDirectory string
+}
+
+func textArchiveKeyForPost(post Post) textArchiveKey {
+	return textArchiveKey{Source: post.Source, AuthorDirectory: safeFlowDirectoryName(post.Author)}
+}
+
+func textArchivePaths(key textArchiveKey) (string, string) {
+	fileName := "post_contents.txt"
+	localPath := filepath.Join(flowRoot, string(key.Source), key.AuthorDirectory, fileName)
+	publicPath := flowPublicPath(key.Source, key.AuthorDirectory, fileName)
+	return localPath, publicPath
+}
+
+func localFlowArchivePath(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", false
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || (parsed.Scheme != "" && parsed.Scheme != "file") {
+		return "", false
+	}
+	candidate := parsed.Path
+	if strings.HasPrefix(filepath.ToSlash(candidate), "/flow/") {
+		candidate = filepath.Join(flowRoot, strings.TrimPrefix(filepath.ToSlash(candidate), "/flow/"))
+	}
+	root, rootErr := filepath.Abs(flowRoot)
+	absolute, pathErr := filepath.Abs(filepath.FromSlash(candidate))
+	if rootErr != nil || pathErr != nil {
+		return "", false
+	}
+	relative, relErr := filepath.Rel(root, absolute)
+	if relErr != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return absolute, true
+}
+
+func sameLocalFlowArchivePath(left, right string) bool {
+	leftPath, leftOK := localFlowArchivePath(left)
+	rightPath, rightOK := localFlowArchivePath(right)
+	return leftOK && rightOK && strings.EqualFold(filepath.Clean(leftPath), filepath.Clean(rightPath))
+}
+
+func renderAuthorTextArchive(posts []Post) []byte {
+	ordered := append([]Post(nil), posts...)
+	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Published.Before(ordered[j].Published) })
+	var content strings.Builder
+	for _, post := range ordered {
+		caption := cleanRemoteText(post.Caption)
+		if caption == "" {
+			continue
+		}
+		if content.Len() > 0 {
+			content.WriteString("\n\n")
+		}
+		if post.Published.IsZero() {
+			content.WriteString("[未记录时间]\n")
+		} else {
+			content.WriteString("[")
+			content.WriteString(post.Published.Format("2006-01-02 15:04:05"))
+			content.WriteString("]\n")
+		}
+		content.WriteString(caption)
+	}
+	if content.Len() > 0 {
+		content.WriteString("\n")
+	}
+	return []byte(content.String())
+}
+
+func (s *Store) reconcileTextArchivesFor(selected map[textArchiveKey]bool) (bool, error) {
+	keys := make(map[textArchiveKey]bool)
+	groups := make(map[textArchiveKey][]int)
+	previousPaths := make(map[textArchiveKey]map[string]bool)
+	changed := false
+	if selected != nil {
+		for key := range selected {
+			keys[key] = true
+		}
+	}
+	for index := range s.posts {
+		key := textArchiveKeyForPost(s.posts[index])
+		if selected != nil && !selected[key] {
+			continue
+		}
+		keys[key] = true
+		if s.posts[index].TextFile != "" {
+			if previousPaths[key] == nil {
+				previousPaths[key] = make(map[string]bool)
+			}
+			previousPaths[key][s.posts[index].TextFile] = true
+		}
+		caption := cleanRemoteText(s.posts[index].Caption)
+		if caption != s.posts[index].Caption {
+			s.posts[index].Caption = caption
+			changed = true
+		}
+		if caption == "" {
+			if s.posts[index].TextFile != "" {
+				s.posts[index].TextFile = ""
+				changed = true
+			}
+			continue
+		}
+		groups[key] = append(groups[key], index)
+	}
+	for key := range keys {
+		localPath, publicPath := textArchivePaths(key)
+		indexes := groups[key]
+		if len(indexes) == 0 {
+			if err := deletePostMedia([]string{publicPath}); err != nil {
+				return false, err
+			}
+		} else {
+			posts := make([]Post, 0, len(indexes))
+			for _, index := range indexes {
+				posts = append(posts, s.posts[index])
+			}
+			if err := atomicWriteFile(localPath, renderAuthorTextArchive(posts), 0644); err != nil {
+				return false, err
+			}
+			for _, index := range indexes {
+				if s.posts[index].TextFile != publicPath {
+					s.posts[index].TextFile = publicPath
+					changed = true
+				}
+			}
+		}
+		for previousPath := range previousPaths[key] {
+			if sameLocalFlowArchivePath(previousPath, publicPath) {
+				continue
+			}
+			if err := deletePostMedia([]string{previousPath}); err != nil {
+				return false, err
+			}
+		}
+	}
+	return changed, nil
+}
+
 func availableMediaTargetBase(directory, base string) string {
 	target := filepath.Join(directory, base)
 	for sequence := 2; ; sequence++ {
@@ -3208,6 +3393,7 @@ func (s *Store) postsAfterOrCaptionRepair(posts []Post, boundary time.Time) []Po
 		if len(stored.Media) > 0 {
 			post.Media = append([]string(nil), stored.Media...)
 		}
+		post.TextFile = stored.TextFile
 		post.Emojis = nil
 		if strings.HasPrefix(stored.Avatar, "/flow/") {
 			post.Avatar = stored.Avatar
@@ -3243,6 +3429,7 @@ func (s *Store) postsAfterOrSourceMembership(posts []Post, boundary time.Time, f
 		if len(stored.Media) > 0 {
 			post.Media = append([]string(nil), stored.Media...)
 		}
+		post.TextFile = stored.TextFile
 		post.Emojis = nil
 		if strings.HasPrefix(stored.Avatar, "/flow/") {
 			post.Avatar = stored.Avatar
