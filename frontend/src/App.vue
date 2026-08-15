@@ -1674,7 +1674,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
   <div v-else-if="!authenticated" :class="['login-shell', { 'phone-ui-login': phonePortrait }]">
     <div class="login-panel">
       <div class="login-brand">
-<span class="brand-mark">✦</span>
+<img class="login-logo" src="/lumic-logo.png" alt="Lumic Logo">
 <strong>Lumic</strong>
 <small>拾光</small>
 </div>
