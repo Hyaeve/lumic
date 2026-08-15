@@ -123,9 +123,12 @@ const estimatedPostHeight = 560
 const timelineOverscan = 5
 let phonePortraitQuery = null
 let timelineFrame = 0
+let lastTimelineScrollY = 0
+let masonryScrollDirection = 'idle'
 let postResizeObserver = null
 let sessionPollTimer = null
 const observedPostElements = new Map()
+const animatedMasonryPostIds = new Set()
 const transientTimers = new Set()
 const lightbox = ref({ open: false, media: [], index: 0, author: '', scale: 1, rotation: 0, fit: true, x: 0, y: 0, dragging: false, motion: 'enter' })
 const lightboxImageElement = ref(null)
@@ -258,7 +261,7 @@ const hasBilibiliFavoriteOpusSource = computed(() => feeds.value.some(feed => fe
 function isAccountCollectionFeed(feed) {
   return feed?.id?.startsWith('weibo-likes-') || feed?.id?.startsWith('pixiv-bookmarks-') || feed?.id?.startsWith('bili-opus-favorites-')
 }
-function configuredSourceAvatarCandidates(feed, platform) {
+function sourceAvatarCandidates(feed, platform) {
   const candidates = []
   if (isAccountCollectionFeed(feed)) {
     if (feed?.avatar?.startsWith('/flow/')) candidates.push(feed.avatar, platform?.avatar)
@@ -269,15 +272,18 @@ function configuredSourceAvatarCandidates(feed, platform) {
   candidates.push(platform?.image)
   return [...new Set(candidates.filter(Boolean))]
 }
-function configuredSourceAvatar(feed, platform) {
-  return configuredSourceAvatarCandidates(feed, platform)[0] || ''
+function sourceAvatar(feed, platform) {
+  return sourceAvatarCandidates(feed, platform)[0] || ''
 }
-function handleConfiguredSourceAvatarError(event, feed, platform) {
+function handleSourceAvatarError(event, feed, platform) {
   const image = event.currentTarget
-  const candidates = configuredSourceAvatarCandidates(feed, platform)
+  const candidates = sourceAvatarCandidates(feed, platform)
   const nextIndex = Number(image.dataset.fallbackIndex || 0) + 1
   image.dataset.fallbackIndex = String(nextIndex)
   if (candidates[nextIndex]) image.src = candidates[nextIndex]
+}
+function platformCardForSource(source) {
+  return platformCards.value.find(platform => platform.key === source)
 }
 const localGreeting = computed(() => {
   const hour = new Date().getHours()
@@ -1387,7 +1393,7 @@ function masonryItemStyle(item) {
     left: `${item.x}px`,
     top: `${item.y}px`,
     width: `${masonryColumnWidth.value}px`,
-    '--masonry-delay': `${Math.min(item.index % 12, 8) * 24}ms`
+    '--masonry-delay': `${(item.index % 4) * 18}ms`
   }
 }
 function previewMedia(media) {
@@ -1406,6 +1412,9 @@ function scheduleTransient(callback, delay) {
 }
 function prunePostCaches() {
   const activeIds = new Set(posts.value.map(post => String(post.id)))
+  for (const id of animatedMasonryPostIds) {
+    if (!activeIds.has(id)) animatedMasonryPostIds.delete(id)
+  }
   for (const [key, element] of observedPostElements) {
     const id = key.slice(key.indexOf(':') + 1)
     if (activeIds.has(id)) continue
@@ -1477,6 +1486,13 @@ function setPostCard(post, element, layout = 'list') {
   element.dataset.postId = post.id
   element.dataset.layout = layout
   observedPostElements.set(key, element)
+  if (layout === 'masonry' && !animatedMasonryPostIds.has(id)) {
+    animatedMasonryPostIds.add(id)
+    if (masonryScrollDirection !== 'up') {
+      element.classList.add('masonry-card-enter')
+      scheduleTransient(() => element.classList.remove('masonry-card-enter'), 620)
+    }
+  }
   measurePostElement(post, element, layout)
   postResizeObserver?.observe(element)
 }
@@ -1494,13 +1510,19 @@ function updateMasonryMetrics() {
 function updateTimelineWindow() {
   timelineFrame = 0
   if (!filteredPosts.value.length || showSettings.value || activeNav.value === 'pulls') return
+  const currentScrollY = window.scrollY
   if (isMasonryView.value) {
+    const scrollDelta = currentScrollY - lastTimelineScrollY
+    if (scrollDelta > 2) masonryScrollDirection = 'down'
+    else if (scrollDelta < -2) masonryScrollDirection = 'up'
+    lastTimelineScrollY = currentScrollY
     updateMasonryMetrics()
     const listTop = feedListElement.value?.getBoundingClientRect().top + window.scrollY || 0
     masonryViewportTop.value = Math.max(0, window.scrollY - listTop)
     masonryViewportBottom.value = masonryViewportTop.value + window.innerHeight
     return
   }
+  lastTimelineScrollY = currentScrollY
   const listTop = feedListElement.value?.getBoundingClientRect().top + window.scrollY || 0
   const viewportTop = Math.max(0, window.scrollY - listTop)
   const viewportBottom = viewportTop + window.innerHeight
@@ -1529,6 +1551,9 @@ function resetTimelineWindow() {
   timelineEnd.value = Math.min(filteredPosts.value.length, phonePortrait.value ? 7 : 15)
   masonryViewportTop.value = 0
   masonryViewportBottom.value = typeof window === 'undefined' ? 900 : window.innerHeight
+  lastTimelineScrollY = typeof window === 'undefined' ? 0 : window.scrollY
+  masonryScrollDirection = 'idle'
+  animatedMasonryPostIds.clear()
   nextTick(() => { updateMasonryMetrics(); scheduleTimelineWindow() })
 }
 function isPhonePortraitScreen() {
@@ -1859,7 +1884,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
         <div class="platform-source-grid">
           <article v-for="platform in platformCards" :key="platform.key" :class="['platform-source-card', platform.key]" @contextmenu.prevent="openPlatformSettings(platform)">
             <div class="platform-card-head"><img :class="['source-icon', { 'twitter-night-icon': platform.key === 'twitter' && isDark }]" :src="platform.image" :alt="`${platform.label}图标`"><span :class="['connection-dot', { online: platform.configured }]">{{ platform.configured ? '已连接' : '未连接' }}</span></div>
-            <h4>{{ platform.label }}</h4><p>{{ platform.description }}</p>
+            <h4>{{ platform.label }}</h4>
             <dl><div><dt>账号</dt><dd>{{ platform.account }}</dd></div><div><dt>订阅来源</dt><dd>{{ platform.feeds.length }} 个</dd></div></dl>
             <button @click="openPlatformSettings(platform)">管理平台 <span>→</span></button>
           </article>
@@ -1868,7 +1893,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
       <div class="section-heading subscription-list-heading"><div><h2>订阅作者</h2><p>查看同步状态并手动拉取内容。</p></div><span>{{ feeds.length }} 个来源</span></div>
       <section class="pull-list">
         <article v-for="feed in feeds" :key="feed.id" class="pull-card">
-          <img class="pull-avatar" :src="feed.avatar || sourceMeta[feed.source]?.image || '/favicon.ico'" :alt="feed.name" @error="$event.target.src = sourceMeta[feed.source]?.image || '/favicon.ico'">
+          <img :key="`${feed.id}:${sourceAvatar(feed, platformCardForSource(feed.source))}`" class="pull-avatar" :src="sourceAvatar(feed, platformCardForSource(feed.source))" data-fallback-index="0" :alt="feed.name" referrerpolicy="no-referrer" @error="handleSourceAvatarError($event, feed, platformCardForSource(feed.source))">
           <div class="pull-info"><div class="pull-title"><strong>{{ feed.name }}</strong><span :class="['source-pill', sourceMeta[feed.source].color]"><img :class="['source-icon', { 'twitter-night-icon': feed.source === 'twitter' && isDark }]" :src="sourceIconFor(feed.source)" :alt="sourceMeta[feed.source].label">{{ sourceMeta[feed.source].label }}</span></div><span class="pull-handle">{{ feed.handle }}</span><small>{{ feed.lastSyncMessage || (feed.lastSyncedAt ? `上次拉取：${relativeTime(feed.lastSyncedAt)}` : '尚未拉取') }}</small></div>
           <div class="pull-status"><i :class="['pull-dot', feed.lastSyncStatus]"></i><span>{{ feed.lastSyncStatus === 'success' ? `新增 ${feed.lastSyncCount || 0} 条` : feed.lastSyncStatus === 'failed' ? '拉取失败' : '待拉取' }}</span></div>
           <div class="pull-actions"><button class="pull-action" :disabled="sourceActionBusy !== ''" :title="sourceActionBusy === `sync:${feed.id}` ? '正在同步' : '立即同步'" @click="syncSource(feed)"><svg :class="{ spin: sourceActionBusy === `sync:${feed.id}` }" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 9a7 7 0 0 1 11.4-2.5L20 9M4 15l2.5 2.5A7 7 0 0 0 17.9 15"/></svg><span>{{ sourceActionBusy === `sync:${feed.id}` ? '同步中' : '立即同步' }}</span></button></div>
@@ -2062,7 +2087,15 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
         </div>
 
         <div v-else-if="credentialPlatform.key === 'pixiv'" class="credential-config-body">
-          <form class="settings-form platform-auth-form pixiv-browser-form" @submit.prevent="savePixivAccount"><label>浏览器 UA</label><input v-model="pixivCredentials.userAgent" required autocomplete="off" placeholder="Mozilla/5.0 ..."><label>浏览器 Baggage</label><textarea v-model="pixivCredentials.baggage" rows="2" autocomplete="off"></textarea><label>浏览器 Cookie</label><textarea v-model="pixivCredentials.cookie" rows="4" required autocomplete="off"></textarea><label>用户 ID</label><input v-model="pixivCredentials.userId" required inputmode="numeric" autocomplete="off"><label>浏览器 Sentry-Trace</label><input v-model="pixivCredentials.sentryTrace" autocomplete="off"><label>浏览器 X-CSRF-TOKEN</label><input v-model="pixivCredentials.csrfToken" autocomplete="off"><button class="login-button" :disabled="pixivBusy">{{ pixivBusy ? '验证中…' : '验证并保存 Pixiv' }}</button></form>
+          <form class="settings-form platform-auth-form pixiv-browser-form" @submit.prevent="savePixivAccount">
+            <label class="credential-field"><span>浏览器 UA</span><input v-model="pixivCredentials.userAgent" required autocomplete="off" placeholder="Mozilla/5.0 ..."></label>
+            <label class="credential-field"><span>用户 ID</span><input v-model="pixivCredentials.userId" required inputmode="numeric" autocomplete="off"></label>
+            <label class="credential-field"><span>浏览器 Baggage</span><textarea v-model="pixivCredentials.baggage" rows="2" autocomplete="off"></textarea></label>
+            <label class="credential-field"><span>浏览器 Cookie</span><textarea v-model="pixivCredentials.cookie" rows="2" required autocomplete="off"></textarea></label>
+            <label class="credential-field"><span>浏览器 Sentry-Trace</span><input v-model="pixivCredentials.sentryTrace" autocomplete="off"></label>
+            <label class="credential-field"><span>浏览器 X-CSRF-TOKEN</span><input v-model="pixivCredentials.csrfToken" autocomplete="off"></label>
+            <button class="login-button" :disabled="pixivBusy">{{ pixivBusy ? '验证中…' : '验证并保存 Pixiv' }}</button>
+          </form>
           <p v-if="pixivError" class="login-error">{{ pixivError }}</p>
         </div>
 
@@ -2093,15 +2126,15 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
         <div class="configured-source-list">
           <div class="configured-source-heading"><h3>已配置作者</h3><span>{{ selectedPlatform.feeds.length }} 个</span></div>
           <article v-for="feed in selectedPlatform.feeds" :key="feed.id">
-            <img :key="`${feed.id}:${configuredSourceAvatar(feed, selectedPlatform)}`" class="configured-source-avatar" :src="configuredSourceAvatar(feed, selectedPlatform)" data-fallback-index="0" :alt="`${feed.name}头像`" @error="handleConfiguredSourceAvatarError($event, feed, selectedPlatform)">
+            <img :key="`${feed.id}:${sourceAvatar(feed, selectedPlatform)}`" class="configured-source-avatar" :src="sourceAvatar(feed, selectedPlatform)" data-fallback-index="0" :alt="`${feed.name}头像`" referrerpolicy="no-referrer" @error="handleSourceAvatarError($event, feed, selectedPlatform)">
             <div><strong>{{ feed.name }}</strong><span>{{ feed.handle }} · {{ feed.schedule }}</span><div v-if="feed.tags?.length" class="source-tag-preview"><b v-for="tag in feed.tags" :key="tag">#{{ tag }}</b></div><small>{{ feed.storagePath || `${selectedPlatform.path}/${feed.name}` }}</small></div>
             <button :class="['source-enabled-toggle', { disabled: !feed.enabled }]" type="button" :disabled="sourceActionBusy !== ''" :title="feed.enabled ? '自动同步已启用，点击停用' : '自动同步已停用，点击启用'" @click="toggleFeedEnabled(feed)"><i></i>{{ sourceActionBusy === `toggle:${feed.id}` ? '保存中' : feed.enabled ? '同步中' : '已停用' }}</button>
             <div class="source-row-actions">
-              <button class="source-icon-action" title="立即拉取最新动态" aria-label="立即拉取最新动态" @click="syncSource(feed)" :disabled="sourceActionBusy !== ''"><svg :class="{ spin: sourceActionBusy === `sync:${feed.id}` }" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 9a7 7 0 0 1 11.4-2.5L20 9M4 15l2.5 2.5A7 7 0 0 0 17.9 15"/></svg></button>
-              <button class="source-icon-action" title="获取历史动态：仅拉取符合当前订阅设置且本地尚未完整归档的内容，已存在的动态自动跳过" aria-label="获取历史动态" @click="syncSource(feed, true)" :disabled="sourceActionBusy !== ''"><svg :class="{ spin: sourceActionBusy === `resync:${feed.id}` }" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg></button>
-              <button class="source-icon-action" title="来源设置" aria-label="来源设置" @click="openFeedSettings(feed)"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg></button>
-              <button class="source-icon-action delete-posts-button" title="删除此作者全部动态及文件" aria-label="删除此作者全部动态及文件" @click="deleteAuthorPosts(feed.source, feed.name)" :disabled="sourceActionBusy !== '' || postActionBusy !== ''"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M6 6l1 15h10l1-15"/><path d="M10 10v7M14 10v7"/></svg></button>
-              <button class="source-icon-action delete-source-button" title="删除订阅来源" aria-label="删除订阅来源" @click="deleteSource(feed)" :disabled="sourceActionBusy !== ''"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+              <button class="source-icon-action" title="立即拉取" aria-label="立即拉取" @click="syncSource(feed)" :disabled="sourceActionBusy !== ''"><svg :class="{ spin: sourceActionBusy === `sync:${feed.id}` }" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 9a7 7 0 0 1 11.4-2.5L20 9M4 15l2.5 2.5A7 7 0 0 0 17.9 15"/></svg></button>
+              <button class="source-icon-action" title="获取历史动态" aria-label="获取历史动态" @click="syncSource(feed, true)" :disabled="sourceActionBusy !== ''"><svg :class="{ spin: sourceActionBusy === `resync:${feed.id}` }" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg></button>
+              <button class="source-icon-action" title="订阅设置" aria-label="订阅设置" @click="openFeedSettings(feed)"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg></button>
+              <button class="source-icon-action delete-posts-button" title="删除全部动态" aria-label="删除全部动态" @click="deleteAuthorPosts(feed.source, feed.name)" :disabled="sourceActionBusy !== '' || postActionBusy !== ''"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M6 6l1 15h10l1-15"/><path d="M10 10v7M14 10v7"/></svg></button>
+              <button class="source-icon-action delete-source-button" title="删除订阅" aria-label="删除订阅" @click="deleteSource(feed)" :disabled="sourceActionBusy !== ''"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
             </div>
           </article>
           <div v-if="!selectedPlatform.feeds.length" class="platform-empty"><span>＋</span><strong>还没有作者来源</strong><p>{{ platformEmptyMessage(selectedPlatform.key) }}</p></div>

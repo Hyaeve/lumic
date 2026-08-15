@@ -468,7 +468,7 @@ func collectionFeedWithAccountProfile(feed SourceConfig, config BilibiliConfig) 
 		avatar = config.Pixiv.Avatar
 		matched = true
 	}
-	if strings.TrimSpace(feed.Avatar) == "" && strings.TrimSpace(avatar) != "" {
+	if strings.TrimSpace(avatar) != "" && !strings.HasPrefix(strings.TrimSpace(feed.Avatar), "/flow/") {
 		feed.Avatar = avatar
 	}
 	if matched {

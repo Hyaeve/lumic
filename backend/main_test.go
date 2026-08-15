@@ -1032,9 +1032,9 @@ func TestCollectionFeedsUseConnectedAccountAvatars(t *testing.T) {
 		Pixiv:       PixivCredentials{UserID: "33", Avatar: "https://i.example.com/pixiv.jpg"},
 	}
 	feeds := []SourceConfig{
-		{ID: bilibiliFavoriteOpusPrefix + "11", Source: SourceBilibili, Name: bilibiliFavoriteOpusName},
-		{ID: "weibo-likes-22", Source: SourceWeibo, Name: weiboLikesName},
-		{ID: "pixiv-bookmarks-33", Source: SourcePixiv, Name: pixivBookmarksName},
+		{ID: bilibiliFavoriteOpusPrefix + "11", Source: SourceBilibili, Name: bilibiliFavoriteOpusName, Avatar: "https://stale.example.com/bili.png"},
+		{ID: "weibo-likes-22", Source: SourceWeibo, Name: weiboLikesName, Avatar: "https://stale.example.com/weibo.png"},
+		{ID: "pixiv-bookmarks-33", Source: SourcePixiv, Name: pixivBookmarksName, Avatar: "https://stale.example.com/pixiv.png"},
 		{ID: "weibo-44", Source: SourceWeibo, Name: "普通订阅", Avatar: "https://i.example.com/author.jpg"},
 	}
 	applyCollectionAccountProfiles(feeds, config)
@@ -1049,6 +1049,10 @@ func TestCollectionFeedsUseConnectedAccountAvatars(t *testing.T) {
 	}
 	if feeds[3].Avatar != "https://i.example.com/author.jpg" {
 		t.Fatalf("regular source avatar changed unexpectedly: %#v", feeds[3])
+	}
+	local := collectionFeedWithAccountProfile(SourceConfig{ID: "weibo-likes-22", Source: SourceWeibo, Name: weiboLikesName, Avatar: "/flow/weibo/%E6%88%91%E7%9A%84%E7%82%B9%E8%B5%9E/avatar.jpg"}, config)
+	if !strings.HasPrefix(local.Avatar, "/flow/") {
+		t.Fatalf("cached collection avatar should remain preferred: %#v", local)
 	}
 }
 
