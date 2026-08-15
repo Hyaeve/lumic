@@ -15,8 +15,8 @@ import subscriptionsNavIcon from '../icon/订阅平台.png'
 import settingsNavIcon from '../icon/设置.png'
 import dayThemeIcon from '../icon/日间模式.png'
 import nightThemeIcon from '../icon/夜间模式.png'
-import newestSortIcon from '../icon/时间排序－倒序.png'
-import oldestSortIcon from '../icon/时间排序－正序.png'
+import newestSortIcon from '../icon/时间排序－正序.png'
+import oldestSortIcon from '../icon/时间排序－倒序.png'
 
 const authenticated = ref(false)
 const sessionChecked = ref(false)
@@ -181,6 +181,13 @@ const localGreeting = computed(() => {
   if (hour < 14) return '中午好'
   if (hour < 18) return '下午好'
   return '晚上好'
+})
+const localSeason = computed(() => {
+  const month = new Date().getMonth() + 1
+  if (month >= 3 && month <= 5) return 'spring'
+  if (month >= 6 && month <= 8) return 'summer'
+  if (month >= 9 && month <= 11) return 'autumn'
+  return 'winter'
 })
 
 async function responseError(response, fallback) {
@@ -1173,7 +1180,13 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); if (sessionPollTi
         <div class="header-actions"><button class="danger-outline-button" :disabled="postActionBusy !== '' || !authorProfile.count" @click="deleteAuthorPosts(authorProfile.source, authorProfile.name)">删除全部动态</button></div>
       </header>
       <header v-else-if="activeNav !== 'liked'" class="topbar timeline-hero">
-<div class="night-sky-decor" aria-hidden="true"><i class="night-moon"></i><i class="night-star star-one"></i><i class="night-star star-two"></i><i class="night-star star-three"></i><i class="night-star star-four"></i></div>
+<div class="seasonal-decor" :class="`season-${localSeason}`" aria-hidden="true">
+  <template v-if="localSeason === 'spring'"><i class="spring-branch"></i><i class="spring-blossom blossom-one"></i><i class="spring-blossom blossom-two"></i><i class="spring-blossom blossom-three"></i><i class="spring-blossom blossom-four"></i><i class="spring-petal petal-one"></i><i class="spring-petal petal-two"></i></template>
+  <template v-else-if="localSeason === 'summer'"><i class="summer-sun"></i><i class="summer-pond"></i><i class="lotus-leaf leaf-one"></i><i class="lotus-leaf leaf-two"></i><i class="summer-lotus"></i><i class="summer-fish fish-one"></i><i class="summer-fish fish-two"></i></template>
+  <template v-else-if="localSeason === 'autumn'"><i class="autumn-glow"></i><i class="autumn-branch"></i><i class="autumn-leaf leaf-one"></i><i class="autumn-leaf leaf-two"></i><i class="autumn-leaf leaf-three"></i><i class="autumn-leaf leaf-four"></i><i class="autumn-leaf leaf-five"></i></template>
+  <template v-else><i class="winter-haze"></i><i class="winter-snowman"></i><i class="winter-ice"></i><i class="winter-snowflake flake-one"></i><i class="winter-snowflake flake-two"></i><i class="winter-snowflake flake-three"></i><i class="winter-snowflake flake-four"></i><i class="winter-snowflake flake-five"></i></template>
+</div>
+<div class="night-sky-decor" aria-hidden="true"><i class="night-haze"></i><i class="night-moon"></i><i class="night-star star-one"></i><i class="night-star star-two"></i><i class="night-star star-three"></i><i class="night-star star-four"></i><i class="night-star star-five"></i><i class="night-star star-six"></i><i class="night-star star-seven"></i><i class="night-star star-eight"></i></div>
 <div class="timeline-hero-copy">
 <p class="eyebrow">SAVED MOMENTS · {{ new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' }) }}</p>
 <h1>{{ selectedTag ? `#${selectedTag}` : `${localGreeting}，拾光者` }}</h1>
