@@ -20,6 +20,7 @@ import oldestSortIcon from '../icon/时间排序－倒序.png'
 import originalSizeIcon from '../icon/原始尺寸.png'
 import rotateLightboxIcon from '../icon/旋转.png'
 import downloadLightboxIcon from '../icon/下载.png'
+import visitPostIcon from '../icon/访问.png'
 
 const authenticated = ref(false)
 const sessionChecked = ref(false)
@@ -296,28 +297,35 @@ function triggerNightMeteorBurst() {
     stopNightMeteorLoop()
     return
   }
-  const count = 1 + Math.floor(Math.random() * 3)
-  const travelX = Math.max(window.innerWidth * 1.12, 780)
-  const travelY = Math.min(Math.max(window.innerHeight * 0.62, 420), 720)
+  const count = 1 + Math.floor(Math.random() * 5)
+  const contentHeight = Math.max(document.querySelector('.content')?.scrollHeight || 0, document.documentElement.scrollHeight, window.innerHeight)
+  const baseDuration = Math.min(13, Math.max(5.5, contentHeight / 540))
+  let maximumDuration = 0
   meteorBurst.value = Array.from({ length: count }, (_, index) => ({
     id: `${Date.now()}-${meteorBurstSequence++}`,
-    style: {
-      '--meteor-top': `${4 + Math.random() * 28}%`,
-      '--meteor-right': `${-8 + Math.random() * 25}%`,
-      '--meteor-width': `${100 + Math.random() * 90}px`,
-      '--meteor-delay': `${index * 0.18 + Math.random() * 0.24}s`,
-      '--meteor-x': `${-(travelX + Math.random() * 260)}px`,
-      '--meteor-y': `${travelY + Math.random() * 120}px`
-    }
+    style: (() => {
+      const top = 8 + Math.random() * 96
+      const duration = baseDuration + Math.random() * 1.8
+      maximumDuration = Math.max(maximumDuration, duration + index * 0.32)
+      return {
+        '--meteor-top': `${top}px`,
+        '--meteor-right': `${-4 + Math.random() * 58}%`,
+        '--meteor-width': `${100 + Math.random() * 105}px`,
+        '--meteor-delay': `${index * 0.32 + Math.random() * 0.3}s`,
+        '--meteor-duration': `${duration}s`,
+        '--meteor-x': `${-Math.max(window.innerWidth * (0.42 + Math.random() * 0.48), 360)}px`,
+        '--meteor-y': `${Math.max(contentHeight - top + 140, window.innerHeight)}px`
+      }
+    })()
   }))
   meteorBurstTimer = window.setTimeout(() => {
     meteorBurst.value = []
-    meteorBurstTimer = window.setTimeout(triggerNightMeteorBurst, 11000 + Math.random() * 15000)
-  }, 2600)
+    meteorBurstTimer = window.setTimeout(triggerNightMeteorBurst, 4200 + Math.random() * 7200)
+  }, maximumDuration * 1000 + 900)
 }
 function startNightMeteorLoop() {
   stopNightMeteorLoop()
-  if (isDark.value) meteorBurstTimer = window.setTimeout(triggerNightMeteorBurst, 900 + Math.random() * 1800)
+  if (isDark.value) meteorBurstTimer = window.setTimeout(triggerNightMeteorBurst, 350 + Math.random() * 750)
 }
 async function syncNow() {
   syncing.value = true
@@ -1410,9 +1418,11 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
             <button class="source-nav-main" :class="{ active: activeNav === 'all' }" @click="navigateTo('all', 'all')"><span class="nav-line-symbol nav-mask-symbol" :style="{ '--nav-mask': `url(${timelineNavIcon})` }" aria-hidden="true"></span> 全部动态</button>
             <button class="source-nav-toggle" type="button" :title="sourcesExpanded ? '收起平台来源' : '展开平台来源'" :aria-expanded="sourcesExpanded" @click="sourcesExpanded = !sourcesExpanded"><svg :class="{ collapsed: !sourcesExpanded }" viewBox="0 0 24 24" aria-hidden="true"><path d="m4 8.5 8 4.3 8-4.3"/></svg></button>
           </div>
-          <div v-show="sourcesExpanded" class="source-nav-children">
-            <button v-for="(meta, key) in sourceMeta" :key="key" :class="{ active: activeNav === 'source' && activeSource === key }" @click="navigateTo('source', key)"><img :class="['sidebar-source-icon', `sidebar-${key}-icon`]" :src="meta.lineImage" :alt="`${meta.label}线条图标`">{{ meta.label }}</button>
-          </div>
+          <Transition name="source-nav-collapse">
+            <div v-show="sourcesExpanded" class="source-nav-children">
+              <button v-for="(meta, key) in sourceMeta" :key="key" :class="{ active: activeNav === 'source' && activeSource === key }" @click="navigateTo('source', key)"><img :class="['sidebar-source-icon', `sidebar-${key}-icon`]" :src="meta.lineImage" :alt="`${meta.label}线条图标`">{{ meta.label }}</button>
+            </div>
+          </Transition>
         </div>
         <button :class="{ active: activeNav === 'liked' }" @click="navigateTo('liked', 'all')">
 <span class="nav-line-symbol nav-mask-symbol" :style="{ '--nav-mask': `url(${favoriteNavIcon})` }" aria-hidden="true"></span> 收藏
@@ -1428,7 +1438,8 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
     </aside>
 
     <main v-if="!showSettings && activeNav !== 'pulls'" :class="['content', { 'liked-page': activeNav === 'liked' }]" @click="closeContextMenu" @contextmenu.prevent="openContextMenu($event)">
-      <div v-if="!authorProfile && activeNav !== 'liked'" class="night-sky-decor" aria-hidden="true"><i class="night-haze"></i><i class="night-moon"></i><i class="night-star star-one"></i><i class="night-star star-two"></i><i class="night-star star-three"></i><i class="night-star star-four"></i><i class="night-star star-five"></i><i class="night-star star-six"></i><i class="night-star star-seven"></i><i class="night-star star-eight"></i><i v-for="meteor in meteorBurst" :key="meteor.id" class="night-meteor" :style="meteor.style"></i></div>
+      <div v-if="!authorProfile && activeNav !== 'liked'" class="night-sky-decor" aria-hidden="true"><i class="night-haze"></i><i class="night-moon"></i><i class="night-star star-one"></i><i class="night-star star-two"></i><i class="night-star star-three"></i><i class="night-star star-four"></i><i class="night-star star-five"></i><i class="night-star star-six"></i><i class="night-star star-seven"></i><i class="night-star star-eight"></i></div>
+      <div v-if="!authorProfile && activeNav !== 'liked'" class="night-meteor-layer" aria-hidden="true"><i v-for="meteor in meteorBurst" :key="meteor.id" class="night-meteor" :style="meteor.style"></i></div>
       <div v-if="!authorProfile && activeNav !== 'liked'" class="seasonal-decor" :class="`season-${localSeason}`" aria-hidden="true">
         <template v-if="localSeason === 'spring'"><i class="spring-branch"></i><i class="spring-stem stem-one"></i><i class="spring-stem stem-two"></i><i class="spring-stem stem-three"></i><i class="spring-leaf spring-leaf-one"></i><i class="spring-leaf spring-leaf-two"></i><i class="spring-leaf spring-leaf-three"></i><i class="spring-blossom blossom-one"></i><i class="spring-blossom blossom-two"></i><i class="spring-blossom blossom-three"></i><i class="spring-blossom blossom-four"></i><i class="spring-petal petal-one"></i><i class="spring-petal petal-two"></i></template>
         <template v-else-if="localSeason === 'summer'"><i class="summer-sun"></i><i class="summer-pond"></i><i class="summer-stem stem-one"></i><i class="summer-stem stem-two"></i><i class="lotus-leaf leaf-one"></i><i class="lotus-leaf leaf-two"></i><i class="summer-lotus"></i><i class="summer-lotus-bud"></i><i class="summer-dragonfly"></i><i class="summer-frog"><span></span></i><i class="summer-fish fish-one"></i><i class="summer-fish fish-two"></i></template>
@@ -1511,8 +1522,8 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
 <div class="post-foot">
 <div class="tag-row"><button v-for="tag in post.tags" :key="tag" type="button" :class="{ active: selectedTag === tag }" @click="openTag(tag)">#{{ tag }}</button></div>
 <div class="post-foot-actions">
-<button :class="['post-like-button', { liked: post.liked }]" :disabled="postActionBusy === `like:${post.id}`" :title="post.liked ? '取消收藏' : '收藏'" :aria-label="post.liked ? '取消收藏' : '收藏'" @click="togglePostLike(post)">{{ post.liked ? '♥' : '♡' }}</button>
-<button :disabled="!post.originalUrl" :title="post.originalUrl ? '打开原动态' : '旧动态暂无原始链接，请重新拉取'" aria-label="打开原动态" @click="openOriginalPost(post)">↗</button>
+<button :class="['post-like-button', { liked: post.liked }]" :disabled="postActionBusy === `like:${post.id}`" :title="post.liked ? '取消收藏' : '收藏'" :aria-label="post.liked ? '取消收藏' : '收藏'" @click="togglePostLike(post)"><span class="post-action-mask post-favorite-symbol" :style="{ '--post-action-mask': `url(${favoriteNavIcon})` }" aria-hidden="true"></span></button>
+<button class="post-visit-button" :disabled="!post.originalUrl" :title="post.originalUrl ? '访问原动态' : '旧动态暂无原始链接，请重新拉取'" aria-label="访问原动态" @click="openOriginalPost(post)"><span class="post-action-mask post-visit-symbol" :style="{ '--post-action-mask': `url(${visitPostIcon})` }" aria-hidden="true"></span></button>
 </div>
 </div>
 </article>
