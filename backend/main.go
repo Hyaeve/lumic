@@ -67,10 +67,16 @@ type Post struct {
 	TextFile         string      `json:"textFile,omitempty"`
 	Tags             []string    `json:"tags"`
 	Media            []string    `json:"media"`
+	Videos           []PostVideo `json:"videos,omitempty"`
 	OriginalURL      string      `json:"originalUrl,omitempty"`
 	Published        time.Time   `json:"published"`
 	Liked            bool        `json:"liked"`
 	FavoriteExplicit bool        `json:"favoriteExplicit,omitempty"`
+}
+
+type PostVideo struct {
+	URL    string `json:"url"`
+	Poster string `json:"poster,omitempty"`
 }
 
 type PostEmoji struct {
@@ -90,6 +96,7 @@ type SourceConfig struct {
 	ContentTypes    []string  `json:"contentTypes,omitempty"`
 	Tags            []string  `json:"tags,omitempty"`
 	OnlyWithImages  bool      `json:"onlyWithImages,omitempty"`
+	IncludeVideos   bool      `json:"includeVideos,omitempty"`
 	IncludeKeywords []string  `json:"includeKeywords,omitempty"`
 	ExcludeKeywords []string  `json:"excludeKeywords,omitempty"`
 	LastSyncedAt    time.Time `json:"lastSyncedAt"`
@@ -171,9 +178,12 @@ func normalizeBilibiliContentTypes(values []string, legacyDefault bool) []string
 	return result
 }
 
-func bilibiliDynamicTypeEnabled(dynamicType string, contentTypes []string) bool {
+func bilibiliDynamicTypeEnabled(dynamicType string, contentTypes []string, includeVideos bool) bool {
 	if !allowedBilibiliDynamicType(dynamicType) {
 		return false
+	}
+	if dynamicType == "DYNAMIC_TYPE_AV" {
+		return includeVideos
 	}
 	if dynamicType == "DYNAMIC_TYPE_ARTICLE" {
 		return containsString(normalizeBilibiliContentTypes(contentTypes, true), "ARTICLE")
@@ -213,7 +223,10 @@ func filterSourcePosts(posts []Post, feed SourceConfig) []Post {
 	include, exclude := normalizeKeywords(feed.IncludeKeywords), normalizeKeywords(feed.ExcludeKeywords)
 	filtered := make([]Post, 0, len(posts))
 	for _, post := range posts {
-		if feed.OnlyWithImages && len(post.Media) == 0 {
+		if len(post.Videos) > 0 && !feed.IncludeVideos {
+			continue
+		}
+		if feed.OnlyWithImages && len(post.Media) == 0 && !(feed.IncludeVideos && len(post.Videos) > 0) {
 			continue
 		}
 		caption := strings.ToLower(post.Caption)
@@ -717,9 +730,10 @@ func prepareSourceStorage(feed SourceConfig) (SourceConfig, error) {
 		ContentTypes    []string `json:"contentTypes,omitempty"`
 		Tags            []string `json:"tags,omitempty"`
 		OnlyWithImages  bool     `json:"onlyWithImages,omitempty"`
+		IncludeVideos   bool     `json:"includeVideos,omitempty"`
 		IncludeKeywords []string `json:"includeKeywords,omitempty"`
 		ExcludeKeywords []string `json:"excludeKeywords,omitempty"`
-	}{feed.Source, feed.ID, feed.Name, feed.Handle, feed.Avatar, feed.ContentTypes, feed.Tags, feed.OnlyWithImages, feed.IncludeKeywords, feed.ExcludeKeywords}, "", "  ")
+	}{feed.Source, feed.ID, feed.Name, feed.Handle, feed.Avatar, feed.ContentTypes, feed.Tags, feed.OnlyWithImages, feed.IncludeVideos, feed.IncludeKeywords, feed.ExcludeKeywords}, "", "  ")
 	if err != nil {
 		return feed, err
 	}
@@ -1269,6 +1283,16 @@ func (s *Store) rewriteMediaPrefix(oldPrefix, newPrefix string) error {
 				changed = true
 			}
 		}
+		for videoIndex := range s.posts[postIndex].Videos {
+			if strings.HasPrefix(s.posts[postIndex].Videos[videoIndex].URL, oldPrefix) {
+				s.posts[postIndex].Videos[videoIndex].URL = newPrefix + strings.TrimPrefix(s.posts[postIndex].Videos[videoIndex].URL, oldPrefix)
+				changed = true
+			}
+			if strings.HasPrefix(s.posts[postIndex].Videos[videoIndex].Poster, oldPrefix) {
+				s.posts[postIndex].Videos[videoIndex].Poster = newPrefix + strings.TrimPrefix(s.posts[postIndex].Videos[videoIndex].Poster, oldPrefix)
+				changed = true
+			}
+		}
 		if strings.HasPrefix(s.posts[postIndex].TextFile, oldPrefix) {
 			s.posts[postIndex].TextFile = newPrefix + strings.TrimPrefix(s.posts[postIndex].TextFile, oldPrefix)
 			changed = true
@@ -1298,6 +1322,7 @@ func (s *Store) reconcileCollectionMedia(feed SourceConfig) error {
 	type mediaMove struct {
 		postIndex  int
 		mediaIndex int
+		mediaKind  string
 		oldPublic  string
 		oldLocal   string
 		newLocal   string
@@ -1308,48 +1333,73 @@ func (s *Store) reconcileCollectionMedia(feed SourceConfig) error {
 			move := moves[index]
 			_ = os.MkdirAll(filepath.Dir(move.oldLocal), 0755)
 			_ = os.Rename(move.newLocal, move.oldLocal)
-			s.posts[move.postIndex].Media[move.mediaIndex] = move.oldPublic
+			switch move.mediaKind {
+			case "video":
+				s.posts[move.postIndex].Videos[move.mediaIndex].URL = move.oldPublic
+			case "poster":
+				s.posts[move.postIndex].Videos[move.mediaIndex].Poster = move.oldPublic
+			default:
+				s.posts[move.postIndex].Media[move.mediaIndex] = move.oldPublic
+			}
 		}
+	}
+	moveMedia := func(postIndex, mediaIndex int, mediaKind, media string) error {
+		localPath, ok := localFlowArchivePath(media)
+		if !ok {
+			return nil
+		}
+		info, statErr := os.Stat(localPath)
+		if statErr != nil {
+			if os.IsNotExist(statErr) {
+				return nil
+			}
+			return statErr
+		}
+		if info.IsDir() {
+			return nil
+		}
+		currentDirectory, pathErr := filepath.Abs(filepath.Dir(localPath))
+		if pathErr != nil {
+			return pathErr
+		}
+		if strings.EqualFold(currentDirectory, targetDirectoryAbsolute) {
+			return nil
+		}
+		extension := filepath.Ext(localPath)
+		base := strings.TrimSuffix(filepath.Base(localPath), extension)
+		targetBase := availableMediaTargetBase(targetDirectory, base)
+		targetPath := targetBase + extension
+		if err := os.Rename(localPath, targetPath); err != nil {
+			return err
+		}
+		updated := flowPublicPath(feed.Source, targetName, filepath.Base(targetPath))
+		moves = append(moves, mediaMove{postIndex: postIndex, mediaIndex: mediaIndex, mediaKind: mediaKind, oldPublic: media, oldLocal: localPath, newLocal: targetPath})
+		switch mediaKind {
+		case "video":
+			s.posts[postIndex].Videos[mediaIndex].URL = updated
+		case "poster":
+			s.posts[postIndex].Videos[mediaIndex].Poster = updated
+		default:
+			s.posts[postIndex].Media[mediaIndex] = updated
+		}
+		return deletePostMedia([]string{media})
 	}
 	for postIndex := range s.posts {
 		if !containsString(s.posts[postIndex].FeedIDs, feed.ID) {
 			continue
 		}
 		for mediaIndex, media := range s.posts[postIndex].Media {
-			localPath, ok := localFlowArchivePath(media)
-			if !ok {
-				continue
-			}
-			info, statErr := os.Stat(localPath)
-			if statErr != nil {
-				if os.IsNotExist(statErr) {
-					continue
-				}
-				rollback()
-				return statErr
-			}
-			if info.IsDir() {
-				continue
-			}
-			currentDirectory, pathErr := filepath.Abs(filepath.Dir(localPath))
-			if pathErr != nil {
-				rollback()
-				return pathErr
-			}
-			if strings.EqualFold(currentDirectory, targetDirectoryAbsolute) {
-				continue
-			}
-			extension := filepath.Ext(localPath)
-			base := strings.TrimSuffix(filepath.Base(localPath), extension)
-			targetBase := availableMediaTargetBase(targetDirectory, base)
-			targetPath := targetBase + extension
-			if err := os.Rename(localPath, targetPath); err != nil {
+			if err := moveMedia(postIndex, mediaIndex, "image", media); err != nil {
 				rollback()
 				return err
 			}
-			moves = append(moves, mediaMove{postIndex: postIndex, mediaIndex: mediaIndex, oldPublic: media, oldLocal: localPath, newLocal: targetPath})
-			s.posts[postIndex].Media[mediaIndex] = flowPublicPath(feed.Source, targetName, filepath.Base(targetPath))
-			if err := deletePostMedia([]string{media}); err != nil {
+		}
+		for videoIndex, video := range s.posts[postIndex].Videos {
+			if err := moveMedia(postIndex, videoIndex, "video", video.URL); err != nil {
+				rollback()
+				return err
+			}
+			if err := moveMedia(postIndex, videoIndex, "poster", video.Poster); err != nil {
 				rollback()
 				return err
 			}
@@ -1377,13 +1427,8 @@ func (s *Store) reconcileWeiboLikesPosts(feed SourceConfig) error {
 		if !belongsToSource && strings.HasPrefix(post.TextFile, prefix) {
 			belongsToSource = true
 		}
-		if !belongsToSource {
-			for _, media := range post.Media {
-				if strings.HasPrefix(media, prefix) {
-					belongsToSource = true
-					break
-				}
-			}
+		if !belongsToSource && postHasMediaPrefix(post, prefix) {
+			belongsToSource = true
 		}
 		if !belongsToSource {
 			continue
@@ -1506,6 +1551,26 @@ func sameSourceAuthor(left, right string) bool {
 	return left != "" && right != "" && (left == right || strings.EqualFold(left, right) || safeFlowDirectoryName(left) == safeFlowDirectoryName(right))
 }
 
+func postMediaPaths(post Post) []string {
+	paths := append([]string(nil), post.Media...)
+	for _, video := range post.Videos {
+		paths = append(paths, video.URL, video.Poster)
+	}
+	return paths
+}
+
+func postHasMediaPrefix(post *Post, prefix string) bool {
+	if post == nil {
+		return false
+	}
+	for _, media := range postMediaPaths(*post) {
+		if strings.HasPrefix(media, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func postBelongsToSource(post *Post, feed SourceConfig) bool {
 	if post == nil {
 		return false
@@ -1525,12 +1590,7 @@ func postBelongsToSourcePath(post *Post, feed SourceConfig) bool {
 		if strings.HasPrefix(post.TextFile, prefix) {
 			return true
 		}
-		for _, media := range post.Media {
-			if strings.HasPrefix(media, prefix) {
-				return true
-			}
-		}
-		return false
+		return postHasMediaPrefix(post, prefix)
 	}
 	if post.Source != feed.Source {
 		return false
@@ -1542,12 +1602,7 @@ func postBelongsToSourcePath(post *Post, feed SourceConfig) bool {
 	if strings.HasPrefix(post.TextFile, prefix) {
 		return true
 	}
-	for _, media := range post.Media {
-		if strings.HasPrefix(media, prefix) {
-			return true
-		}
-	}
-	return false
+	return postHasMediaPrefix(post, prefix)
 }
 
 func stringSlicesEqual(left, right []string) bool {
@@ -1596,7 +1651,7 @@ func (s *Store) deletePosts(ids []string, source Source, author string) (int, er
 	}
 	affectedArchives := make(map[textArchiveKey]bool)
 	for _, post := range removed {
-		media := append([]string(nil), post.Media...)
+		media := postMediaPaths(post)
 		affectedArchives[textArchiveKeyForPost(post)] = true
 		for _, emoji := range post.Emojis {
 			media = append(media, emoji.URL)
@@ -2522,6 +2577,7 @@ func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Requ
 				}
 				b.config.Subscriptions[index].Tags = normalizeTags(input.Tags)
 				b.config.Subscriptions[index].OnlyWithImages = input.OnlyWithImages
+				b.config.Subscriptions[index].IncludeVideos = input.IncludeVideos
 				b.config.Subscriptions[index].IncludeKeywords = normalizeKeywords(input.IncludeKeywords)
 				b.config.Subscriptions[index].ExcludeKeywords = normalizeKeywords(input.ExcludeKeywords)
 				input = b.config.Subscriptions[index]
@@ -2694,12 +2750,12 @@ func (b *BilibiliStore) projectSettingsHandler(w http.ResponseWriter, r *http.Re
 	writeJSON(w, ProjectSettingsView{ProxyEnabled: input.ProxyURL != "", ProxyURL: maskedProxyURL(input.ProxyURL)})
 }
 
-// Bilibili sync accepts text, image-text, opus and article cards; video and forwarded-video cards are excluded.
+// Bilibili sync accepts text, image-text, opus and article cards. Video cards are opt-in; forwarded cards remain excluded.
 const bilibiliDynamicFeatures = "itemOpusStyle,opusBigCover,onlyfansVote,decorationCard,forwardListHidden,ugcDelete,onlyfansAssetsV2,ugcSeason,onlyfansQaCard"
 
 func allowedBilibiliDynamicType(dynamicType string) bool {
 	switch dynamicType {
-	case "DYNAMIC_TYPE_WORD", "DYNAMIC_TYPE_DRAW", "DYNAMIC_TYPE_ARTICLE", "DYNAMIC_TYPE_OPUS":
+	case "DYNAMIC_TYPE_WORD", "DYNAMIC_TYPE_DRAW", "DYNAMIC_TYPE_ARTICLE", "DYNAMIC_TYPE_OPUS", "DYNAMIC_TYPE_AV":
 		return true
 	default:
 		return false
@@ -3166,6 +3222,24 @@ func mediaFileExtension(remoteURL, contentType string) string {
 	}
 }
 
+func videoFileExtension(remoteURL, contentType string) string {
+	extension := strings.ToLower(filepath.Ext(path.Base(strings.Split(remoteURL, "?")[0])))
+	if matched, _ := regexp.MatchString(`^\.(mp4|webm|mov|m4v|ogv)$`, extension); matched {
+		return extension
+	}
+	contentType = strings.ToLower(strings.Split(contentType, ";")[0])
+	switch contentType {
+	case "video/webm":
+		return ".webm"
+	case "video/quicktime":
+		return ".mov"
+	case "video/ogg", "application/ogg":
+		return ".ogv"
+	default:
+		return ".mp4"
+	}
+}
+
 func downloadRemoteImage(client *http.Client, remoteURL, targetBase, referer, cookie string) (string, error) {
 	remoteURL = normalizeRemoteImage(remoteURL)
 	if remoteURL == "" || strings.HasPrefix(remoteURL, "/flow/") {
@@ -3226,6 +3300,68 @@ func downloadRemoteImage(client *http.Client, remoteURL, targetBase, referer, co
 	return target, nil
 }
 
+func downloadRemoteVideo(client *http.Client, remoteURL, targetBase, referer, cookie string) (string, error) {
+	remoteURL = normalizeRemoteImage(stdhtml.UnescapeString(remoteURL))
+	if remoteURL == "" || strings.HasPrefix(remoteURL, "/flow/") {
+		return remoteURL, nil
+	}
+	request, err := http.NewRequest(http.MethodGet, remoteURL, nil)
+	if err != nil {
+		return "", err
+	}
+	request.Header.Set("Accept", "video/mp4,video/webm,video/*;q=0.9,application/octet-stream;q=0.7,*/*;q=0.5")
+	request.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36")
+	if referer != "" {
+		request.Header.Set("Referer", referer)
+	}
+	if cookie != "" {
+		request.Header.Set("Cookie", cookie)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusPartialContent {
+		return "", fmt.Errorf("HTTP %d", response.StatusCode)
+	}
+	contentType := strings.ToLower(response.Header.Get("Content-Type"))
+	remoteExtension := strings.ToLower(filepath.Ext(path.Base(strings.Split(remoteURL, "?")[0])))
+	knownExtension, _ := regexp.MatchString(`^\.(mp4|webm|mov|m4v|ogv)$`, remoteExtension)
+	if !strings.HasPrefix(contentType, "video/") && !strings.HasPrefix(contentType, "application/octet-stream") && !knownExtension {
+		return "", fmt.Errorf("unexpected content type %s", contentType)
+	}
+	target := targetBase + videoFileExtension(remoteURL, contentType)
+	if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
+		return "", err
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(target), ".lumic-video-*.tmp")
+	if err != nil {
+		return "", err
+	}
+	temporaryName := temporary.Name()
+	defer os.Remove(temporaryName)
+	written, copyErr := io.CopyBuffer(temporary, response.Body, make([]byte, 256<<10))
+	if copyErr != nil || written == 0 {
+		temporary.Close()
+		if copyErr != nil {
+			return "", copyErr
+		}
+		return "", errors.New("empty video")
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return "", err
+	}
+	if err := temporary.Close(); err != nil {
+		return "", err
+	}
+	if err := replaceFile(temporaryName, target); err != nil {
+		return "", err
+	}
+	return target, nil
+}
+
 func replaceFile(temporaryName, target string) error {
 	if err := os.Rename(temporaryName, target); err == nil {
 		return nil
@@ -3249,6 +3385,14 @@ func imageDownloadDelay(source Source, sequence int) time.Duration {
 	return delay
 }
 
+func videoDownloadDelay(source Source, sequence int) time.Duration {
+	delay := 500 * time.Millisecond
+	if source == SourceBilibili {
+		delay = 2200*time.Millisecond + time.Duration(sequence%3)*250*time.Millisecond
+	}
+	return delay
+}
+
 func postMediaBaseName(post Post, mediaIndex int) string {
 	author := safeFlowDirectoryName(post.Author)
 	if author == "unnamed" {
@@ -3261,6 +3405,25 @@ func postMediaBaseName(post Post, mediaIndex int) string {
 	base := author + "-" + published.Format("20060102")
 	if len(post.Media) > 1 {
 		base += "·" + strconv.Itoa(mediaIndex+1)
+	}
+	return base
+}
+
+func postVideoBaseName(post Post, videoIndex int, poster bool) string {
+	author := safeFlowDirectoryName(post.Author)
+	if author == "unnamed" {
+		author = "作者"
+	}
+	published := post.Published
+	if published.IsZero() {
+		published = time.Now()
+	}
+	base := author + "-" + published.Format("20060102") + "-视频"
+	if len(post.Videos) > 1 {
+		base += "·" + strconv.Itoa(videoIndex+1)
+	}
+	if poster {
+		base += "-封面"
 	}
 	return base
 }
@@ -3495,6 +3658,34 @@ func (b *BilibiliStore) archiveSourceContent(feed SourceConfig, posts []Post) (S
 			}
 		}
 		posts[postIndex].Media = localMedia
+		localVideos := make([]PostVideo, 0, len(posts[postIndex].Videos))
+		for videoIndex, video := range posts[postIndex].Videos {
+			if strings.TrimSpace(video.URL) == "" {
+				continue
+			}
+			localVideo := video
+			if video.Poster != "" && !strings.HasPrefix(video.Poster, "/flow/") {
+				posterBase := availableMediaTargetBase(prepared.StoragePath, postVideoBaseName(posts[postIndex], videoIndex, true))
+				posterPath, downloadErr := downloadRemoteImage(client, video.Poster, posterBase, referer, cookie)
+				if downloadErr != nil {
+					return feed, posts, fmt.Errorf("下载动态 %s 的第 %d 个视频封面失败: %w", posts[postIndex].ID, videoIndex+1, downloadErr)
+				}
+				localVideo.Poster = flowPublicPath(prepared.Source, prepared.Name, filepath.Base(posterPath))
+			}
+			if !strings.HasPrefix(video.URL, "/flow/") {
+				videoBase := availableMediaTargetBase(prepared.StoragePath, postVideoBaseName(posts[postIndex], videoIndex, false))
+				videoPath, downloadErr := downloadRemoteVideo(client, video.URL, videoBase, referer, cookie)
+				if downloadErr != nil {
+					return feed, posts, fmt.Errorf("下载动态 %s 的第 %d 个视频失败: %w", posts[postIndex].ID, videoIndex+1, downloadErr)
+				}
+				localVideo.URL = flowPublicPath(prepared.Source, prepared.Name, filepath.Base(videoPath))
+				if delay := videoDownloadDelay(feed.Source, postIndex+videoIndex); delay > 0 {
+					time.Sleep(delay)
+				}
+			}
+			localVideos = append(localVideos, localVideo)
+		}
+		posts[postIndex].Videos = localVideos
 		posts[postIndex].Emojis = nil
 	}
 	prepared, err = prepareSourceStorage(prepared)
@@ -3511,6 +3702,68 @@ func parseRemoteTimestamp(raw json.RawMessage) int64 {
 		return 0
 	}
 	return parsed
+}
+
+func fetchBilibiliVideoURL(bvid string, credentials BilibiliCredentials, proxyURL string) (string, error) {
+	bvid = strings.TrimSpace(bvid)
+	if bvid == "" {
+		return "", errors.New("BVID 为空")
+	}
+	var view struct {
+		Code int `json:"code"`
+		Data struct {
+			CID   int64 `json:"cid"`
+			Pages []struct {
+				CID int64 `json:"cid"`
+			} `json:"pages"`
+		} `json:"data"`
+	}
+	if err := bilibiliRequest("https://api.bilibili.com/x/web-interface/view?bvid="+url.QueryEscape(bvid), credentials, proxyURL, &view); err != nil {
+		return "", err
+	}
+	if view.Code != 0 {
+		return "", fmt.Errorf("视频详情接口返回 %d", view.Code)
+	}
+	cid := view.Data.CID
+	if cid == 0 && len(view.Data.Pages) > 0 {
+		cid = view.Data.Pages[0].CID
+	}
+	if cid == 0 {
+		return "", errors.New("视频 CID 为空")
+	}
+	query := url.Values{
+		"bvid":         {bvid},
+		"cid":          {strconv.FormatInt(cid, 10)},
+		"qn":           {"80"},
+		"fnver":        {"0"},
+		"fnval":        {"0"},
+		"fourk":        {"1"},
+		"platform":     {"html5"},
+		"high_quality": {"1"},
+	}
+	var play struct {
+		Code int `json:"code"`
+		Data struct {
+			DURL []struct {
+				URL       string   `json:"url"`
+				BackupURL []string `json:"backup_url"`
+			} `json:"durl"`
+		} `json:"data"`
+	}
+	if err := bilibiliRequest("https://api.bilibili.com/x/player/playurl?"+query.Encode(), credentials, proxyURL, &play); err != nil {
+		return "", err
+	}
+	if play.Code != 0 || len(play.Data.DURL) == 0 {
+		return "", fmt.Errorf("视频播放接口返回 %d", play.Code)
+	}
+	videoURL := normalizeRemoteImage(play.Data.DURL[0].URL)
+	if videoURL == "" && len(play.Data.DURL[0].BackupURL) > 0 {
+		videoURL = normalizeRemoteImage(play.Data.DURL[0].BackupURL[0])
+	}
+	if videoURL == "" {
+		return "", errors.New("视频播放地址为空")
+	}
+	return videoURL, nil
 }
 
 func (b *BilibiliStore) findBilibiliUser(name string) (BilibiliUser, error) {
@@ -3592,6 +3845,12 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 							URL string `json:"url"`
 						} `json:"pics"`
 					} `json:"opus"`
+					Archive *struct {
+						BVID  string `json:"bvid"`
+						Cover string `json:"cover"`
+						Title string `json:"title"`
+						Desc  string `json:"desc"`
+					} `json:"archive"`
 				} `json:"major"`
 			} `json:"module_dynamic"`
 		} `json:"modules"`
@@ -3620,7 +3879,7 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 			if json.Unmarshal(rawItem, &item) != nil {
 				continue
 			}
-			if item.ID == "" || !bilibiliDynamicTypeEnabled(item.Type, feed.ContentTypes) {
+			if item.ID == "" || !bilibiliDynamicTypeEnabled(item.Type, feed.ContentTypes, feed.IncludeVideos) {
 				continue
 			}
 			captionParts := make([]string, 0, 4)
@@ -3631,6 +3890,7 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 				}
 			}
 			media := make([]string, 0)
+			videos := make([]PostVideo, 0, 1)
 			if major := item.Modules.Dynamic.Major; major != nil {
 				if major.Draw != nil {
 					for _, image := range major.Draw.Items {
@@ -3653,6 +3913,17 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 				if major.Opus != nil {
 					captionParts = append(captionParts, major.Opus.Title, bilibiliRichText(major.Opus.Summary), bilibiliRichText(major.Opus.Content))
 				}
+				if major.Archive != nil {
+					captionParts = append(captionParts, major.Archive.Title, major.Archive.Desc)
+					if feed.IncludeVideos {
+						videoURL, videoErr := fetchBilibiliVideoURL(major.Archive.BVID, credentials, proxyURL)
+						if videoErr != nil {
+							log.Printf("unable to resolve Bilibili video %s: %v", major.Archive.BVID, videoErr)
+						} else {
+							videos = append(videos, PostVideo{URL: videoURL, Poster: normalizeRemoteImage(major.Archive.Cover)})
+						}
+					}
+				}
 			}
 			captionParts = append(captionParts, bilibiliCaptionFromRaw(rawItem))
 			caption := combineRemoteText(captionParts...)
@@ -3672,7 +3943,7 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 			if avatar == "" {
 				avatar = feed.Avatar
 			}
-			posts = append(posts, Post{ID: "bili-dynamic-" + item.ID, Source: SourceBilibili, FeedIDs: []string{feed.ID}, Author: name, Avatar: avatar, Caption: caption, Tags: append([]string(nil), feed.Tags...), Media: media, OriginalURL: "https://t.bilibili.com/" + url.PathEscape(item.ID), Published: published})
+			posts = append(posts, Post{ID: "bili-dynamic-" + item.ID, Source: SourceBilibili, FeedIDs: []string{feed.ID}, Author: name, Avatar: avatar, Caption: caption, Tags: append([]string(nil), feed.Tags...), Media: media, Videos: videos, OriginalURL: "https://t.bilibili.com/" + url.PathEscape(item.ID), Published: published})
 			if !full && !feed.LastSyncedAt.IsZero() && !published.After(feed.LastSyncedAt) {
 				reachedBoundary = true
 			}
@@ -3686,6 +3957,75 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 		offset = payload.Data.Offset
 	}
 	return posts, nil
+}
+
+func remoteURLValue(value any) string {
+	if object, ok := value.(map[string]any); ok {
+		return firstNonEmptyRemoteText(jsonValueString(object["url"]), jsonValueString(object["src"]))
+	}
+	return jsonValueString(value)
+}
+
+func usableVideoURL(value, mime string) string {
+	value = normalizeRemoteImage(stdhtml.UnescapeString(strings.TrimSpace(value)))
+	if value == "" || value == "<nil>" || strings.Contains(strings.ToLower(value), ".m3u8") {
+		return ""
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return ""
+	}
+	if mime != "" && !strings.Contains(strings.ToLower(mime), "video") && !strings.Contains(strings.ToLower(mime), "mp4") {
+		return ""
+	}
+	return value
+}
+
+func weiboDirectVideoURL(object map[string]any) string {
+	for _, key := range []string{"mp4_1080p_mp4", "mp4_720p_mp4", "mp4_hd_url", "mp4_sd_url", "stream_url_hd", "stream_url"} {
+		if videoURL := usableVideoURL(remoteURLValue(object[key]), ""); videoURL != "" {
+			return videoURL
+		}
+	}
+	mime := firstNonEmptyRemoteText(jsonValueString(object["mime"]), jsonValueString(object["mime_type"]), jsonValueString(object["type"]), jsonValueString(object["format"]))
+	if strings.Contains(strings.ToLower(mime), "video") || strings.Contains(strings.ToLower(mime), "mp4") {
+		return usableVideoURL(remoteURLValue(object["url"]), mime)
+	}
+	return ""
+}
+
+func weiboDirectVideoPoster(object map[string]any) string {
+	for _, key := range []string{"poster_url", "poster", "page_pic", "cover", "cover_image"} {
+		if poster := normalizeRemoteImage(remoteURLValue(object[key])); poster != "" && poster != "<nil>" {
+			return poster
+		}
+	}
+	return ""
+}
+
+func collectWeiboVideos(value any, videos *[]PostVideo, indexes map[string]int) {
+	switch typed := value.(type) {
+	case []any:
+		for _, item := range typed {
+			collectWeiboVideos(item, videos, indexes)
+		}
+	case map[string]any:
+		videoURL := weiboDirectVideoURL(typed)
+		if videoURL != "" {
+			poster := weiboDirectVideoPoster(typed)
+			if index, exists := indexes[videoURL]; exists {
+				if (*videos)[index].Poster == "" && poster != "" {
+					(*videos)[index].Poster = poster
+				}
+			} else {
+				indexes[videoURL] = len(*videos)
+				*videos = append(*videos, PostVideo{URL: videoURL, Poster: poster})
+			}
+		}
+		for _, child := range typed {
+			collectWeiboVideos(child, videos, indexes)
+		}
+	}
 }
 
 func collectWeiboPosts(value any, feed SourceConfig, posts *[]Post, seen map[string]bool) {
@@ -3761,6 +4101,8 @@ func collectWeiboPosts(value any, feed SourceConfig, posts *[]Post, seen map[str
 					appendMedia(pictureID, image)
 				}
 			}
+			videos := make([]PostVideo, 0, 1)
+			collectWeiboVideos(mblog, &videos, make(map[string]int))
 			rawCaption := jsonValueString(mblog["text"])
 			caption := jsonValueString(mblog["text_raw"])
 			if caption == "" {
@@ -3774,7 +4116,7 @@ func collectWeiboPosts(value any, feed SourceConfig, posts *[]Post, seen map[str
 			if profileID != "" {
 				originalURL = "https://weibo.com/" + url.PathEscape(profileID) + "/" + url.PathEscape(id)
 			}
-			*posts = append(*posts, Post{ID: "weibo-status-" + id, Source: SourceWeibo, FeedIDs: []string{feed.ID}, Author: name, Avatar: avatar, Caption: caption, Tags: append([]string(nil), feed.Tags...), Media: media, OriginalURL: originalURL, Published: published})
+			*posts = append(*posts, Post{ID: "weibo-status-" + id, Source: SourceWeibo, FeedIDs: []string{feed.ID}, Author: name, Avatar: avatar, Caption: caption, Tags: append([]string(nil), feed.Tags...), Media: media, Videos: videos, OriginalURL: originalURL, Published: published})
 		}
 		for _, child := range object {
 			collectWeiboPosts(child, feed, posts, seen)
@@ -3947,6 +4289,9 @@ func (s *Store) postsAfterOrCaptionRepair(posts []Post, boundary time.Time) []Po
 		if len(stored.Media) > 0 {
 			post.Media = append([]string(nil), stored.Media...)
 		}
+		if len(stored.Videos) > 0 {
+			post.Videos = append([]PostVideo(nil), stored.Videos...)
+		}
 		post.TextFile = stored.TextFile
 		post.Emojis = nil
 		if strings.HasPrefix(stored.Avatar, "/flow/") {
@@ -3982,6 +4327,9 @@ func (s *Store) postsAfterOrSourceMembership(posts []Post, boundary time.Time, f
 		}
 		if len(stored.Media) > 0 {
 			post.Media = append([]string(nil), stored.Media...)
+		}
+		if len(stored.Videos) > 0 {
+			post.Videos = append([]PostVideo(nil), stored.Videos...)
 		}
 		post.TextFile = stored.TextFile
 		post.Emojis = nil
@@ -4547,6 +4895,7 @@ func (b *BilibiliStore) pixivSubscriptionsHandler(w http.ResponseWriter, r *http
 				b.config.PixivSubscriptions[index].Schedule = input.Schedule
 				b.config.PixivSubscriptions[index].Tags = normalizeTags(input.Tags)
 				b.config.PixivSubscriptions[index].OnlyWithImages = input.OnlyWithImages
+				b.config.PixivSubscriptions[index].IncludeVideos = input.IncludeVideos
 				b.config.PixivSubscriptions[index].IncludeKeywords = normalizeKeywords(input.IncludeKeywords)
 				b.config.PixivSubscriptions[index].ExcludeKeywords = normalizeKeywords(input.ExcludeKeywords)
 				input = b.config.PixivSubscriptions[index]
@@ -5379,6 +5728,7 @@ func (b *BilibiliStore) weiboSubscriptionsHandler(w http.ResponseWriter, r *http
 				b.config.WeiboSubscriptions[index].Schedule = input.Schedule
 				b.config.WeiboSubscriptions[index].Tags = normalizeTags(input.Tags)
 				b.config.WeiboSubscriptions[index].OnlyWithImages = input.OnlyWithImages
+				b.config.WeiboSubscriptions[index].IncludeVideos = input.IncludeVideos
 				b.config.WeiboSubscriptions[index].IncludeKeywords = normalizeKeywords(input.IncludeKeywords)
 				b.config.WeiboSubscriptions[index].ExcludeKeywords = normalizeKeywords(input.ExcludeKeywords)
 				input = b.config.WeiboSubscriptions[index]
@@ -5962,7 +6312,7 @@ func main() {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' https: data:; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; connect-src 'self'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' https: data:; media-src 'self' https: blob:; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; connect-src 'self'")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

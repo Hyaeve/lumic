@@ -287,13 +287,13 @@ func TestBilibiliOpusPostExtractsArticleTextAndImages(t *testing.T) {
 	}
 }
 
-func TestAllowedBilibiliDynamicTypeIncludesTextButNotVideo(t *testing.T) {
-	for _, dynamicType := range []string{"DYNAMIC_TYPE_WORD", "DYNAMIC_TYPE_DRAW", "DYNAMIC_TYPE_ARTICLE", "DYNAMIC_TYPE_OPUS"} {
+func TestAllowedBilibiliDynamicTypeIncludesSupportedContent(t *testing.T) {
+	for _, dynamicType := range []string{"DYNAMIC_TYPE_WORD", "DYNAMIC_TYPE_DRAW", "DYNAMIC_TYPE_ARTICLE", "DYNAMIC_TYPE_OPUS", "DYNAMIC_TYPE_AV"} {
 		if !allowedBilibiliDynamicType(dynamicType) {
 			t.Fatalf("expected %s to be collected", dynamicType)
 		}
 	}
-	for _, dynamicType := range []string{"DYNAMIC_TYPE_AV", "DYNAMIC_TYPE_FORWARD", "DYNAMIC_TYPE_LIVE_RCMD"} {
+	for _, dynamicType := range []string{"DYNAMIC_TYPE_FORWARD", "DYNAMIC_TYPE_LIVE_RCMD"} {
 		if allowedBilibiliDynamicType(dynamicType) {
 			t.Fatalf("expected %s to remain filtered", dynamicType)
 		}
@@ -301,16 +301,25 @@ func TestAllowedBilibiliDynamicTypeIncludesTextButNotVideo(t *testing.T) {
 }
 
 func TestBilibiliArticleContentTypeIsOptional(t *testing.T) {
-	if bilibiliDynamicTypeEnabled("DYNAMIC_TYPE_ARTICLE", []string{"DRAW"}) {
+	if bilibiliDynamicTypeEnabled("DYNAMIC_TYPE_ARTICLE", []string{"DRAW"}, false) {
 		t.Fatal("article dynamic should be filtered when ARTICLE is not enabled")
 	}
-	if !bilibiliDynamicTypeEnabled("DYNAMIC_TYPE_ARTICLE", []string{"DRAW", "ARTICLE"}) {
+	if !bilibiliDynamicTypeEnabled("DYNAMIC_TYPE_ARTICLE", []string{"DRAW", "ARTICLE"}, false) {
 		t.Fatal("article dynamic should be collected when ARTICLE is enabled")
 	}
 	for _, dynamicType := range []string{"DYNAMIC_TYPE_WORD", "DYNAMIC_TYPE_DRAW", "DYNAMIC_TYPE_OPUS"} {
-		if !bilibiliDynamicTypeEnabled(dynamicType, []string{"DRAW"}) {
+		if !bilibiliDynamicTypeEnabled(dynamicType, []string{"DRAW"}, false) {
 			t.Fatalf("expected %s to remain enabled without ARTICLE", dynamicType)
 		}
+	}
+}
+
+func TestBilibiliVideoDynamicRequiresOptIn(t *testing.T) {
+	if bilibiliDynamicTypeEnabled("DYNAMIC_TYPE_AV", []string{"DRAW"}, false) {
+		t.Fatal("video dynamic should be filtered without video opt-in")
+	}
+	if !bilibiliDynamicTypeEnabled("DYNAMIC_TYPE_AV", []string{"DRAW"}, true) {
+		t.Fatal("video dynamic should be collected after video opt-in")
 	}
 }
 
@@ -532,6 +541,27 @@ func TestCollectedWeiboPostIncludesOriginalURL(t *testing.T) {
 	}
 }
 
+func TestCollectWeiboPostsIncludesPlayableVideo(t *testing.T) {
+	payload := map[string]any{"mblog": map[string]any{
+		"id":         "video-post",
+		"text_raw":   "video caption",
+		"created_at": "Mon Aug 12 10:00:00 +0800 2024",
+		"user":       map[string]any{"idstr": "12345", "screen_name": "author"},
+		"page_info": map[string]any{"media_info": map[string]any{
+			"mp4_1080p_mp4": "https://f.video.weibocdn.com/video.mp4",
+			"poster_url":    "https://wx1.sinaimg.cn/large/poster.jpg",
+		}},
+	}}
+	posts := make([]Post, 0)
+	collectWeiboPosts(payload, SourceConfig{}, &posts, make(map[string]bool))
+	if len(posts) != 1 || len(posts[0].Videos) != 1 {
+		t.Fatalf("Weibo video was not collected: %#v", posts)
+	}
+	if posts[0].Videos[0].URL != "https://f.video.weibocdn.com/video.mp4" || posts[0].Videos[0].Poster != "https://wx1.sinaimg.cn/large/poster.jpg" {
+		t.Fatalf("unexpected Weibo video metadata: %#v", posts[0].Videos[0])
+	}
+}
+
 func TestFilterSourcePosts(t *testing.T) {
 	posts := []Post{
 		{ID: "keep", Caption: "今天分享一张插画", Media: []string{"image.jpg"}},
@@ -543,6 +573,29 @@ func TestFilterSourcePosts(t *testing.T) {
 	filtered := filterSourcePosts(posts, feed)
 	if len(filtered) != 1 || filtered[0].ID != "keep" {
 		t.Fatalf("unexpected filtered posts: %#v", filtered)
+	}
+}
+
+func TestFilterSourcePostsSupportsImagesAndOptInVideos(t *testing.T) {
+	posts := []Post{
+		{ID: "image", Media: []string{"image.jpg"}},
+		{ID: "video", Videos: []PostVideo{{URL: "video.mp4"}}},
+		{ID: "text", Caption: "text only"},
+	}
+
+	imagesOnly := filterSourcePosts(posts, SourceConfig{OnlyWithImages: true})
+	if len(imagesOnly) != 1 || imagesOnly[0].ID != "image" {
+		t.Fatalf("image-only filtering returned %#v", imagesOnly)
+	}
+
+	imagesAndVideos := filterSourcePosts(posts, SourceConfig{OnlyWithImages: true, IncludeVideos: true})
+	if len(imagesAndVideos) != 2 || imagesAndVideos[0].ID != "image" || imagesAndVideos[1].ID != "video" {
+		t.Fatalf("image-and-video filtering returned %#v", imagesAndVideos)
+	}
+
+	allWithoutVideos := filterSourcePosts(posts, SourceConfig{})
+	if len(allWithoutVideos) != 2 || allWithoutVideos[0].ID != "image" || allWithoutVideos[1].ID != "text" {
+		t.Fatalf("video opt-out filtering returned %#v", allWithoutVideos)
 	}
 }
 
@@ -1120,6 +1173,44 @@ func TestPostDeleteHandlesEncodedFlowURLWithQuery(t *testing.T) {
 	}
 }
 
+func TestPostDeleteRemovesVideoAndPoster(t *testing.T) {
+	root := t.TempDir()
+	oldFlowRoot := flowRoot
+	flowRoot = root
+	t.Cleanup(func() { flowRoot = oldFlowRoot })
+
+	directory := filepath.Join(root, "weibo", "author")
+	if err := os.MkdirAll(directory, 0755); err != nil {
+		t.Fatal(err)
+	}
+	videoPath := filepath.Join(directory, "post-video.mp4")
+	posterPath := filepath.Join(directory, "post-video-poster.jpg")
+	if err := os.WriteFile(videoPath, []byte("video"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(posterPath, []byte("poster"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	store := &Store{
+		posts: []Post{{
+			ID:     "video-post",
+			Source: SourceWeibo,
+			Author: "author",
+			Videos: []PostVideo{{URL: "/flow/weibo/author/post-video.mp4", Poster: "/flow/weibo/author/post-video-poster.jpg"}},
+		}},
+		file: filepath.Join(root, "content.json"),
+	}
+	if deleted, err := store.deletePosts([]string{"video-post"}, "", ""); err != nil || deleted != 1 {
+		t.Fatalf("delete video post: deleted=%d err=%v", deleted, err)
+	}
+	for _, mediaPath := range []string{videoPath, posterPath} {
+		if _, err := os.Stat(mediaPath); !os.IsNotExist(err) {
+			t.Fatalf("video media was not deleted: %s stat=%v", mediaPath, err)
+		}
+	}
+}
+
 func TestAuthorTextArchiveCombinesPostsAndPreservesEmoji(t *testing.T) {
 	root := t.TempDir()
 	oldFlowRoot := flowRoot
@@ -1535,6 +1626,7 @@ func TestWeiboSubscriptionLifecycle(t *testing.T) {
 
 	feed := store.config.WeiboSubscriptions[0]
 	feed.Enabled = false
+	feed.IncludeVideos = true
 	feed.Schedule = "每 12 小时"
 	body, err := json.Marshal(feed)
 	if err != nil {
@@ -1543,7 +1635,7 @@ func TestWeiboSubscriptionLifecycle(t *testing.T) {
 	updateRequest := httptest.NewRequest(http.MethodPut, "/api/weibo/subscriptions", bytes.NewReader(body))
 	updateResponse := httptest.NewRecorder()
 	store.weiboSubscriptionsHandler(updateResponse, updateRequest)
-	if updateResponse.Code != http.StatusOK || store.config.WeiboSubscriptions[0].Enabled || store.config.WeiboSubscriptions[0].Schedule != "0 */12 * * *" {
+	if updateResponse.Code != http.StatusOK || store.config.WeiboSubscriptions[0].Enabled || !store.config.WeiboSubscriptions[0].IncludeVideos || store.config.WeiboSubscriptions[0].Schedule != "0 */12 * * *" {
 		t.Fatalf("update failed status=%d subscriptions=%#v", updateResponse.Code, store.config.WeiboSubscriptions)
 	}
 

@@ -110,7 +110,16 @@ let sessionPollTimer = null
 const observedPostElements = new Map()
 const transientTimers = new Set()
 const lightbox = ref({ open: false, media: [], index: 0, author: '', scale: 1, rotation: 0, fit: true, x: 0, y: 0, dragging: false, motion: 'enter' })
-let lightboxDrag = null
+const lightboxImageElement = ref(null)
+const lightboxScalePercent = ref(100)
+const lightboxDockVisible = ref(true)
+const mobileLightboxMenu = ref({ open: false, x: 0, y: 0 })
+const lightboxPointers = new Map()
+let lightboxGesture = null
+let lightboxScaleFrame = 0
+let lightboxLastTap = { time: 0, x: 0, y: 0 }
+let lightboxDockTimer = 0
+let lightboxLongPressTimer = 0
 
 const sourceMeta = {
   bilibili: { label: '哔哩哔哩', icon: 'bl', image: bilibiliIcon, lineImage: bilibiliLineIcon, color: 'blue' },
@@ -560,7 +569,7 @@ function managePlatformCredentials(platformKey) {
 function openFeedSettings(feed) {
   cronEditing.value = false
   const contentTypes = feed.source === 'bilibili' && (!feed.contentTypes || feed.contentTypes.length === 0) ? ['DRAW', 'ARTICLE'] : [...(feed.contentTypes || [])]
-  selectedFeed.value = { ...feed, contentTypes, tags: [...(feed.tags || [])], tagInput: formatTagInput(feed.tags), includeKeywordInput: formatKeywordInput(feed.includeKeywords), excludeKeywordInput: formatKeywordInput(feed.excludeKeywords) }
+  selectedFeed.value = { ...feed, includeVideos: Boolean(feed.includeVideos), contentTypes, tags: [...(feed.tags || [])], tagInput: formatTagInput(feed.tags), includeKeywordInput: formatKeywordInput(feed.includeKeywords), excludeKeywordInput: formatKeywordInput(feed.excludeKeywords) }
   showFeedSettings.value = true
 }
 async function saveFeedSettings() {
@@ -631,14 +640,30 @@ function resetLightboxView() {
   lightbox.value.x = 0
   lightbox.value.y = 0
   lightbox.value.dragging = false
-  lightboxDrag = null
+  lightboxPointers.clear()
+  lightboxGesture = null
+  lightboxLastTap = { time: 0, x: 0, y: 0 }
+  mobileLightboxMenu.value = { open: false, x: 0, y: 0 }
+  clearLightboxLongPress()
+  scheduleLightboxScaleUpdate()
 }
 function openLightbox(post, index) {
   lightbox.value = { open: true, media: post.media || [], index, author: post.author, scale: 1, rotation: 0, fit: true, x: 0, y: 0, dragging: false, motion: 'enter' }
+  lightboxScalePercent.value = 100
+  mobileLightboxMenu.value = { open: false, x: 0, y: 0 }
+  showLightboxDock(true)
+  scheduleLightboxScaleUpdate()
 }
 function closeLightbox() {
   lightbox.value = { open: false, media: [], index: 0, author: '', scale: 1, rotation: 0, fit: true, x: 0, y: 0, dragging: false, motion: 'enter' }
-  lightboxDrag = null
+  lightboxPointers.clear()
+  lightboxGesture = null
+  lightboxLastTap = { time: 0, x: 0, y: 0 }
+  mobileLightboxMenu.value = { open: false, x: 0, y: 0 }
+  clearLightboxLongPress()
+  clearLightboxDockTimer()
+  if (lightboxScaleFrame) window.cancelAnimationFrame(lightboxScaleFrame)
+  lightboxScaleFrame = 0
 }
 function moveLightbox(step) {
   const total = lightbox.value.media.length
@@ -652,13 +677,15 @@ function zoomLightbox(event) {
   zoomLightboxBy(event.deltaY < 0 ? 0.15 : -0.15)
 }
 function zoomLightboxBy(step) {
-  lightbox.value.scale = Math.min(5, Math.max(0.25, Number((lightbox.value.scale + step).toFixed(2))))
+  lightbox.value.scale = Math.min(lightboxMaximumScale(), Math.max(0.25, Number((lightbox.value.scale + step).toFixed(2))))
+  scheduleLightboxScaleUpdate()
 }
 function toggleLightboxFit() {
   lightbox.value.fit = !lightbox.value.fit
   lightbox.value.scale = 1
   lightbox.value.x = 0
   lightbox.value.y = 0
+  scheduleLightboxScaleUpdate()
 }
 function rotateLightbox() {
   lightbox.value.rotation = (lightbox.value.rotation + 90) % 360
@@ -685,21 +712,190 @@ async function downloadLightboxImage() {
     link.click()
   }
 }
-function startLightboxDrag(event) {
-  event.currentTarget.setPointerCapture(event.pointerId)
+function clearLightboxDockTimer() {
+  if (lightboxDockTimer) window.clearTimeout(lightboxDockTimer)
+  lightboxDockTimer = 0
+}
+function scheduleLightboxDockHide(delay = 2400) {
+  clearLightboxDockTimer()
+  if (phonePortrait.value) return
+  lightboxDockTimer = window.setTimeout(() => {
+    lightboxDockVisible.value = false
+    lightboxDockTimer = 0
+  }, delay)
+}
+function showLightboxDock(autoHide = false) {
+  if (phonePortrait.value) return
+  clearLightboxDockTimer()
+  lightboxDockVisible.value = true
+  if (autoHide) scheduleLightboxDockHide()
+}
+function clearLightboxLongPress() {
+  if (lightboxLongPressTimer) window.clearTimeout(lightboxLongPressTimer)
+  lightboxLongPressTimer = 0
+}
+function scheduleLightboxLongPress(event) {
+  clearLightboxLongPress()
+  if (!phonePortrait.value || event.pointerType !== 'touch') return
+  const pointerId = event.pointerId
+  const x = event.clientX
+  const y = event.clientY
+  lightboxLongPressTimer = window.setTimeout(() => {
+    const pointer = lightboxPointers.get(pointerId)
+    if (!pointer || lightboxPointers.size !== 1 || Math.hypot(pointer.x - x, pointer.y - y) > 10) return
+    if (lightboxGesture?.type === 'pan' && lightboxGesture.pointerId === pointerId) lightboxGesture.longPressed = true
+    lightbox.value.dragging = false
+    mobileLightboxMenu.value = {
+      open: true,
+      x: Math.max(86, Math.min(window.innerWidth - 86, x)),
+      y: Math.max(76, Math.min(window.innerHeight - 76, y))
+    }
+    navigator.vibrate?.(12)
+    lightboxLongPressTimer = 0
+  }, 560)
+}
+function saveMobileLightboxImage() {
+  mobileLightboxMenu.value = { open: false, x: 0, y: 0 }
+  downloadLightboxImage()
+}
+function scheduleLightboxScaleUpdate() {
+  if (typeof window === 'undefined') return
+  if (lightboxScaleFrame) window.cancelAnimationFrame(lightboxScaleFrame)
+  nextTick(() => {
+    lightboxScaleFrame = window.requestAnimationFrame(() => {
+      lightboxScaleFrame = 0
+      const image = lightboxImageElement.value
+      if (!image?.naturalWidth) return
+      const baseScale = lightbox.value.fit ? image.clientWidth / image.naturalWidth : 1
+      lightboxScalePercent.value = Math.max(1, Math.round(baseScale * lightbox.value.scale * 100))
+    })
+  })
+}
+function lightboxBaseScale() {
+  const image = lightboxImageElement.value
+  if (!image?.naturalWidth || !lightbox.value.fit) return 1
+  return Math.max(0.01, image.clientWidth / image.naturalWidth)
+}
+function lightboxMaximumScale() {
+  return Math.min(20, Math.max(5, 2 / lightboxBaseScale()))
+}
+function isLightboxOriginalSize() {
+  return Math.abs(lightboxBaseScale() * lightbox.value.scale - 1) < 0.015
+}
+function lightboxPointerDistance(points) {
+  return Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y)
+}
+function lightboxPointerCenter(points) {
+  return { x: (points[0].x + points[1].x) / 2, y: (points[0].y + points[1].y) / 2 }
+}
+function beginLightboxPan(pointer) {
+  lightboxGesture = {
+    type: 'pan', pointerId: pointer.id, startX: pointer.x, startY: pointer.y,
+    startTime: pointer.time, imageX: lightbox.value.x, imageY: lightbox.value.y,
+    startScale: lightbox.value.scale, startFit: lightbox.value.fit,
+    startOriginal: isLightboxOriginalSize(), longPressed: false
+  }
+}
+function beginLightboxPinch() {
+  clearLightboxLongPress()
+  mobileLightboxMenu.value = { open: false, x: 0, y: 0 }
+  const points = [...lightboxPointers.values()].slice(0, 2)
+  if (points.length < 2) return
   lightbox.value.dragging = true
-  lightboxDrag = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, imageX: lightbox.value.x, imageY: lightbox.value.y }
+  lightboxGesture = {
+    type: 'pinch', startDistance: Math.max(1, lightboxPointerDistance(points)),
+    startCenter: lightboxPointerCenter(points), startScale: lightbox.value.scale,
+    imageX: lightbox.value.x, imageY: lightbox.value.y
+  }
 }
-function moveLightboxDrag(event) {
-  if (!lightboxDrag || lightboxDrag.pointerId !== event.pointerId) return
-  lightbox.value.x = lightboxDrag.imageX + event.clientX - lightboxDrag.startX
-  lightbox.value.y = lightboxDrag.imageY + event.clientY - lightboxDrag.startY
+function startLightboxGesture(event) {
+  if (event.pointerType === 'mouse' && event.button !== 0) return
+  if (mobileLightboxMenu.value.open) mobileLightboxMenu.value = { open: false, x: 0, y: 0 }
+  event.currentTarget.setPointerCapture(event.pointerId)
+  lightboxPointers.set(event.pointerId, { id: event.pointerId, x: event.clientX, y: event.clientY, time: event.timeStamp })
+  lightbox.value.dragging = !(phonePortrait.value && isLightboxOriginalSize())
+  if (lightboxPointers.size === 1) {
+    beginLightboxPan(lightboxPointers.get(event.pointerId))
+    scheduleLightboxLongPress(event)
+  }
+  else beginLightboxPinch()
 }
-function stopLightboxDrag(event) {
-  if (!lightboxDrag || lightboxDrag.pointerId !== event.pointerId) return
+function moveLightboxGesture(event) {
+  const pointer = lightboxPointers.get(event.pointerId)
+  if (!pointer) return
+  pointer.x = event.clientX
+  pointer.y = event.clientY
+  if (lightboxGesture?.type === 'pan' && Math.hypot(event.clientX - lightboxGesture.startX, event.clientY - lightboxGesture.startY) > 10) clearLightboxLongPress()
+  if (lightboxPointers.size >= 2) {
+    if (lightboxGesture?.type !== 'pinch') beginLightboxPinch()
+    const points = [...lightboxPointers.values()].slice(0, 2)
+    const center = lightboxPointerCenter(points)
+    const ratio = lightboxPointerDistance(points) / lightboxGesture.startDistance
+    lightbox.value.scale = Math.min(lightboxMaximumScale(), Math.max(0.25, Number((lightboxGesture.startScale * ratio).toFixed(3))))
+    lightbox.value.x = lightboxGesture.imageX + center.x - lightboxGesture.startCenter.x
+    lightbox.value.y = lightboxGesture.imageY + center.y - lightboxGesture.startCenter.y
+    scheduleLightboxScaleUpdate()
+    return
+  }
+  if (lightboxGesture?.type !== 'pan' || lightboxGesture.pointerId !== event.pointerId) return
+  if (phonePortrait.value && lightboxGesture.startOriginal) return
+  lightbox.value.x = lightboxGesture.imageX + event.clientX - lightboxGesture.startX
+  lightbox.value.y = lightboxGesture.imageY + event.clientY - lightboxGesture.startY
+}
+function toggleLightboxDoubleTap() {
+  if (phonePortrait.value) {
+    if (isLightboxOriginalSize() && Math.abs(lightbox.value.x) < 2 && Math.abs(lightbox.value.y) < 2) return
+    lightbox.value.fit = false
+  } else {
+    lightbox.value.fit = !lightbox.value.fit || Math.abs(lightbox.value.scale - 1) > 0.02 || Math.abs(lightbox.value.x) > 2 || Math.abs(lightbox.value.y) > 2
+  }
+  lightbox.value.scale = 1
+  lightbox.value.x = 0
+  lightbox.value.y = 0
+  scheduleLightboxScaleUpdate()
+}
+function stopLightboxGesture(event) {
+  const pointer = lightboxPointers.get(event.pointerId)
+  const gesture = lightboxGesture
+  if (!pointer) return
+  const dx = event.clientX - (gesture?.startX ?? event.clientX)
+  const dy = event.clientY - (gesture?.startY ?? event.clientY)
+  const duration = event.timeStamp - (gesture?.startTime ?? event.timeStamp)
+  const wasSinglePan = gesture?.type === 'pan' && gesture.pointerId === event.pointerId && lightboxPointers.size === 1
+  const wasCancelled = event.type === 'pointercancel'
+  const canSwipe = phonePortrait.value ? gesture?.startOriginal : gesture?.startFit && gesture?.startScale <= 1.02 && Math.abs(gesture?.imageX || 0) < 3 && Math.abs(gesture?.imageY || 0) < 3
+  const isSwipe = !wasCancelled && wasSinglePan && !gesture.longPressed && canSwipe && duration < 620 && Math.abs(dx) > 58 && Math.abs(dx) > Math.abs(dy) * 1.3
+  const isTap = !wasCancelled && wasSinglePan && !gesture.longPressed && duration < 280 && Math.hypot(dx, dy) < 10
+
+  clearLightboxLongPress()
   if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
-  lightbox.value.dragging = false
-  lightboxDrag = null
+  lightboxPointers.delete(event.pointerId)
+  if (isSwipe && lightbox.value.media.length > 1) {
+    moveLightbox(dx < 0 ? 1 : -1)
+  } else if (isTap) {
+    const sinceLastTap = event.timeStamp - lightboxLastTap.time
+    const nearLastTap = Math.hypot(event.clientX - lightboxLastTap.x, event.clientY - lightboxLastTap.y) < 34
+    if (sinceLastTap > 0 && sinceLastTap < 340 && nearLastTap) {
+      toggleLightboxDoubleTap()
+      lightboxLastTap = { time: 0, x: 0, y: 0 }
+    } else {
+      lightboxLastTap = { time: event.timeStamp, x: event.clientX, y: event.clientY }
+    }
+  }
+
+  if (lightboxPointers.size >= 2) beginLightboxPinch()
+  else if (lightboxPointers.size === 1) beginLightboxPan([...lightboxPointers.values()][0])
+  else {
+    lightbox.value.dragging = false
+    lightboxGesture = null
+  }
+}
+function closeMobileNavigationOnInputFocus() {
+  if (phonePortrait.value) mobileMenuOpen.value = false
+}
+function handleWindowResize() {
+  scheduleTimelineWindow()
+  if (lightbox.value.open) scheduleLightboxScaleUpdate()
 }
 function handleGlobalKeydown(event) {
   if (showBrandMenu.value && event.key === 'Escape') {
@@ -1001,13 +1197,14 @@ function resetTimelineWindow() {
   nextTick(scheduleTimelineWindow)
 }
 function isPhonePortraitScreen() {
-  return window.matchMedia('(max-width: 760px)').matches && window.innerHeight >= window.innerWidth
+  return window.matchMedia('(max-width: 760px)').matches
 }
 function updatePhonePortrait() {
   const nextPhonePortrait = isPhonePortraitScreen()
   if (phonePortrait.value === nextPhonePortrait) return
   phonePortrait.value = nextPhonePortrait
   mobileMenuOpen.value = false
+  if (lightbox.value.open && !nextPhonePortrait) showLightboxDock(true)
   if (nextPhonePortrait) openPhoneDefaultTimeline()
   resetTimelineWindow()
 }
@@ -1104,8 +1301,8 @@ watch(platformCards, cards => {
   if (!credentialPlatform.value) return
   credentialPlatform.value = cards.find(platform => platform.key === credentialPlatform.value.key) || null
 })
-onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#080a0e' : '#fbf7ea'); phonePortraitQuery = window.matchMedia('(max-width: 760px)'); phonePortrait.value = isPhonePortraitScreen(); phonePortraitQuery.addEventListener('change', updatePhonePortrait); window.addEventListener('orientationchange', updatePhonePortrait); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); if (phonePortrait.value) openPhoneDefaultTimeline(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', applyRoute); window.addEventListener('scroll', scheduleTimelineWindow, { passive: true }); window.addEventListener('resize', scheduleTimelineWindow) })
-onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); if (sessionPollTimer) window.clearInterval(sessionPollTimer); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); window.removeEventListener('orientationchange', updatePhonePortrait); postResizeObserver?.disconnect(); observedPostElements.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); closeLightbox(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', applyRoute); window.removeEventListener('scroll', scheduleTimelineWindow); window.removeEventListener('resize', scheduleTimelineWindow); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
+onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#080a0e' : '#fbf7ea'); phonePortraitQuery = window.matchMedia('(max-width: 760px)'); phonePortrait.value = isPhonePortraitScreen(); phonePortraitQuery.addEventListener('change', updatePhonePortrait); window.addEventListener('orientationchange', updatePhonePortrait); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); if (phonePortrait.value) openPhoneDefaultTimeline(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', applyRoute); window.addEventListener('scroll', scheduleTimelineWindow, { passive: true }); window.addEventListener('resize', handleWindowResize) })
+onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); if (sessionPollTimer) window.clearInterval(sessionPollTimer); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); window.removeEventListener('orientationchange', updatePhonePortrait); postResizeObserver?.disconnect(); observedPostElements.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); closeLightbox(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', applyRoute); window.removeEventListener('scroll', scheduleTimelineWindow); window.removeEventListener('resize', handleWindowResize); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
 </script>
 
 <template>
@@ -1171,6 +1368,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); if (sessionPollTi
     </aside>
 
     <main v-if="!showSettings && activeNav !== 'pulls'" :class="['content', { 'liked-page': activeNav === 'liked' }]" @click="closeContextMenu" @contextmenu.prevent="openContextMenu($event)">
+      <div v-if="!authorProfile && activeNav !== 'liked'" class="night-sky-decor" aria-hidden="true"><i class="night-haze"></i><i class="night-moon"></i><i class="night-star star-one"></i><i class="night-star star-two"></i><i class="night-star star-three"></i><i class="night-star star-four"></i><i class="night-star star-five"></i><i class="night-star star-six"></i><i class="night-star star-seven"></i><i class="night-star star-eight"></i><i class="night-meteor meteor-one"></i><i class="night-meteor meteor-two"></i></div>
       <header v-if="authorProfile" class="topbar author-page-header">
         <div class="author-profile-main">
           <button class="author-back-button" type="button" title="返回时间线" aria-label="返回时间线" @click="closeAuthor">←</button>
@@ -1181,12 +1379,11 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); if (sessionPollTi
       </header>
       <header v-else-if="activeNav !== 'liked'" class="topbar timeline-hero">
 <div class="seasonal-decor" :class="`season-${localSeason}`" aria-hidden="true">
-  <template v-if="localSeason === 'spring'"><i class="spring-branch"></i><i class="spring-blossom blossom-one"></i><i class="spring-blossom blossom-two"></i><i class="spring-blossom blossom-three"></i><i class="spring-blossom blossom-four"></i><i class="spring-petal petal-one"></i><i class="spring-petal petal-two"></i></template>
-  <template v-else-if="localSeason === 'summer'"><i class="summer-sun"></i><i class="summer-pond"></i><i class="lotus-leaf leaf-one"></i><i class="lotus-leaf leaf-two"></i><i class="summer-lotus"></i><i class="summer-dragonfly"></i><i class="summer-fish fish-one"></i><i class="summer-fish fish-two"></i></template>
+  <template v-if="localSeason === 'spring'"><i class="spring-branch"></i><i class="spring-stem stem-one"></i><i class="spring-stem stem-two"></i><i class="spring-stem stem-three"></i><i class="spring-leaf spring-leaf-one"></i><i class="spring-leaf spring-leaf-two"></i><i class="spring-leaf spring-leaf-three"></i><i class="spring-blossom blossom-one"></i><i class="spring-blossom blossom-two"></i><i class="spring-blossom blossom-three"></i><i class="spring-blossom blossom-four"></i><i class="spring-petal petal-one"></i><i class="spring-petal petal-two"></i></template>
+  <template v-else-if="localSeason === 'summer'"><i class="summer-sun"></i><i class="summer-pond"></i><i class="summer-stem stem-one"></i><i class="summer-stem stem-two"></i><i class="lotus-leaf leaf-one"></i><i class="lotus-leaf leaf-two"></i><i class="summer-lotus"></i><i class="summer-lotus-bud"></i><i class="summer-dragonfly"></i><i class="summer-fish fish-one"></i><i class="summer-fish fish-two"></i></template>
   <template v-else-if="localSeason === 'autumn'"><i class="autumn-glow"></i><i class="autumn-branch"></i><i class="autumn-leaf leaf-one"></i><i class="autumn-leaf leaf-two"></i><i class="autumn-leaf leaf-three"></i><i class="autumn-leaf leaf-four"></i><i class="autumn-leaf leaf-five"></i></template>
-  <template v-else><i class="winter-haze"></i><i class="winter-snowman"></i><i class="winter-ice"></i><i class="winter-snowflake flake-one"></i><i class="winter-snowflake flake-two"></i><i class="winter-snowflake flake-three"></i><i class="winter-snowflake flake-four"></i><i class="winter-snowflake flake-five"></i></template>
+  <template v-else><i class="winter-haze"></i><i class="winter-branch"></i><i class="winter-plum plum-one"></i><i class="winter-plum plum-two"></i><i class="winter-plum plum-three"></i><i class="winter-snowman"></i><i class="winter-ice"></i><i class="winter-snowflake flake-one"></i><i class="winter-snowflake flake-two"></i><i class="winter-snowflake flake-three"></i><i class="winter-snowflake flake-four"></i><i class="winter-snowflake flake-five"></i></template>
 </div>
-<div class="night-sky-decor" aria-hidden="true"><i class="night-haze"></i><i class="night-moon"></i><i class="night-star star-one"></i><i class="night-star star-two"></i><i class="night-star star-three"></i><i class="night-star star-four"></i><i class="night-star star-five"></i><i class="night-star star-six"></i><i class="night-star star-seven"></i><i class="night-star star-eight"></i><i class="night-meteor meteor-one"></i><i class="night-meteor meteor-two"></i></div>
 <div class="timeline-hero-copy">
 <p class="eyebrow">SAVED MOMENTS · {{ new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' }) }}</p>
 <h1>{{ selectedTag ? `#${selectedTag}` : `${localGreeting}，拾光者` }}</h1>
@@ -1227,7 +1424,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); if (sessionPollTi
 </button>
 </div>
 <div class="timeline-tools">
-  <label class="timeline-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><input v-model="timelineSearch" type="search" placeholder="搜索内容、作者或标签" aria-label="搜索动态内容、作者或标签"></label>
+  <label class="timeline-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><input v-model="timelineSearch" type="search" placeholder="搜索内容、作者或标签" aria-label="搜索动态内容、作者或标签" @focus="closeMobileNavigationOnInputFocus"></label>
 </div>
 </div>
       <p v-if="timelineMessage" class="timeline-message">{{ timelineMessage }}</p>
@@ -1247,6 +1444,9 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); if (sessionPollTi
 <p v-if="post.caption" class="caption">{{ post.caption }}</p>
 <div v-if="post.media?.length" :class="['media-grid', `media-count-${Math.min(post.media.length, 9)}`]">
 <button v-for="(media, mediaIndex) in post.media.slice(0, 9)" :key="media" :class="['media-frame', mediaShape(post, mediaIndex)]" type="button" :aria-label="`查看 ${post.author} 的第 ${mediaIndex + 1} 张图片`" @click="openLightbox(post, mediaIndex)"><img :src="previewMedia(media)" alt="" loading="lazy" decoding="async" fetchpriority="low" @load="setMediaShape(post, mediaIndex, $event); scheduleTimelineWindow()"><span v-if="mediaIndex === 8 && post.media.length > 9" class="media-more-count">+{{ post.media.length - 9 }}</span></button>
+</div>
+<div v-if="post.videos?.length" class="post-video-list">
+<video v-for="video in post.videos" :key="video.url" :src="video.url" :poster="video.poster ? previewMedia(video.poster) : undefined" controls playsinline preload="metadata" @loadedmetadata="scheduleTimelineWindow"></video>
 </div>
 <div class="post-foot">
 <div class="tag-row"><button v-for="tag in post.tags" :key="tag" type="button" :class="{ active: selectedTag === tag }" @click="openTag(tag)">#{{ tag }}</button></div>
@@ -1299,25 +1499,30 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); if (sessionPollTi
     <div v-if="lightbox.open" class="lightbox-layer" role="dialog" aria-modal="true" :aria-label="`${lightbox.author} 的动态媒体`" @click.self="closeLightbox" @wheel.prevent="zoomLightbox">
       <button class="lightbox-close" type="button" title="关闭大图" aria-label="关闭大图" @click="closeLightbox">×</button>
       <figure @click.self="closeLightbox">
-        <div :key="`${lightbox.media[lightbox.index]}:${lightbox.motion}`" :class="['lightbox-image-stage', `motion-${lightbox.motion}`]">
-          <img :src="lightbox.media[lightbox.index]" :alt="`${lightbox.author} 的动态图片 ${lightbox.index + 1}`" :class="{ dragging: lightbox.dragging, 'original-size': !lightbox.fit }" :style="{ transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) rotate(${lightbox.rotation}deg) scale(${lightbox.scale})` }" draggable="false" @pointerdown.prevent="startLightboxDrag" @pointermove.prevent="moveLightboxDrag" @pointerup="stopLightboxDrag" @pointercancel="stopLightboxDrag">
+        <div :key="`${lightbox.media[lightbox.index]}:${lightbox.motion}`" :class="['lightbox-image-stage', `motion-${lightbox.motion}`, { 'mobile-original-size': phonePortrait && isLightboxOriginalSize() }]" @contextmenu.prevent @pointerdown.prevent="startLightboxGesture" @pointermove.prevent="moveLightboxGesture" @pointerup.prevent="stopLightboxGesture" @pointercancel.prevent="stopLightboxGesture">
+          <img ref="lightboxImageElement" :src="lightbox.media[lightbox.index]" :alt="`${lightbox.author} 的动态图片 ${lightbox.index + 1}`" :class="{ dragging: lightbox.dragging, 'original-size': !lightbox.fit }" :style="{ transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) rotate(${lightbox.rotation}deg) scale(${lightbox.scale})` }" draggable="false" @load="scheduleLightboxScaleUpdate">
         </div>
       </figure>
-      <div class="lightbox-dock" role="toolbar" aria-label="图片查看工具">
+      <div v-if="!phonePortrait" class="lightbox-dock-zone" @pointerenter="showLightboxDock(false)" @pointermove="showLightboxDock(false)" @pointerleave="scheduleLightboxDockHide(650)">
+      <div :class="['lightbox-dock', { hidden: !lightboxDockVisible }]" role="toolbar" aria-label="图片查看工具">
         <button type="button" title="上一张" aria-label="上一张" :disabled="lightbox.media.length < 2" @click="moveLightbox(-1)"><svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg></button>
         <span class="lightbox-counter">{{ lightbox.index + 1 }}/{{ lightbox.media.length }}</span>
         <button type="button" title="下一张" aria-label="下一张" :disabled="lightbox.media.length < 2" @click="moveLightbox(1)"><svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></button>
         <i></i>
         <button type="button" title="缩小" aria-label="缩小" @click="zoomLightboxBy(-0.15)"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M8 11h6M16 16l5 5"/></svg></button>
-        <span class="lightbox-scale">{{ Math.round(lightbox.scale * 100) }}%</span>
+        <span class="lightbox-scale">{{ lightboxScalePercent }}%</span>
         <button type="button" title="放大" aria-label="放大" @click="zoomLightboxBy(0.15)"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M8 11h6M11 8v6M16 16l5 5"/></svg></button>
         <button type="button" :title="lightbox.fit ? '原始尺寸' : '适应页面'" :aria-label="lightbox.fit ? '原始尺寸' : '适应页面'" :class="{ active: !lightbox.fit }" @click="toggleLightboxFit">
-          <svg v-if="lightbox.fit" viewBox="0 0 24 24"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/><rect x="8" y="8" width="8" height="8" rx="2"/></svg>
-          <svg v-else viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9v6M16 9v6M10.5 10.5 12 9v6"/></svg>
+          <svg v-if="lightbox.fit" viewBox="0 0 24 24"><path d="M8 4H6a2 2 0 0 0-2 2v2M16 4h2a2 2 0 0 1 2 2v2M8 20H6a2 2 0 0 1-2-2v-2M16 20h2a2 2 0 0 0 2-2v-2"/><rect x="9" y="9" width="6" height="6" rx="1.8"/></svg>
+          <svg v-else viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="m9 9-2-2M15 9l2-2M9 15l-2 2M15 15l2 2"/></svg>
         </button>
         <i></i>
-        <button type="button" title="顺时针旋转" aria-label="顺时针旋转" @click="rotateLightbox"><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/><rect x="9" y="9" width="6" height="6"/></svg></button>
-        <button type="button" title="下载原图" aria-label="下载原图" @click="downloadLightboxImage"><svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M4 20h16"/></svg></button>
+        <button type="button" title="顺时针旋转" aria-label="顺时针旋转" @click="rotateLightbox"><svg viewBox="0 0 24 24"><path d="M17.5 7.5H21V4M20.5 7A8 8 0 0 0 6.4 6.4"/><rect x="6" y="9" width="11" height="10" rx="2"/><path d="M9 9V7a2 2 0 0 1 2-2h4"/></svg></button>
+        <button type="button" title="下载原图" aria-label="下载原图" @click="downloadLightboxImage"><svg viewBox="0 0 24 24"><path d="M12 3v12M7.5 10.5 12 15l4.5-4.5M5 19v2h14v-2"/></svg></button>
+      </div>
+      </div>
+      <div v-if="phonePortrait && mobileLightboxMenu.open" class="mobile-lightbox-menu" :style="{ left: `${mobileLightboxMenu.x}px`, top: `${mobileLightboxMenu.y}px` }" role="menu" @pointerdown.stop @click.stop>
+        <button type="button" role="menuitem" @click="saveMobileLightboxImage"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7.5 10.5 12 15l4.5-4.5M5 19v2h14v-2"/></svg><span>保存图片</span></button>
       </div>
     </div>
     <button v-if="!showSettings && activeNav === 'pulls'" class="add-fab" @click="showAdd = true">＋ <span>添加来源</span>
@@ -1490,11 +1695,12 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); if (sessionPollTi
             <label><span>排除关键词</span><input v-model="selectedFeed.excludeKeywordInput" placeholder="广告 抽奖" maxlength="240"></label>
           </div>
           <div class="feed-toggle-row">
-            <label><input v-model="selectedFeed.onlyWithImages" type="checkbox"><span>只拉取包含图片的动态</span></label>
+            <label><input v-model="selectedFeed.onlyWithImages" type="checkbox"><span>包含图片</span></label>
             <label><input v-model="selectedFeed.includePast" type="checkbox"><span>首次拉取历史动态</span></label>
+            <label v-if="selectedFeed.source === 'weibo' || (selectedFeed.source === 'bilibili' && !selectedFeed.id.startsWith('bili-opus-favorites-'))"><input v-model="selectedFeed.includeVideos" type="checkbox"><span>包含视频</span></label>
             <label><input v-model="selectedFeed.enabled" type="checkbox"><span>启用自动同步</span></label>
           </div>
-          <div v-if="selectedFeed.source === 'bilibili' && !selectedFeed.id.startsWith('bili-opus-favorites-')" class="content-scope"><strong>内容范围</strong><span>图文动态（DRAW）</span><label><input v-model="selectedFeed.contentTypes" type="checkbox" value="ARTICLE"><span>专栏（ARTICLE）</span></label><small>专栏默认关闭；视频及转发视频始终过滤。</small></div>
+          <div v-if="selectedFeed.source === 'bilibili' && !selectedFeed.id.startsWith('bili-opus-favorites-')" class="content-scope"><strong>内容范围</strong><span>图文动态（DRAW）</span><label><input v-model="selectedFeed.contentTypes" type="checkbox" value="ARTICLE"><span>专栏（ARTICLE）</span></label><small>专栏默认关闭；转发动态仍过滤。</small></div>
           <p v-if="settingsError" class="login-error">{{ settingsError }}</p><button class="login-button" :disabled="settingsBusy">保存来源设置</button>
         </form>
       </div>
