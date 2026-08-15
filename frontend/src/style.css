@@ -1290,7 +1290,6 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
   cursor: pointer;
   transition: border-color .2s ease, box-shadow .22s ease, background .2s ease;
 }
-.masonry-card.masonry-card-enter { animation: masonry-card-rise .3s cubic-bezier(.2, .72, .2, 1) var(--masonry-delay, 0ms) both; will-change: opacity, translate; }
 .masonry-card:hover {
   border-color: #d5c394;
   box-shadow: 0 12px 30px #806f4b20;
@@ -1551,10 +1550,6 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
 .dark .mobile-post-detail-page { background: #0e1015; }
 .dark .mobile-post-media-dots button.active { background: #d8c57e; }
 
-@keyframes masonry-card-rise {
-  from { opacity: 0; translate: 0 7px; }
-  to { opacity: 1; translate: 0 0; }
-}
 @keyframes masonry-detail-fade {
   from { opacity: 0; }
   to { opacity: 1; }
@@ -1595,7 +1590,6 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .masonry-card,
   .masonry-detail-backdrop,
   .masonry-detail-modal,
   .mobile-post-media-stage > :is(img, video) { animation: none; }

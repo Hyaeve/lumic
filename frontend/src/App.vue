@@ -123,12 +123,11 @@ const estimatedPostHeight = 560
 const timelineOverscan = 5
 let phonePortraitQuery = null
 let timelineFrame = 0
-let lastTimelineScrollY = 0
-let masonryScrollDirection = 'idle'
+let masonryAssignmentColumnCount = 0
 let postResizeObserver = null
 let sessionPollTimer = null
 const observedPostElements = new Map()
-const animatedMasonryPostIds = new Set()
+const masonryColumnAssignments = new Map()
 const transientTimers = new Set()
 const lightbox = ref({ open: false, media: [], index: 0, author: '', scale: 1, rotation: 0, fit: true, x: 0, y: 0, dragging: false, motion: 'enter' })
 const lightboxImageElement = ref(null)
@@ -220,11 +219,20 @@ function estimateMasonryPostHeight(post) {
 }
 const masonryLayout = computed(() => {
   const count = Math.max(1, masonryColumnCount.value)
+  if (masonryAssignmentColumnCount !== count) {
+    masonryAssignmentColumnCount = count
+    masonryColumnAssignments.clear()
+  }
   const heights = Array.from({ length: count }, () => 0)
   const items = filteredPosts.value.map((post, index) => {
-    let column = 0
-    for (let candidate = 1; candidate < count; candidate++) {
-      if (heights[candidate] < heights[column]) column = candidate
+    const id = String(post.id)
+    let column = masonryColumnAssignments.get(id)
+    if (!Number.isInteger(column) || column < 0 || column >= count) {
+      column = 0
+      for (let candidate = 1; candidate < count; candidate++) {
+        if (heights[candidate] < heights[column]) column = candidate
+      }
+      masonryColumnAssignments.set(id, column)
     }
     const height = masonryHeights.value[post.id] || estimateMasonryPostHeight(post)
     const item = { post, index, column, x: column * (masonryColumnWidth.value + masonryGap.value), y: heights[column], height }
@@ -1392,8 +1400,7 @@ function masonryItemStyle(item) {
   return {
     left: `${item.x}px`,
     top: `${item.y}px`,
-    width: `${masonryColumnWidth.value}px`,
-    '--masonry-delay': `${(item.index % 4) * 18}ms`
+    width: `${masonryColumnWidth.value}px`
   }
 }
 function previewMedia(media) {
@@ -1412,8 +1419,8 @@ function scheduleTransient(callback, delay) {
 }
 function prunePostCaches() {
   const activeIds = new Set(posts.value.map(post => String(post.id)))
-  for (const id of animatedMasonryPostIds) {
-    if (!activeIds.has(id)) animatedMasonryPostIds.delete(id)
+  for (const id of masonryColumnAssignments.keys()) {
+    if (!activeIds.has(id)) masonryColumnAssignments.delete(id)
   }
   for (const [key, element] of observedPostElements) {
     const id = key.slice(key.indexOf(':') + 1)
@@ -1468,10 +1475,18 @@ function openTag(tag) {
   stopSelection(); masonryDetailPost.value = null; showSettings.value = false; selectedAuthor.value = null; selectedTag.value = tag; activeNav.value = 'tag'; activeSource.value = 'all'
   updateRoute(`/tag/${encodeURIComponent(tag)}`)
 }
+function masonryMediaPending(element) {
+  const image = element.querySelector('.masonry-cover img')
+  if (image && (!image.complete || !image.naturalWidth)) return true
+  const video = element.querySelector('.masonry-cover video')
+  return Boolean(video && video.readyState < 1)
+}
 function measurePostElement(post, element, layout = element?.dataset.layout || 'list') {
+  if (layout === 'masonry' && masonryMediaPending(element)) return
   const height = Math.ceil(element.getBoundingClientRect().height)
   const heights = layout === 'masonry' ? masonryHeights : timelineHeights
-  if (height > 0 && heights.value[post.id] !== height) heights.value[post.id] = height
+  const previousHeight = heights.value[post.id]
+  if (height > 0 && (!previousHeight || Math.abs(previousHeight - height) > 1)) heights.value[post.id] = height
 }
 function setPostCard(post, element, layout = 'list') {
   const id = String(post.id)
@@ -1486,13 +1501,6 @@ function setPostCard(post, element, layout = 'list') {
   element.dataset.postId = post.id
   element.dataset.layout = layout
   observedPostElements.set(key, element)
-  if (layout === 'masonry' && !animatedMasonryPostIds.has(id)) {
-    animatedMasonryPostIds.add(id)
-    if (masonryScrollDirection !== 'up') {
-      element.classList.add('masonry-card-enter')
-      scheduleTransient(() => element.classList.remove('masonry-card-enter'), 620)
-    }
-  }
   measurePostElement(post, element, layout)
   postResizeObserver?.observe(element)
 }
@@ -1510,19 +1518,13 @@ function updateMasonryMetrics() {
 function updateTimelineWindow() {
   timelineFrame = 0
   if (!filteredPosts.value.length || showSettings.value || activeNav.value === 'pulls') return
-  const currentScrollY = window.scrollY
   if (isMasonryView.value) {
-    const scrollDelta = currentScrollY - lastTimelineScrollY
-    if (scrollDelta > 2) masonryScrollDirection = 'down'
-    else if (scrollDelta < -2) masonryScrollDirection = 'up'
-    lastTimelineScrollY = currentScrollY
     updateMasonryMetrics()
     const listTop = feedListElement.value?.getBoundingClientRect().top + window.scrollY || 0
     masonryViewportTop.value = Math.max(0, window.scrollY - listTop)
     masonryViewportBottom.value = masonryViewportTop.value + window.innerHeight
     return
   }
-  lastTimelineScrollY = currentScrollY
   const listTop = feedListElement.value?.getBoundingClientRect().top + window.scrollY || 0
   const viewportTop = Math.max(0, window.scrollY - listTop)
   const viewportBottom = viewportTop + window.innerHeight
@@ -1551,9 +1553,8 @@ function resetTimelineWindow() {
   timelineEnd.value = Math.min(filteredPosts.value.length, phonePortrait.value ? 7 : 15)
   masonryViewportTop.value = 0
   masonryViewportBottom.value = typeof window === 'undefined' ? 900 : window.innerHeight
-  lastTimelineScrollY = typeof window === 'undefined' ? 0 : window.scrollY
-  masonryScrollDirection = 'idle'
-  animatedMasonryPostIds.clear()
+  masonryColumnAssignments.clear()
+  masonryAssignmentColumnCount = 0
   nextTick(() => { updateMasonryMetrics(); scheduleTimelineWindow() })
 }
 function isPhonePortraitScreen() {
