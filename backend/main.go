@@ -91,7 +91,6 @@ type SourceConfig struct {
 	Handle          string    `json:"handle"`
 	Avatar          string    `json:"avatar,omitempty"`
 	Enabled         bool      `json:"enabled"`
-	IncludePast     bool      `json:"includePast"`
 	Schedule        string    `json:"schedule"`
 	ContentTypes    []string  `json:"contentTypes,omitempty"`
 	Tags            []string  `json:"tags,omitempty"`
@@ -938,7 +937,13 @@ func (s *SessionStore) create() (string, error) {
 	if s.tokens == nil {
 		s.tokens = make(map[string]time.Time)
 	}
-	s.tokens[token] = time.Now().Add(24 * time.Hour)
+	now := time.Now()
+	for existing, expiresAt := range s.tokens {
+		if !expiresAt.After(now) {
+			delete(s.tokens, existing)
+		}
+	}
+	s.tokens[token] = now.Add(sessionLifetime)
 	s.Unlock()
 	return token, nil
 }
@@ -1004,7 +1009,7 @@ func loginHandler(sessions *SessionStore, auth *AuthConfig) http.HandlerFunc {
 			http.Error(w, "unable to create session", http.StatusInternalServerError)
 			return
 		}
-		http.SetCookie(w, &http.Cookie{Name: "lumic_session", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: os.Getenv("LUMIC_COOKIE_SECURE") == "true", MaxAge: 24 * 60 * 60, Expires: time.Now().Add(24 * time.Hour)})
+		http.SetCookie(w, &http.Cookie{Name: "lumic_session", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: os.Getenv("LUMIC_COOKIE_SECURE") == "true", MaxAge: int(sessionLifetime.Seconds()), Expires: time.Now().Add(sessionLifetime)})
 		writeJSON(w, map[string]string{"status": "ok"})
 	}
 }
@@ -1015,8 +1020,8 @@ func sessionHandler(sessions *SessionStore) http.HandlerFunc {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		cookie, err := r.Cookie("lumic_session")
-		if err != nil || !sessions.valid(cookie.Value) {
+		token := requestSessionToken(r)
+		if token == "" || !sessions.valid(token) {
 			clearSessionCookie(w)
 			writeJSON(w, map[string]bool{"authenticated": false})
 			return
@@ -1031,8 +1036,8 @@ func logoutHandler(sessions *SessionStore) http.HandlerFunc {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if cookie, err := r.Cookie("lumic_session"); err == nil {
-			sessions.revoke(cookie.Value)
+		if token := requestSessionToken(r); token != "" {
+			sessions.revoke(token)
 		}
 		clearSessionCookie(w)
 		writeJSON(w, map[string]string{"status": "logged_out"})
@@ -1089,12 +1094,12 @@ func passwordHash() string {
 
 func authMiddleware(sessions *SessionStore, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/login" || r.URL.Path == "/api/session" || r.URL.Path == "/api/health" {
+		if isPublicAPIPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		cookie, err := r.Cookie("lumic_session")
-		if err != nil || !sessions.valid(cookie.Value) {
+		token := requestSessionToken(r)
+		if token == "" || !sessions.valid(token) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -2568,7 +2573,6 @@ func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Requ
 		for index := range b.config.Subscriptions {
 			if b.config.Subscriptions[index].ID == input.ID {
 				b.config.Subscriptions[index].Enabled = input.Enabled
-				b.config.Subscriptions[index].IncludePast = input.IncludePast
 				b.config.Subscriptions[index].Schedule = input.Schedule
 				if isBilibiliFavoriteOpusFeed(b.config.Subscriptions[index]) {
 					b.config.Subscriptions[index].ContentTypes = []string{"ARTICLE"}
@@ -2622,7 +2626,6 @@ func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Requ
 			Handle:         "UID " + credentials.DedeUserID,
 			Avatar:         credentials.Avatar,
 			Enabled:        true,
-			IncludePast:    true,
 			Schedule:       "0 6 * * *",
 			ContentTypes:   []string{"ARTICLE"},
 			Tags:           []string{"B站收藏"},
@@ -2652,12 +2655,11 @@ func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var input struct {
-		UserID      string   `json:"userId"`
-		Name        string   `json:"name"`
-		Avatar      string   `json:"avatar"`
-		IncludePast bool     `json:"includePast"`
-		Schedule    string   `json:"schedule"`
-		Tags        []string `json:"tags"`
+		UserID   string   `json:"userId"`
+		Name     string   `json:"name"`
+		Avatar   string   `json:"avatar"`
+		Schedule string   `json:"schedule"`
+		Tags     []string `json:"tags"`
 	}
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&input) != nil || strings.TrimSpace(input.UserID) == "" || strings.TrimSpace(input.Name) == "" {
 		http.Error(w, "invalid subscription", http.StatusBadRequest)
@@ -2671,7 +2673,7 @@ func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "invalid subscription", http.StatusBadRequest)
 		return
 	}
-	feed := SourceConfig{ID: "bili-" + userID, Source: SourceBilibili, Name: strings.TrimSpace(input.Name), Handle: "UID " + userID, Avatar: strings.TrimSpace(input.Avatar), Enabled: true, IncludePast: input.IncludePast, Schedule: input.Schedule, ContentTypes: []string{"DRAW"}, Tags: normalizeTags(input.Tags), OnlyWithImages: true}
+	feed := SourceConfig{ID: "bili-" + userID, Source: SourceBilibili, Name: strings.TrimSpace(input.Name), Handle: "UID " + userID, Avatar: strings.TrimSpace(input.Avatar), Enabled: true, Schedule: input.Schedule, ContentTypes: []string{"DRAW"}, Tags: normalizeTags(input.Tags), OnlyWithImages: true}
 	var storageErr error
 	feed, storageErr = prepareSourceStorage(feed)
 	if storageErr != nil {
@@ -3142,7 +3144,7 @@ func (b *BilibiliStore) fetchBilibiliFavoriteOpusPosts(feed SourceConfig, full b
 		return nil, err
 	}
 	pageLimit := 1
-	if full || (feed.LastSyncedAt.IsZero() && feed.IncludePast) {
+	if full {
 		pageLimit = 100
 	}
 	offset := ""
@@ -3951,7 +3953,7 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 		if len(payload.Data.Items) == 0 || !payload.Data.HasMore || payload.Data.Offset == "" || payload.Data.Offset == offset || reachedBoundary {
 			break
 		}
-		if !full && feed.LastSyncedAt.IsZero() && !feed.IncludePast {
+		if !full && feed.LastSyncedAt.IsZero() {
 			break
 		}
 		offset = payload.Data.Offset
@@ -4163,6 +4165,9 @@ func (b *BilibiliStore) fetchWeiboPosts(feed SourceConfig, full bool) ([]Post, e
 				break
 			}
 			posts = append(posts, pagePosts...)
+			if !full && feed.LastSyncedAt.IsZero() {
+				break
+			}
 			if !full && !feed.LastSyncedAt.IsZero() {
 				reachedBoundary := false
 				for _, post := range pagePosts {
@@ -4186,7 +4191,7 @@ func (b *BilibiliStore) fetchWeiboPosts(feed SourceConfig, full bool) ([]Post, e
 	return nil, fmt.Errorf("微博拉取失败：%w", lastErr)
 }
 
-func (b *BilibiliStore) fetchWeiboLikedPosts(feed SourceConfig) ([]Post, error) {
+func (b *BilibiliStore) fetchWeiboLikedPosts(feed SourceConfig, full bool) ([]Post, error) {
 	b.RLock()
 	credentials, proxyURL := b.config.Weibo, b.config.ProxyURL
 	b.RUnlock()
@@ -4208,9 +4213,13 @@ func (b *BilibiliStore) fetchWeiboLikedPosts(feed SourceConfig) ([]Post, error) 
 		},
 	}
 	var lastErr error
+	pageLimit := 1
+	if full {
+		pageLimit = 50
+	}
 	for _, endpoint := range endpoints {
 		posts, seen := make([]Post, 0), make(map[string]bool)
-		for page := 1; page <= 50; page++ {
+		for page := 1; page <= pageLimit; page++ {
 			payload, _, err := weiboRawRequest(endpoint(page), credentials, proxyURL)
 			if err != nil {
 				lastErr = err
@@ -4238,7 +4247,7 @@ func (b *BilibiliStore) weiboLikesHandler(w http.ResponseWriter, r *http.Request
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	posts, err := b.fetchWeiboLikedPosts(SourceConfig{})
+	posts, err := b.fetchWeiboLikedPosts(SourceConfig{}, false)
 	if err != nil {
 		writeAPIError(w, http.StatusBadGateway, err.Error())
 		return
@@ -4322,7 +4331,12 @@ func (s *Store) postsAfterOrSourceMembership(posts []Post, boundary time.Time, f
 			continue
 		}
 		stored, ok := existing[post.ID]
-		if !ok || containsString(stored.FeedIDs, feedID) {
+		if !ok {
+			post.FeedIDs = mergeUniqueStrings(post.FeedIDs, []string{feedID})
+			filtered = append(filtered, post)
+			continue
+		}
+		if containsString(stored.FeedIDs, feedID) {
 			continue
 		}
 		if len(stored.Media) > 0 {
@@ -4342,6 +4356,141 @@ func (s *Store) postsAfterOrSourceMembership(posts []Post, boundary time.Time, f
 		filtered = append(filtered, post)
 	}
 	return filtered
+}
+
+func localFlowFileAvailable(value string) bool {
+	localPath, ok := localFlowArchivePath(value)
+	if !ok {
+		return false
+	}
+	info, err := os.Stat(localPath)
+	return err == nil && !info.IsDir()
+}
+
+func reuseAvailablePostArchive(incoming, stored Post) (Post, bool) {
+	prepared := incoming
+	complete := true
+	if len(incoming.Media) == 0 && len(stored.Media) > 0 {
+		prepared.Media = append([]string(nil), stored.Media...)
+		for _, media := range prepared.Media {
+			if !localFlowFileAvailable(media) {
+				complete = false
+			}
+		}
+	} else {
+		for index := range prepared.Media {
+			if index < len(stored.Media) && localFlowFileAvailable(stored.Media[index]) {
+				prepared.Media[index] = stored.Media[index]
+			} else {
+				complete = false
+			}
+		}
+		for index := len(prepared.Media); index < len(stored.Media); index++ {
+			if localFlowFileAvailable(stored.Media[index]) {
+				prepared.Media = append(prepared.Media, stored.Media[index])
+			}
+		}
+	}
+	if len(incoming.Videos) == 0 && len(stored.Videos) > 0 {
+		prepared.Videos = append([]PostVideo(nil), stored.Videos...)
+		for _, video := range prepared.Videos {
+			if !localFlowFileAvailable(video.URL) || (video.Poster != "" && !localFlowFileAvailable(video.Poster)) {
+				complete = false
+			}
+		}
+	} else {
+		for index := range prepared.Videos {
+			if index >= len(stored.Videos) {
+				complete = false
+				continue
+			}
+			storedVideo := stored.Videos[index]
+			if localFlowFileAvailable(storedVideo.URL) {
+				prepared.Videos[index].URL = storedVideo.URL
+			} else {
+				complete = false
+			}
+			if prepared.Videos[index].Poster != "" {
+				if localFlowFileAvailable(storedVideo.Poster) {
+					prepared.Videos[index].Poster = storedVideo.Poster
+				} else {
+					complete = false
+				}
+			}
+		}
+		for index := len(prepared.Videos); index < len(stored.Videos); index++ {
+			storedVideo := stored.Videos[index]
+			if localFlowFileAvailable(storedVideo.URL) && (storedVideo.Poster == "" || localFlowFileAvailable(storedVideo.Poster)) {
+				prepared.Videos = append(prepared.Videos, storedVideo)
+			}
+		}
+	}
+	if stored.TextFile != "" && localFlowFileAvailable(stored.TextFile) {
+		prepared.TextFile = stored.TextFile
+	} else if cleanRemoteText(incoming.Caption) != "" {
+		complete = false
+	}
+	if strings.HasPrefix(stored.Avatar, "/flow/") && localFlowFileAvailable(stored.Avatar) {
+		prepared.Avatar = stored.Avatar
+	}
+	if cleanRemoteText(stored.Caption) != "" && len([]rune(cleanRemoteText(stored.Caption))) >= len([]rune(cleanRemoteText(incoming.Caption))) {
+		prepared.Caption = stored.Caption
+	}
+	if prepared.OriginalURL == "" {
+		prepared.OriginalURL = stored.OriginalURL
+	}
+	prepared.Liked = stored.Liked
+	prepared.FavoriteExplicit = stored.FavoriteExplicit
+	prepared.FeedIDs = mergeUniqueStrings(stored.FeedIDs, incoming.FeedIDs)
+	return prepared, complete
+}
+
+func historyPostNeedsMetadataUpdate(stored, incoming Post, feed SourceConfig) bool {
+	if !containsString(stored.FeedIDs, feed.ID) {
+		return true
+	}
+	storedCaption, incomingCaption := cleanRemoteText(stored.Caption), cleanRemoteText(incoming.Caption)
+	if incomingCaption != "" && len([]rune(incomingCaption)) > len([]rune(storedCaption)) {
+		return true
+	}
+	if stored.OriginalURL == "" && incoming.OriginalURL != "" {
+		return true
+	}
+	if stored.Avatar == "" && incoming.Avatar != "" {
+		return true
+	}
+	for _, tag := range feed.Tags {
+		if !containsString(stored.Tags, tag) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Store) postsForHistoryBackfill(posts []Post, feed SourceConfig) ([]Post, int) {
+	s.RLock()
+	existing := make(map[string]Post, len(s.posts))
+	for _, post := range s.posts {
+		existing[post.ID] = post
+	}
+	s.RUnlock()
+
+	pending := make([]Post, 0, len(posts))
+	skipped := 0
+	for _, incoming := range posts {
+		stored, ok := existing[incoming.ID]
+		if !ok {
+			pending = append(pending, incoming)
+			continue
+		}
+		prepared, archiveComplete := reuseAvailablePostArchive(incoming, stored)
+		if postBelongsToSource(&stored, feed) && archiveComplete && !historyPostNeedsMetadataUpdate(stored, incoming, feed) {
+			skipped++
+			continue
+		}
+		pending = append(pending, prepared)
+	}
+	return pending, skipped
 }
 
 func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, error) {
@@ -4383,7 +4532,7 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 		}
 	case SourceWeibo:
 		if strings.HasPrefix(feed.ID, "weibo-likes-") {
-			posts, err = b.fetchWeiboLikedPosts(feed)
+			posts, err = b.fetchWeiboLikedPosts(feed, full)
 		} else {
 			posts, err = b.fetchWeiboPosts(feed, full)
 		}
@@ -4392,20 +4541,27 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 	default:
 		err = errors.New("该来源尚未配置采集器")
 	}
-	added := 0
+	added, historyEligible, historyPending, historySkipped := 0, 0, 0, 0
 	if err == nil {
 		if !full {
 			if isBilibiliFavoriteOpusFeed(feed) && b.content != nil {
 				posts = b.content.postsAfterOrSourceMembership(posts, feed.LastSyncedAt, feed.ID)
 			} else if feed.Source == SourceBilibili && b.content != nil {
 				posts = b.content.postsAfterOrCaptionRepair(posts, feed.LastSyncedAt)
-			} else if strings.HasPrefix(feed.ID, "weibo-likes-") && b.content != nil {
+			} else if isCollectionFeed(feed) && b.content != nil {
 				posts = b.content.postsAfterOrSourceMembership(posts, feed.LastSyncedAt, feed.ID)
 			} else {
 				posts = postsAfter(posts, feed.LastSyncedAt)
 			}
 		}
 		posts = filterSourcePosts(posts, feed)
+		if full {
+			historyEligible = len(posts)
+			if b.content != nil {
+				posts, historySkipped = b.content.postsForHistoryBackfill(posts, feed)
+			}
+			historyPending = len(posts)
+		}
 		if len(posts) > 0 && !strings.HasPrefix(feed.ID, "weibo-likes-") && !strings.HasPrefix(feed.ID, "pixiv-bookmarks-") && !isBilibiliFavoriteOpusFeed(feed) {
 			if strings.TrimSpace(posts[0].Author) != "" {
 				feed.Name = posts[0].Author
@@ -4446,7 +4602,11 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 			} else {
 				(*list)[index].LastSyncStatus = "success"
 				if full {
-					(*list)[index].LastSyncMessage = fmt.Sprintf("重新拉取完成，归档 %d 条新动态", added)
+					repaired := historyPending - added
+					if repaired < 0 {
+						repaired = 0
+					}
+					(*list)[index].LastSyncMessage = fmt.Sprintf("历史补全完成：符合设置 %d 条，新增 %d 条，修复或补充 %d 条，跳过 %d 条已完整归档动态", historyEligible, added, repaired, historySkipped)
 				} else {
 					(*list)[index].LastSyncMessage = fmt.Sprintf("增量拉取完成，新增 %d 条动态", added)
 				}
@@ -4891,7 +5051,6 @@ func (b *BilibiliStore) pixivSubscriptionsHandler(w http.ResponseWriter, r *http
 		for index := range b.config.PixivSubscriptions {
 			if b.config.PixivSubscriptions[index].ID == input.ID {
 				b.config.PixivSubscriptions[index].Enabled = input.Enabled
-				b.config.PixivSubscriptions[index].IncludePast = input.IncludePast
 				b.config.PixivSubscriptions[index].Schedule = input.Schedule
 				b.config.PixivSubscriptions[index].Tags = normalizeTags(input.Tags)
 				b.config.PixivSubscriptions[index].OnlyWithImages = input.OnlyWithImages
@@ -4923,13 +5082,12 @@ func (b *BilibiliStore) pixivSubscriptionsHandler(w http.ResponseWriter, r *http
 		return
 	}
 	var input struct {
-		UserID      string   `json:"userId"`
-		Name        string   `json:"name"`
-		Avatar      string   `json:"avatar"`
-		IncludePast bool     `json:"includePast"`
-		Schedule    string   `json:"schedule"`
-		Tags        []string `json:"tags"`
-		Bookmarks   bool     `json:"bookmarks"`
+		UserID    string   `json:"userId"`
+		Name      string   `json:"name"`
+		Avatar    string   `json:"avatar"`
+		Schedule  string   `json:"schedule"`
+		Tags      []string `json:"tags"`
+		Bookmarks bool     `json:"bookmarks"`
 	}
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&input) != nil {
 		writeAPIError(w, http.StatusBadRequest, "Pixiv 来源信息无效")
@@ -4971,7 +5129,7 @@ func (b *BilibiliStore) pixivSubscriptionsHandler(w http.ResponseWriter, r *http
 		idPrefix = "pixiv-bookmarks-"
 		tags = mergeUniqueStrings([]string{"P站收藏"}, tags)
 	}
-	feed := SourceConfig{ID: idPrefix + userID, Source: SourcePixiv, Name: strings.TrimSpace(input.Name), Handle: "UID " + userID, Avatar: normalizeRemoteImage(input.Avatar), Enabled: true, IncludePast: input.IncludePast, Schedule: normalizeSchedule(input.Schedule), Tags: tags, OnlyWithImages: true}
+	feed := SourceConfig{ID: idPrefix + userID, Source: SourcePixiv, Name: strings.TrimSpace(input.Name), Handle: "UID " + userID, Avatar: normalizeRemoteImage(input.Avatar), Enabled: true, Schedule: normalizeSchedule(input.Schedule), Tags: tags, OnlyWithImages: true}
 	if prepared, err := prepareSourceStorage(feed); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "无法创建 Pixiv 来源目录")
 		return
@@ -5724,7 +5882,6 @@ func (b *BilibiliStore) weiboSubscriptionsHandler(w http.ResponseWriter, r *http
 		for index := range b.config.WeiboSubscriptions {
 			if b.config.WeiboSubscriptions[index].ID == input.ID {
 				b.config.WeiboSubscriptions[index].Enabled = input.Enabled
-				b.config.WeiboSubscriptions[index].IncludePast = input.IncludePast
 				b.config.WeiboSubscriptions[index].Schedule = input.Schedule
 				b.config.WeiboSubscriptions[index].Tags = normalizeTags(input.Tags)
 				b.config.WeiboSubscriptions[index].OnlyWithImages = input.OnlyWithImages
@@ -5791,12 +5948,11 @@ func (b *BilibiliStore) weiboSubscriptionsHandler(w http.ResponseWriter, r *http
 		return
 	}
 	var input struct {
-		UserID      string   `json:"userId"`
-		Name        string   `json:"name"`
-		Avatar      string   `json:"avatar"`
-		IncludePast bool     `json:"includePast"`
-		Schedule    string   `json:"schedule"`
-		Tags        []string `json:"tags"`
+		UserID   string   `json:"userId"`
+		Name     string   `json:"name"`
+		Avatar   string   `json:"avatar"`
+		Schedule string   `json:"schedule"`
+		Tags     []string `json:"tags"`
 	}
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&input) != nil || strings.TrimSpace(input.UserID) == "" || strings.TrimSpace(input.Name) == "" {
 		writeAPIError(w, http.StatusBadRequest, "微博订阅信息无效")
@@ -5821,7 +5977,7 @@ func (b *BilibiliStore) weiboSubscriptionsHandler(w http.ResponseWriter, r *http
 			}
 		}
 	}
-	feed := SourceConfig{ID: "weibo-" + userID, Source: SourceWeibo, Name: strings.TrimSpace(input.Name), Handle: "UID " + userID, Avatar: normalizeRemoteImage(input.Avatar), Enabled: true, IncludePast: input.IncludePast, Schedule: input.Schedule, Tags: normalizeTags(input.Tags), OnlyWithImages: true}
+	feed := SourceConfig{ID: "weibo-" + userID, Source: SourceWeibo, Name: strings.TrimSpace(input.Name), Handle: "UID " + userID, Avatar: normalizeRemoteImage(input.Avatar), Enabled: true, Schedule: input.Schedule, Tags: normalizeTags(input.Tags), OnlyWithImages: true}
 	var err error
 	if feed, err = prepareSourceStorage(feed); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "无法创建微博博主内容目录")
@@ -6308,11 +6464,15 @@ func main() {
 	mux.HandleFunc("/api/project/settings", bilibili.projectSettingsHandler)
 	mux.HandleFunc("/api/configuration/backup", configurationBackupHandler(auth, bilibili))
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, map[string]string{"status": "ok"}) })
+	registerAPIV1Routes(mux, sessions, auth, store, bilibili)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' https: data:; media-src 'self' https: blob:; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; connect-src 'self'")
+		if r.URL.Path == "/api/v1" || strings.HasPrefix(r.URL.Path, "/api/v1/") {
+			w.Header().Set("X-Lumic-API-Version", "1")
+		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

@@ -17,6 +17,8 @@ import dayThemeIcon from '../icon/日间模式.png'
 import nightThemeIcon from '../icon/夜间模式.png'
 import newestSortIcon from '../icon/时间排序－正序.png'
 import oldestSortIcon from '../icon/时间排序－倒序.png'
+import listViewIcon from '../icon/列表.png'
+import masonryViewIcon from '../icon/瀑布流.png'
 import originalSizeIcon from '../icon/原始尺寸.png'
 import rotateLightboxIcon from '../icon/旋转.png'
 import downloadLightboxIcon from '../icon/下载.png'
@@ -60,7 +62,6 @@ const showWeibo = ref(false)
 const showPixiv = ref(false)
 const weiboKeyword = ref('')
 const weiboResults = ref([])
-const weiboIncludePast = ref(false)
 const weiboSubscriptionTags = ref('')
 const biliAccount = ref({ configured: false, userId: '', userName: '', avatar: '' })
 const biliCredentials = ref({ cookie: '', SESSDATA: '', bili_jct: '', buvid3: '', DedeUserID: '', ac_time_value: '', buvid4: '', DedeUserID__ckMd5: '' })
@@ -68,7 +69,6 @@ const biliKeyword = ref('')
 const biliResults = ref([])
 const biliBusy = ref(false)
 const biliError = ref('')
-const biliIncludePast = ref(false)
 const biliSubscriptionTags = ref('')
 const biliQR = ref(null)
 const biliQRImage = ref('')
@@ -80,7 +80,6 @@ const pixivCredentials = ref(emptyPixivCredentials())
 const pixivBusy = ref(false)
 const pixivError = ref('')
 const pixivArtistId = ref('')
-const pixivIncludePast = ref(false)
 const pixivSubscriptionTags = ref('')
 const weiboAccount = ref({ configured: false, userId: '', userName: '', avatar: '' })
 const weiboCredentials = ref({ cookie: '', userId: '' })
@@ -99,12 +98,21 @@ const selectionAction = ref('delete')
 const selectedPostIds = ref([])
 const contextMenu = ref({ open: false, x: 0, y: 0, post: null })
 const timelineSort = ref('newest')
+const timelineView = ref('list')
 const timelineSearch = ref('')
 const timelineSearchFocused = ref(false)
 const mediaShapes = ref({})
+const mediaRatios = ref({})
 const timelineStart = ref(0)
 const timelineEnd = ref(15)
 const timelineHeights = ref({})
+const masonryHeights = ref({})
+const masonryColumnCount = ref(3)
+const masonryColumnWidth = ref(260)
+const masonryGap = ref(14)
+const masonryViewportTop = ref(0)
+const masonryViewportBottom = ref(900)
+const masonryDetailPost = ref(null)
 const feedListElement = ref(null)
 const estimatedPostHeight = 560
 const timelineOverscan = 5
@@ -174,7 +182,52 @@ const filteredPosts = computed(() => {
     return timelineSort.value === 'newest' ? difference : -difference
   })
 })
+const effectiveTimelineView = computed(() => phonePortrait.value ? 'masonry' : timelineView.value)
+const isMasonryView = computed(() => effectiveTimelineView.value === 'masonry')
 const visiblePosts = computed(() => filteredPosts.value.slice(timelineStart.value, timelineEnd.value))
+function estimateMasonryPostHeight(post) {
+  const width = masonryColumnWidth.value
+  const inset = phonePortrait.value ? 9 : 12
+  let height = inset * 2 + 40
+  const firstMedia = post.media?.[0]
+  const firstPoster = post.videos?.find(video => video.poster)?.poster
+  if (firstMedia || firstPoster) {
+    const ratioKey = `${post.id}:${firstMedia ? 0 : 'video'}`
+    const ratio = mediaRatios.value[ratioKey] || (mediaShapes.value[`${post.id}:0`] === 'portrait' ? 0.74 : mediaShapes.value[`${post.id}:0`] === 'landscape' ? 1.42 : 1)
+    height += Math.min(width * 1.75, Math.max(width * 0.56, width / ratio)) + 9
+  } else if (post.videos?.length) {
+    height += width * 0.56 + 9
+  }
+  if (post.caption) {
+    const charactersPerLine = Math.max(12, Math.floor((width - inset * 2) / (phonePortrait.value ? 13 : 13.5)))
+    const lines = Math.min(firstMedia || firstPoster ? 3 : 7, Math.max(1, Math.ceil([...post.caption].length / charactersPerLine)))
+    height += lines * (phonePortrait.value ? 20 : 21) + 8
+  }
+  if (post.tags?.length) height += 24
+  return Math.ceil(height)
+}
+const masonryLayout = computed(() => {
+  const count = Math.max(1, masonryColumnCount.value)
+  const heights = Array.from({ length: count }, () => 0)
+  const items = filteredPosts.value.map((post, index) => {
+    let column = 0
+    for (let candidate = 1; candidate < count; candidate++) {
+      if (heights[candidate] < heights[column]) column = candidate
+    }
+    const height = masonryHeights.value[post.id] || estimateMasonryPostHeight(post)
+    const item = { post, index, column, x: column * (masonryColumnWidth.value + masonryGap.value), y: heights[column], height }
+    heights[column] += height + masonryGap.value
+    return item
+  })
+  return { items, height: Math.max(0, ...heights) - (items.length ? masonryGap.value : 0) }
+})
+const visibleMasonryItems = computed(() => {
+  const overscan = phonePortrait.value ? 700 : 1000
+  const top = Math.max(0, masonryViewportTop.value - overscan)
+  const bottom = masonryViewportBottom.value + overscan
+  return masonryLayout.value.items.filter(item => item.y + item.height >= top && item.y <= bottom)
+})
+const masonryFeedStyle = computed(() => isMasonryView.value && filteredPosts.value.length ? { height: `${Math.ceil(masonryLayout.value.height)}px` } : undefined)
 const allFilteredPostsSelected = computed(() => filteredPosts.value.length > 0 && filteredPosts.value.every(post => selectedPostIds.value.includes(post.id)))
 const timelineTopSpace = computed(() => filteredPosts.value.slice(0, timelineStart.value).reduce((height, post) => height + (timelineHeights.value[post.id] || estimatedPostHeight) + 15, 0))
 const timelineBottomSpace = computed(() => filteredPosts.value.slice(timelineEnd.value).reduce((height, post) => height + (timelineHeights.value[post.id] || estimatedPostHeight) + 15, 0))
@@ -293,7 +346,7 @@ function stopNightMeteorLoop() {
   meteorBurst.value = []
 }
 function triggerNightMeteorBurst() {
-  if (!isDark.value || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+  if (!isDark.value) {
     stopNightMeteorLoop()
     return
   }
@@ -310,7 +363,7 @@ function triggerNightMeteorBurst() {
       return {
         '--meteor-top': `${top}px`,
         '--meteor-right': `${-4 + Math.random() * 58}%`,
-        '--meteor-width': `${100 + Math.random() * 105}px`,
+        '--meteor-width': `${130 + Math.random() * 110}px`,
         '--meteor-delay': `${index * 0.32 + Math.random() * 0.3}s`,
         '--meteor-duration': `${duration}s`,
         '--meteor-x': `${-Math.max(window.innerWidth * (0.42 + Math.random() * 0.48), 360)}px`,
@@ -320,12 +373,12 @@ function triggerNightMeteorBurst() {
   }))
   meteorBurstTimer = window.setTimeout(() => {
     meteorBurst.value = []
-    meteorBurstTimer = window.setTimeout(triggerNightMeteorBurst, 4200 + Math.random() * 7200)
+    meteorBurstTimer = window.setTimeout(triggerNightMeteorBurst, 2400 + Math.random() * 3800)
   }, maximumDuration * 1000 + 900)
 }
 function startNightMeteorLoop() {
   stopNightMeteorLoop()
-  if (isDark.value) meteorBurstTimer = window.setTimeout(triggerNightMeteorBurst, 350 + Math.random() * 750)
+  if (isDark.value) meteorBurstTimer = window.setTimeout(triggerNightMeteorBurst, 100)
 }
 async function syncNow() {
   syncing.value = true
@@ -568,7 +621,7 @@ async function runFullSync() {
 async function subscribeWeibo(user) {
   weiboBusy.value = true; weiboError.value = ''
   try {
-    const response = await fetch('/api/weibo/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: user.userId, name: user.name, avatar: user.avatar, includePast: weiboIncludePast.value, schedule: '0 6 * * *', tags: parseTagInput(weiboSubscriptionTags.value) }) })
+    const response = await fetch('/api/weibo/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: user.userId, name: user.name, avatar: user.avatar, schedule: '0 6 * * *', tags: parseTagInput(weiboSubscriptionTags.value) }) })
     if (!response.ok) throw new Error(await responseError(response, response.status === 409 ? '已经订阅该微博博主' : '订阅失败'))
     const saved = await response.json()
     await loadFeeds(saved)
@@ -579,7 +632,7 @@ async function subscribeWeibo(user) {
 async function subscribeBilibili(user) {
   biliBusy.value = true; biliError.value = ''
   try {
-    const response = await fetch('/api/bilibili/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: user.userId, name: user.name, avatar: user.avatar, includePast: biliIncludePast.value, schedule: '0 6 * * *', tags: parseTagInput(biliSubscriptionTags.value) }) })
+    const response = await fetch('/api/bilibili/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: user.userId, name: user.name, avatar: user.avatar, schedule: '0 6 * * *', tags: parseTagInput(biliSubscriptionTags.value) }) })
     if (!response.ok) throw new Error(response.status === 409 ? '已经订阅该 UP 主' : '订阅失败')
     const saved = await response.json()
     await loadFeeds(saved)
@@ -595,7 +648,7 @@ async function subscribePixiv() {
   if (!/^\d+$/.test(userId)) { pixivError.value = '请输入画师主页中的数字用户 ID'; return }
   pixivBusy.value = true; pixivError.value = ''
   try {
-    const response = await fetch('/api/pixiv/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId, includePast: pixivIncludePast.value, schedule: '0 6 * * *', tags: parseTagInput(pixivSubscriptionTags.value) }) })
+    const response = await fetch('/api/pixiv/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId, schedule: '0 6 * * *', tags: parseTagInput(pixivSubscriptionTags.value) }) })
     if (!response.ok) throw new Error(await responseError(response, response.status === 409 ? '已经订阅该 Pixiv 画师' : '订阅失败'))
     const saved = await response.json()
     await loadFeeds(saved)
@@ -982,6 +1035,10 @@ function handleGlobalKeydown(event) {
     if (event.key.toLowerCase() === 'r') rotateLightbox()
     return
   }
+  if (masonryDetailPost.value && event.key === 'Escape') {
+    masonryDetailPost.value = null
+    return
+  }
   if (credentialPlatform.value && event.key === 'Escape') {
     credentialPlatform.value = null
     return
@@ -1126,7 +1183,7 @@ async function addWeiboLikesSource() {
 async function addPixivBookmarksSource() {
   sourceActionBusy.value = 'add:pixiv-bookmarks'; sourceActionMessage.value = ''; settingsError.value = ''
   try {
-    const response = await fetch('/api/pixiv/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bookmarks: true, includePast: true, schedule: '0 6 * * *', tags: ['P站收藏'] }) })
+    const response = await fetch('/api/pixiv/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bookmarks: true, schedule: '0 6 * * *', tags: ['P站收藏'] }) })
     if (!response.ok) throw new Error(await responseError(response, response.status === 409 ? 'P站收藏来源已添加' : '添加 P站收藏来源失败'))
     const feed = await response.json(); await loadFeeds(feed)
     if (selectedPlatform.value?.key === 'pixiv') selectedPlatform.value.feeds = feeds.value.filter(item => item.source === 'pixiv')
@@ -1140,16 +1197,45 @@ async function addBilibiliFavoriteOpusSource() {
     if (!response.ok) throw new Error(await responseError(response, response.status === 409 ? 'B站收藏专栏来源已添加' : '添加 B站收藏专栏来源失败'))
     const feed = await response.json(); await loadFeeds(feed)
     if (selectedPlatform.value?.key === 'bilibili') selectedPlatform.value.feeds = feeds.value.filter(item => item.source === 'bilibili')
-    sourceActionMessage.value = '已添加“收藏专栏”，首次同步会拉取历史收藏'
+    sourceActionMessage.value = '已添加“收藏专栏”，可手动补全历史收藏'
   } catch (error) { settingsError.value = error.message } finally { sourceActionBusy.value = '' }
 }
 function setMediaShape(post, mediaIndex, event) {
   const image = event.target
   if (!image.naturalWidth || !image.naturalHeight) return
   mediaShapes.value[`${post.id}:${mediaIndex}`] = image.naturalWidth >= image.naturalHeight ? 'landscape' : 'portrait'
+  mediaRatios.value[`${post.id}:${mediaIndex}`] = image.naturalWidth / image.naturalHeight
+}
+function setMasonryCoverRatio(post, event, videoPoster = false) {
+  const image = event.target
+  if (!image.naturalWidth || !image.naturalHeight) return
+  mediaRatios.value[`${post.id}:${videoPoster ? 'video' : 0}`] = image.naturalWidth / image.naturalHeight
+  scheduleTimelineWindow()
 }
 function mediaShape(post, mediaIndex) {
   return mediaShapes.value[`${post.id}:${mediaIndex}`] || 'unknown'
+}
+function masonryCover(post) {
+  return post.media?.[0] || post.videos?.find(video => video.poster)?.poster || ''
+}
+function masonryCoverIsVideo(post) {
+  return !post.media?.length && Boolean(post.videos?.length)
+}
+function toggleTimelineView() {
+  if (phonePortrait.value) return
+  timelineView.value = timelineView.value === 'list' ? 'masonry' : 'list'
+}
+function openMasonryPost(post) {
+  if (selectionMode.value) return
+  masonryDetailPost.value = post
+}
+function masonryItemStyle(item) {
+  return {
+    left: `${item.x}px`,
+    top: `${item.y}px`,
+    width: `${masonryColumnWidth.value}px`,
+    '--masonry-delay': `${Math.min(item.index % 12, 8) * 24}ms`
+  }
 }
 function previewMedia(media) {
   const value = String(media || '')
@@ -1167,13 +1253,17 @@ function scheduleTransient(callback, delay) {
 }
 function prunePostCaches() {
   const activeIds = new Set(posts.value.map(post => String(post.id)))
-  for (const [id, element] of observedPostElements) {
+  for (const [key, element] of observedPostElements) {
+    const id = key.slice(key.indexOf(':') + 1)
     if (activeIds.has(id)) continue
     postResizeObserver?.unobserve(element)
-    observedPostElements.delete(id)
+    observedPostElements.delete(key)
   }
   timelineHeights.value = Object.fromEntries(Object.entries(timelineHeights.value).filter(([id]) => activeIds.has(id)))
+  masonryHeights.value = Object.fromEntries(Object.entries(masonryHeights.value).filter(([id]) => activeIds.has(id)))
   mediaShapes.value = Object.fromEntries(Object.entries(mediaShapes.value).filter(([key]) => activeIds.has(key.split(':', 1)[0])))
+  mediaRatios.value = Object.fromEntries(Object.entries(mediaRatios.value).filter(([key]) => activeIds.has(key.split(':', 1)[0])))
+  if (masonryDetailPost.value && !activeIds.has(String(masonryDetailPost.value.id))) masonryDetailPost.value = null
 }
 async function updatePostFavorite(post, liked) {
 	if (postActionBusy.value) return
@@ -1197,6 +1287,7 @@ async function updatePostFavorite(post, liked) {
 function togglePostLike(post) { return updatePostFavorite(post, !post.liked) }
 function navigateTo(nav, source = activeSource.value) {
   stopSelection()
+  masonryDetailPost.value = null
   showBrandMenu.value = false
   selectedTag.value = ''
   showSettings.value = false
@@ -1211,30 +1302,51 @@ function navigateTo(nav, source = activeSource.value) {
   if (nav === 'pulls') void Promise.all([loadFeeds(), loadPlatformAccounts()])
 }
 function openTag(tag) {
-  stopSelection(); showSettings.value = false; selectedAuthor.value = null; selectedTag.value = tag; activeNav.value = 'tag'; activeSource.value = 'all'
+  stopSelection(); masonryDetailPost.value = null; showSettings.value = false; selectedAuthor.value = null; selectedTag.value = tag; activeNav.value = 'tag'; activeSource.value = 'all'
   updateRoute(`/tag/${encodeURIComponent(tag)}`)
 }
-function measurePostElement(post, element) {
+function measurePostElement(post, element, layout = element?.dataset.layout || 'list') {
   const height = Math.ceil(element.getBoundingClientRect().height)
-  if (height > 0 && timelineHeights.value[post.id] !== height) timelineHeights.value[post.id] = height
+  const heights = layout === 'masonry' ? masonryHeights : timelineHeights
+  if (height > 0 && heights.value[post.id] !== height) heights.value[post.id] = height
 }
-function setPostCard(post, element) {
+function setPostCard(post, element, layout = 'list') {
   const id = String(post.id)
-  const previous = observedPostElements.get(id)
+  const key = `${layout}:${id}`
+  const previous = observedPostElements.get(key)
   if (!element) {
     if (previous) postResizeObserver?.unobserve(previous)
-    observedPostElements.delete(id)
+    observedPostElements.delete(key)
     return
   }
   if (previous && previous !== element) postResizeObserver?.unobserve(previous)
   element.dataset.postId = post.id
-  observedPostElements.set(id, element)
-  measurePostElement(post, element)
+  element.dataset.layout = layout
+  observedPostElements.set(key, element)
+  measurePostElement(post, element, layout)
   postResizeObserver?.observe(element)
+}
+function updateMasonryMetrics() {
+  if (!isMasonryView.value || !feedListElement.value) return
+  const availableWidth = Math.max(0, feedListElement.value.clientWidth)
+  if (!availableWidth) return
+  const gap = phonePortrait.value ? 8 : 14
+  const count = phonePortrait.value ? 2 : Math.min(5, Math.max(3, Math.floor((availableWidth + gap) / (252 + gap))))
+  const width = Math.max(0, (availableWidth - gap * (count - 1)) / count)
+  if (masonryGap.value !== gap) masonryGap.value = gap
+  if (masonryColumnCount.value !== count) masonryColumnCount.value = count
+  if (Math.abs(masonryColumnWidth.value - width) > 0.5) masonryColumnWidth.value = width
 }
 function updateTimelineWindow() {
   timelineFrame = 0
   if (!filteredPosts.value.length || showSettings.value || activeNav.value === 'pulls') return
+  if (isMasonryView.value) {
+    updateMasonryMetrics()
+    const listTop = feedListElement.value?.getBoundingClientRect().top + window.scrollY || 0
+    masonryViewportTop.value = Math.max(0, window.scrollY - listTop)
+    masonryViewportBottom.value = masonryViewportTop.value + window.innerHeight
+    return
+  }
   const listTop = feedListElement.value?.getBoundingClientRect().top + window.scrollY || 0
   const viewportTop = Math.max(0, window.scrollY - listTop)
   const viewportBottom = viewportTop + window.innerHeight
@@ -1261,7 +1373,9 @@ function scheduleTimelineWindow() {
 function resetTimelineWindow() {
   timelineStart.value = 0
   timelineEnd.value = Math.min(filteredPosts.value.length, phonePortrait.value ? 7 : 15)
-  nextTick(scheduleTimelineWindow)
+  masonryViewportTop.value = 0
+  masonryViewportBottom.value = typeof window === 'undefined' ? 900 : window.innerHeight
+  nextTick(() => { updateMasonryMetrics(); scheduleTimelineWindow() })
 }
 function isPhonePortraitScreen() {
   return window.matchMedia('(max-width: 760px)').matches
@@ -1284,6 +1398,7 @@ function openPhoneDefaultTimeline() {
   updateRoute('/', true)
 }
 function openAuthor(post) {
+  masonryDetailPost.value = null
   authorReturnState.value = { nav: activeNav.value, source: activeSource.value }
   showSettings.value = false
   activeNav.value = 'author'
@@ -1364,12 +1479,14 @@ async function checkSession(refreshData = true) {
 }
 watch(filteredPosts, resetTimelineWindow)
 watch(posts, prunePostCaches)
+watch(timelineView, value => localStorage.setItem('lumic-timeline-view', value))
+watch(effectiveTimelineView, resetTimelineWindow)
 watch(isDark, value => { if (value) startNightMeteorLoop(); else stopNightMeteorLoop() })
 watch(platformCards, cards => {
   if (!credentialPlatform.value) return
   credentialPlatform.value = cards.find(platform => platform.key === credentialPlatform.value.key) || null
 })
-onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#080a0e' : '#fbf7ea'); phonePortraitQuery = window.matchMedia('(max-width: 760px)'); phonePortrait.value = isPhonePortraitScreen(); phonePortraitQuery.addEventListener('change', updatePhonePortrait); window.addEventListener('orientationchange', updatePhonePortrait); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); if (phonePortrait.value) openPhoneDefaultTimeline(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', applyRoute); window.addEventListener('scroll', scheduleTimelineWindow, { passive: true }); window.addEventListener('resize', handleWindowResize) })
+onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; timelineView.value = localStorage.getItem('lumic-timeline-view') === 'masonry' ? 'masonry' : 'list'; document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#080a0e' : '#fbf7ea'); phonePortraitQuery = window.matchMedia('(max-width: 760px)'); phonePortrait.value = isPhonePortraitScreen(); phonePortraitQuery.addEventListener('change', updatePhonePortrait); window.addEventListener('orientationchange', updatePhonePortrait); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); if (phonePortrait.value) openPhoneDefaultTimeline(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', applyRoute); window.addEventListener('scroll', scheduleTimelineWindow, { passive: true }); window.addEventListener('resize', handleWindowResize) })
 onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLoop(); if (sessionPollTimer) window.clearInterval(sessionPollTimer); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); window.removeEventListener('orientationchange', updatePhonePortrait); postResizeObserver?.disconnect(); observedPostElements.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); closeLightbox(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', applyRoute); window.removeEventListener('scroll', scheduleTimelineWindow); window.removeEventListener('resize', handleWindowResize); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
 </script>
 
@@ -1493,15 +1610,19 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
 <button class="timeline-sort-button" type="button" :title="timelineSort === 'newest' ? '最新' : '最旧'" :aria-label="timelineSort === 'newest' ? '当前按最新排序，点击切换为最旧' : '当前按最旧排序，点击切换为最新'" @click="timelineSort = timelineSort === 'newest' ? 'oldest' : 'newest'">
   <span class="timeline-sort-symbol" :style="{ '--nav-mask': `url(${timelineSort === 'newest' ? newestSortIcon : oldestSortIcon})` }" aria-hidden="true"></span>
 </button>
+<button v-if="!phonePortrait" class="timeline-view-button" type="button" :class="{ selected: isMasonryView }" :title="isMasonryView ? '当前：瀑布流；点击切换为列表' : '当前：列表；点击切换为瀑布流'" :aria-label="isMasonryView ? '当前为瀑布流视图，点击切换为列表' : '当前为列表视图，点击切换为瀑布流'" @click="toggleTimelineView">
+  <span class="timeline-view-symbol" :style="{ '--nav-mask': `url(${isMasonryView ? masonryViewIcon : listViewIcon})` }" aria-hidden="true"></span>
+</button>
 </div>
 <div class="timeline-tools">
   <label class="timeline-search" @pointerdown.stop="closeMobileNavigationOnInputFocus" @click.stop><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><input v-model="timelineSearch" type="search" placeholder="搜索内容、作者或标签" aria-label="搜索动态内容、作者或标签" @focus="closeMobileNavigationOnInputFocus" @input="closeMobileNavigationOnInputFocus" @blur="releaseTimelineSearchFocus"></label>
 </div>
 </div>
       <p v-if="timelineMessage" class="timeline-message">{{ timelineMessage }}</p>
-      <section ref="feedListElement" class="feed-list">
+      <section ref="feedListElement" :class="['feed-list', { 'masonry-feed': isMasonryView }]" :style="masonryFeedStyle">
+<template v-if="!isMasonryView">
 <div v-if="timelineTopSpace" class="timeline-spacer" :style="{ height: `${timelineTopSpace}px` }" aria-hidden="true"></div>
-<article v-for="post in visiblePosts" :key="post.id" :ref="element => setPostCard(post, element)" :class="['post-card', { selected: selectedPostIds.includes(post.id), selectable: selectionMode }]" :data-post-id="post.id" @click.capture="handlePostSelectionClick($event, post)" @contextmenu.stop.prevent="openContextMenu($event, post)">
+<article v-for="post in visiblePosts" :key="post.id" :ref="element => setPostCard(post, element, 'list')" :class="['post-card', { selected: selectedPostIds.includes(post.id), selectable: selectionMode }]" :data-post-id="post.id" @click.capture="handlePostSelectionClick($event, post)" @contextmenu.stop.prevent="openContextMenu($event, post)">
 <label v-if="selectionMode" class="post-select-control" :title="`选择 ${post.author} 的这条动态`" @click.prevent><input type="checkbox" :checked="selectedPostIds.includes(post.id)" tabindex="-1"><span></span></label>
 <div class="post-head">
 <button class="post-author-avatar" type="button" :title="`查看 ${post.author} 的动态`" @click="openAuthor(post)"><img :src="post.avatar" :alt="post.author"></button>
@@ -1528,6 +1649,26 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
 </div>
 </article>
 <div v-if="timelineBottomSpace" class="timeline-spacer" :style="{ height: `${timelineBottomSpace}px` }" aria-hidden="true"></div>
+</template>
+<template v-else>
+<article v-for="item in visibleMasonryItems" :key="item.post.id" :ref="element => setPostCard(item.post, element, 'masonry')" :class="['masonry-card', { selected: selectedPostIds.includes(item.post.id), selectable: selectionMode, 'text-only': !masonryCover(item.post) && !item.post.videos?.length }]" :style="masonryItemStyle(item)" :data-post-id="item.post.id" tabindex="0" @click.capture="handlePostSelectionClick($event, item.post)" @click="openMasonryPost(item.post)" @keydown.enter.prevent="openMasonryPost(item.post)" @contextmenu.stop.prevent="openContextMenu($event, item.post)">
+  <label v-if="selectionMode" class="post-select-control masonry-select-control" :title="`选择 ${item.post.author} 的这条动态`" @click.prevent><input type="checkbox" :checked="selectedPostIds.includes(item.post.id)" tabindex="-1"><span></span></label>
+  <div v-if="masonryCover(item.post)" class="masonry-cover">
+    <img :src="previewMedia(masonryCover(item.post))" alt="" loading="lazy" decoding="async" fetchpriority="low" @load="setMasonryCoverRatio(item.post, $event, masonryCoverIsVideo(item.post))">
+    <span v-if="item.post.media?.length > 1" class="masonry-media-count">1 / {{ item.post.media.length }}</span>
+    <span v-if="masonryCoverIsVideo(item.post)" class="masonry-video-mark" aria-label="视频动态"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 7 8 5-8 5Z"/></svg></span>
+  </div>
+  <div v-else-if="item.post.videos?.length" class="masonry-video-placeholder"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3Z"/></svg></div>
+  <div class="masonry-card-body">
+    <p v-if="item.post.caption" class="masonry-caption">{{ item.post.caption }}</p>
+    <div v-if="item.post.tags?.length" class="masonry-tags"><button v-for="tag in item.post.tags.slice(0, 2)" :key="tag" type="button" @click.stop="openTag(tag)">#{{ tag }}</button><span v-if="item.post.tags.length > 2">+{{ item.post.tags.length - 2 }}</span></div>
+    <footer class="masonry-meta">
+      <button class="masonry-author" type="button" :title="`查看 ${item.post.author} 的动态`" @click.stop="openAuthor(item.post)"><img :src="item.post.avatar" :alt="item.post.author"><span><strong>{{ item.post.author }}</strong><small>{{ postDateTime(item.post.published) }}</small></span></button>
+      <button :class="['masonry-like-button', { liked: item.post.liked }]" type="button" :disabled="postActionBusy === `like:${item.post.id}`" :title="item.post.liked ? '取消收藏' : '收藏'" @click.stop="togglePostLike(item.post)"><span class="post-action-mask post-favorite-symbol" :style="{ '--post-action-mask': `url(${favoriteNavIcon})` }" aria-hidden="true"></span></button>
+    </footer>
+  </div>
+</article>
+</template>
 <div v-if="!filteredPosts.length" class="empty">{{ authorProfile ? '还没有拉取到这个作者的动态' : activeNav === 'liked' ? '还没有收藏的动态' : '还没有这个来源的动态' }}</div>
 </section>
     </main>
@@ -1555,6 +1696,22 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
         <div v-if="!feeds.length" class="empty">还没有订阅作者，请先添加 UP 主或微博博主。</div>
       </section>
     </main>
+    <div v-if="masonryDetailPost" class="modal-backdrop masonry-detail-backdrop" @click.self="masonryDetailPost = null">
+      <article class="masonry-detail-modal" role="dialog" aria-modal="true" :aria-label="`${masonryDetailPost.author} 的动态详情`">
+        <button class="modal-close" type="button" title="关闭详情" aria-label="关闭详情" @click="masonryDetailPost = null">×</button>
+        <div class="post-head">
+          <button class="post-author-avatar" type="button" :title="`查看 ${masonryDetailPost.author} 的动态`" @click="openAuthor(masonryDetailPost)"><img :src="masonryDetailPost.avatar" :alt="masonryDetailPost.author"></button>
+          <div class="author"><button class="post-author-name" type="button" @click="openAuthor(masonryDetailPost)"><strong>{{ masonryDetailPost.author }}</strong></button><span>{{ postDateTime(masonryDetailPost.published) }}</span></div>
+          <span :class="['source-pill', 'post-source-pill', sourceMeta[masonryDetailPost.source].color]"><img :class="['source-icon', { 'twitter-night-icon': masonryDetailPost.source === 'twitter' && isDark }]" :src="sourceIconFor(masonryDetailPost.source)" :alt="`${sourceMeta[masonryDetailPost.source].label}图标`">{{ sourceMeta[masonryDetailPost.source].label }}</span>
+        </div>
+        <p v-if="masonryDetailPost.caption" class="caption">{{ masonryDetailPost.caption }}</p>
+        <div v-if="masonryDetailPost.media?.length" :class="['media-grid', `media-count-${Math.min(masonryDetailPost.media.length, 9)}`]">
+          <button v-for="(media, mediaIndex) in masonryDetailPost.media.slice(0, 9)" :key="media" :class="['media-frame', mediaShape(masonryDetailPost, mediaIndex)]" type="button" :aria-label="`查看第 ${mediaIndex + 1} 张图片`" @click="openLightbox(masonryDetailPost, mediaIndex)"><img :src="previewMedia(media)" alt="" loading="lazy" decoding="async" @load="setMediaShape(masonryDetailPost, mediaIndex, $event)"><span v-if="mediaIndex === 8 && masonryDetailPost.media.length > 9" class="media-more-count">+{{ masonryDetailPost.media.length - 9 }}</span></button>
+        </div>
+        <div v-if="masonryDetailPost.videos?.length" class="post-video-list"><video v-for="video in masonryDetailPost.videos" :key="video.url" :src="video.url" :poster="video.poster ? previewMedia(video.poster) : undefined" controls playsinline preload="metadata"></video></div>
+        <div class="post-foot masonry-detail-foot"><div class="tag-row"><button v-for="tag in masonryDetailPost.tags" :key="tag" type="button" @click="openTag(tag)">#{{ tag }}</button></div><div class="post-foot-actions"><button :class="['post-like-button', { liked: masonryDetailPost.liked }]" :title="masonryDetailPost.liked ? '取消收藏' : '收藏'" @click="togglePostLike(masonryDetailPost)"><span class="post-action-mask post-favorite-symbol" :style="{ '--post-action-mask': `url(${favoriteNavIcon})` }" aria-hidden="true"></span></button><button class="post-visit-button" :disabled="!masonryDetailPost.originalUrl" title="访问原动态" @click="openOriginalPost(masonryDetailPost)"><span class="post-action-mask post-visit-symbol" :style="{ '--post-action-mask': `url(${visitPostIcon})` }" aria-hidden="true"></span></button></div></div>
+      </article>
+    </div>
     <div v-if="contextMenu.open" class="timeline-context-menu" :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }" role="menu" @click.stop>
       <button type="button" role="menuitem" @click="startMultiSelectMode"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="m8 12 2.3 2.3L16 8.7"/></svg><span>{{ activeNav === 'liked' ? '多选取消收藏' : '多选删除' }}</span></button>
       <button v-if="contextMenu.post && activeNav === 'liked'" type="button" class="danger" role="menuitem" @click="unfavoriteContextPost"><svg viewBox="0 0 24 24"><path d="M12 20.5S4.5 16.2 4.5 10.2A4.2 4.2 0 0 1 12 7.6a4.2 4.2 0 0 1 7.5 2.6c0 6-7.5 10.3-7.5 10.3Z"/><path d="M8.5 11.5h7"/></svg><span>取消收藏</span></button>
@@ -1621,11 +1778,10 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
         <button class="modal-close" @click="showBilibili = false">×</button>
         <p class="eyebrow">BILIBILI SOURCE</p>
         <h2>订阅 UP 主图文</h2>
-        <p>仅收集图文动态，专栏可在来源设置中单独开启。视频动态和转发视频不会进入时间线。账号凭证请在设置页面管理。</p>
+        <p>仅添加订阅，不会立即拉取动态。历史内容可在订阅平台页面手动补全；专栏可在来源设置中单独开启。</p>
         <div class="bili-account"><span>已连接 B 站账号 · UID {{ biliAccount.userId }}</span><button @click="showBilibili = false; openSettings('platforms')">管理凭证</button></div>
         <form class="bili-search" @submit.prevent="searchBilibili"><input v-model="biliKeyword" placeholder="搜索 UP 主昵称" maxlength="40" required><button :disabled="biliBusy">⌕ 搜索</button></form>
         <label class="subscription-tag-field"><span>作者标签</span><input v-model="biliSubscriptionTags" placeholder="#标签1 #标签2" maxlength="120"><small>订阅搜索结果中的作者时，会同时保存这些标签。</small></label>
-        <label class="history-option"><input v-model="biliIncludePast" type="checkbox"> 首次订阅时拉取历史动态</label>
         <div class="bili-results">
           <article v-for="user in biliResults" :key="user.userId"><img :src="user.avatar" :alt="user.name"><div><strong>{{ user.name }}</strong><span>UID {{ user.userId }} · 粉丝 {{ formatFans(user.fans) }}</span><p>{{ user.description || '这位 UP 主还没有填写简介' }}</p></div><button @click="subscribeBilibili(user)" :disabled="biliBusy">订阅</button></article>
           <div v-if="!biliResults.length" class="bili-placeholder">输入昵称搜索 UP 主，然后选择订阅</div>
@@ -1638,11 +1794,10 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
         <button class="modal-close" @click="showWeibo = false">×</button>
         <p class="eyebrow">WEIBO SOURCE</p>
         <h2>添加微博博主</h2>
-        <p>搜索并订阅微博博主，后续动态将按计划进入时间线。账号凭证请在设置页面管理。</p>
+        <p>搜索并添加微博博主，不会立即拉取动态。历史内容可在订阅平台页面手动补全。</p>
         <div class="bili-account"><span>已连接微博账号 · {{ weiboAccount.userName || `UID ${weiboAccount.userId}` }}</span><button @click="showWeibo = false; openSettings('platforms')">管理凭证</button></div>
         <form class="bili-search" @submit.prevent="searchWeibo"><input v-model="weiboKeyword" placeholder="搜索微博博主昵称" maxlength="40" required><button :disabled="weiboBusy">⌕ 搜索</button></form>
         <label class="subscription-tag-field"><span>作者标签</span><input v-model="weiboSubscriptionTags" placeholder="#标签1 #标签2" maxlength="120"><small>订阅搜索结果中的作者时，会同时保存这些标签。</small></label>
-        <label class="history-option"><input v-model="weiboIncludePast" type="checkbox"> 首次订阅时拉取历史动态</label>
         <div class="bili-results">
           <article v-for="user in weiboResults" :key="user.userId"><img :src="user.avatar" :alt="user.name"><div><strong>{{ user.name }}</strong><span>UID {{ user.userId }} · 粉丝 {{ formatFans(user.fans) }}</span><p>{{ user.description || '这位博主还没有填写简介' }}</p></div><button @click="subscribeWeibo(user)" :disabled="weiboBusy">订阅</button></article>
           <div v-if="!weiboResults.length" class="bili-placeholder">输入昵称搜索微博博主，然后选择订阅</div>
@@ -1717,12 +1872,11 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
         <button class="modal-close" @click="showPixiv = false">×</button>
         <p class="eyebrow">PIXIV SOURCE</p>
         <h2>订阅 Pixiv 画师</h2>
-        <p>填写画师主页地址中的数字用户 ID，作品将以原图归档，并保留标题与说明。</p>
+        <p>填写画师主页中的数字用户 ID，仅添加订阅。历史作品可在订阅平台页面手动补全。</p>
         <div class="bili-account"><span>已连接 Pixiv · {{ pixivAccount.userName || `UID ${pixivAccount.userId}` }}</span><button @click="showPixiv = false; openSettings('platforms')">管理凭证</button></div>
         <form class="pixiv-source-form" @submit.prevent="subscribePixiv">
           <div class="bili-search pixiv-subscribe-row"><input v-model="pixivArtistId" required inputmode="numeric" pattern="[0-9]+" placeholder="画师用户 ID，例如 12345678"><button :disabled="pixivBusy">{{ pixivBusy ? '添加中…' : '订阅' }}</button></div>
           <label class="subscription-tag-field"><span>作者标签</span><input v-model="pixivSubscriptionTags" placeholder="#插画 #收藏"></label>
-          <label class="history-option"><input v-model="pixivIncludePast" type="checkbox"> 首次订阅时拉取历史作品</label>
         </form>
         <p v-if="pixivError" class="login-error bili-error">{{ pixivError }}</p>
       </div>
@@ -1742,7 +1896,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
             <em :class="{ disabled: !feed.enabled }">{{ feed.enabled ? '同步中' : '已停用' }}</em>
             <div class="source-row-actions">
               <button class="source-icon-action" title="立即拉取最新动态" aria-label="立即拉取最新动态" @click="syncSource(feed)" :disabled="sourceActionBusy !== ''"><svg :class="{ spin: sourceActionBusy === `sync:${feed.id}` }" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 9a7 7 0 0 1 11.4-2.5L20 9M4 15l2.5 2.5A7 7 0 0 0 17.9 15"/></svg></button>
-              <button class="source-icon-action" title="重新拉取全部历史动态" aria-label="重新拉取全部历史动态" @click="syncSource(feed, true)" :disabled="sourceActionBusy !== ''"><svg :class="{ spin: sourceActionBusy === `resync:${feed.id}` }" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg></button>
+              <button class="source-icon-action" title="补全全部历史动态（跳过已归档内容）" aria-label="补全全部历史动态" @click="syncSource(feed, true)" :disabled="sourceActionBusy !== ''"><svg :class="{ spin: sourceActionBusy === `resync:${feed.id}` }" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg></button>
               <button class="source-icon-action" title="来源设置" aria-label="来源设置" @click="openFeedSettings(feed)"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg></button>
               <button class="source-icon-action delete-posts-button" title="删除此作者全部动态及文件" aria-label="删除此作者全部动态及文件" @click="deleteAuthorPosts(feed.source, feed.name)" :disabled="sourceActionBusy !== '' || postActionBusy !== ''"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M6 6l1 15h10l1-15"/><path d="M10 10v7M14 10v7"/></svg></button>
               <button class="source-icon-action delete-source-button" title="删除订阅来源" aria-label="删除订阅来源" @click="deleteSource(feed)" :disabled="sourceActionBusy !== ''"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
@@ -1767,7 +1921,6 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
           </div>
           <div class="feed-toggle-row">
             <label><input v-model="selectedFeed.onlyWithImages" type="checkbox"><span>包含图片</span></label>
-            <label><input v-model="selectedFeed.includePast" type="checkbox"><span>首次拉取历史动态</span></label>
             <label v-if="selectedFeed.source === 'weibo' || (selectedFeed.source === 'bilibili' && !selectedFeed.id.startsWith('bili-opus-favorites-'))"><input v-model="selectedFeed.includeVideos" type="checkbox"><span>包含视频</span></label>
             <label><input v-model="selectedFeed.enabled" type="checkbox"><span>启用自动同步</span></label>
           </div>

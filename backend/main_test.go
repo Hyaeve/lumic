@@ -479,6 +479,13 @@ func TestPixivBookmarksSourceUsesDefaultTag(t *testing.T) {
 	if feed.ID != "pixiv-bookmarks-12345" || feed.Name != "P站收藏" || !containsString(feed.Tags, "P站收藏") {
 		t.Fatalf("unexpected Pixiv bookmarks source: %#v", feed)
 	}
+	encodedFeed, err := json.Marshal(feed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encodedFeed), "includePast") {
+		t.Fatalf("legacy includePast setting leaked into the saved source: %s", encodedFeed)
+	}
 	if _, err := os.Stat(filepath.Join(feed.StoragePath, "source.json")); err != nil {
 		t.Fatalf("Pixiv bookmarks metadata missing: %v", err)
 	}
@@ -512,7 +519,7 @@ func TestBilibiliFavoriteOpusSourceUsesConnectedAccount(t *testing.T) {
 	if feed.ID != bilibiliFavoriteOpusPrefix+"42" || feed.Name != bilibiliFavoriteOpusName || feed.StoragePath != sourceStoragePath(SourceBilibili, bilibiliFavoriteOpusName) {
 		t.Fatalf("unexpected favorite opus source: %#v", feed)
 	}
-	if !feed.IncludePast || feed.OnlyWithImages || !containsString(feed.Tags, "B站收藏") {
+	if feed.OnlyWithImages || !containsString(feed.Tags, "B站收藏") {
 		t.Fatalf("unexpected favorite opus defaults: %#v", feed)
 	}
 	if _, err := os.Stat(filepath.Join(feed.StoragePath, "source.json")); err != nil {
@@ -739,6 +746,109 @@ func TestPostsAfterOrSourceMembershipMigratesExistingWeiboLikes(t *testing.T) {
 	filtered := store.postsAfterOrSourceMembership(incoming, boundary, "weibo-likes-42")
 	if len(filtered) != 1 || filtered[0].Media[0] != "/flow/weibo/我的点赞/post.jpg" || !containsString(filtered[0].FeedIDs, "weibo-likes-42") {
 		t.Fatalf("existing weibo likes membership was not migrated: %#v", filtered)
+	}
+}
+
+func TestPostsAfterOrSourceMembershipKeepsUnknownOldCollectionPost(t *testing.T) {
+	boundary := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	store := &Store{}
+	incoming := []Post{{ID: "old-new-favorite", Source: SourcePixiv, FeedIDs: []string{"pixiv-bookmarks-7"}, Published: boundary.Add(-30 * 24 * time.Hour)}}
+	filtered := store.postsAfterOrSourceMembership(incoming, boundary, "pixiv-bookmarks-7")
+	if len(filtered) != 1 || filtered[0].ID != "old-new-favorite" {
+		t.Fatalf("newly collected old post was discarded: %#v", filtered)
+	}
+}
+
+func TestHistoryBackfillSkipsCompleteArchivedPosts(t *testing.T) {
+	root := t.TempDir()
+	oldFlowRoot := flowRoot
+	flowRoot = root
+	t.Cleanup(func() { flowRoot = oldFlowRoot })
+	feed := SourceConfig{ID: "weibo-likes-42", Source: SourceWeibo, Name: weiboLikesName, Tags: []string{"liked"}}
+	directory := sourceStoragePath(feed.Source, feed.Name)
+	if err := os.MkdirAll(directory, 0755); err != nil {
+		t.Fatal(err)
+	}
+	imagePath := filepath.Join(directory, "existing.jpg")
+	textPath := filepath.Join(directory, "post_contents.txt")
+	if err := os.WriteFile(imagePath, []byte("image"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(textPath, []byte("caption"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	store := &Store{posts: []Post{{
+		ID:       "existing",
+		Source:   SourceWeibo,
+		FeedIDs:  []string{feed.ID},
+		Author:   "author",
+		Caption:  "caption",
+		Tags:     []string{"liked"},
+		Media:    []string{flowPublicPath(feed.Source, feed.Name, filepath.Base(imagePath))},
+		TextFile: flowPublicPath(feed.Source, feed.Name, filepath.Base(textPath)),
+	}}}
+	incoming := []Post{
+		{ID: "existing", Source: SourceWeibo, FeedIDs: []string{feed.ID}, Author: "author", Caption: "caption", Tags: []string{"liked"}, Media: []string{"https://example.com/existing.jpg"}},
+		{ID: "missing", Source: SourceWeibo, FeedIDs: []string{feed.ID}, Author: "author", Caption: "new", Tags: []string{"liked"}, Media: []string{"https://example.com/missing.jpg"}},
+	}
+	pending, skipped := store.postsForHistoryBackfill(incoming, feed)
+	if skipped != 1 || len(pending) != 1 || pending[0].ID != "missing" {
+		t.Fatalf("history backfill did not skip the complete archive: pending=%#v skipped=%d", pending, skipped)
+	}
+}
+
+func TestHistoryBackfillReusesExistingFilesAndRepairsMissingOnes(t *testing.T) {
+	root := t.TempDir()
+	oldFlowRoot := flowRoot
+	flowRoot = root
+	t.Cleanup(func() { flowRoot = oldFlowRoot })
+	feed := SourceConfig{ID: "pixiv-bookmarks-7", Source: SourcePixiv, Name: pixivBookmarksName}
+	directory := sourceStoragePath(SourcePixiv, "artist")
+	if err := os.MkdirAll(directory, 0755); err != nil {
+		t.Fatal(err)
+	}
+	existingPath := filepath.Join(directory, "first.jpg")
+	if err := os.WriteFile(existingPath, []byte("image"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	store := &Store{posts: []Post{{
+		ID:      "pixiv-illust-1",
+		Source:  SourcePixiv,
+		FeedIDs: []string{"pixiv-artist-7"},
+		Author:  "artist",
+		Media:   []string{flowPublicPath(SourcePixiv, "artist", filepath.Base(existingPath)), "/flow/pixiv/artist/missing.jpg"},
+	}}}
+	incoming := []Post{{
+		ID:      "pixiv-illust-1",
+		Source:  SourcePixiv,
+		FeedIDs: []string{feed.ID},
+		Author:  "artist",
+		Media:   []string{"https://example.com/first.jpg", "https://example.com/second.jpg"},
+	}}
+	pending, skipped := store.postsForHistoryBackfill(incoming, feed)
+	if skipped != 0 || len(pending) != 1 {
+		t.Fatalf("incomplete archive was skipped: pending=%#v skipped=%d", pending, skipped)
+	}
+	if pending[0].Media[0] != flowPublicPath(SourcePixiv, "artist", filepath.Base(existingPath)) || pending[0].Media[1] != "https://example.com/second.jpg" {
+		t.Fatalf("available archive files were not reused selectively: %#v", pending[0].Media)
+	}
+	if !containsString(pending[0].FeedIDs, feed.ID) {
+		t.Fatalf("collection membership was not added: %#v", pending[0].FeedIDs)
+	}
+}
+
+func TestHistoryBackfillHonorsSourceFiltersBeforePlanning(t *testing.T) {
+	feed := SourceConfig{ID: "weibo-likes-42", Source: SourceWeibo, OnlyWithImages: true, IncludeVideos: true, IncludeKeywords: []string{"keep"}, ExcludeKeywords: []string{"blocked"}}
+	incoming := []Post{
+		{ID: "image", Caption: "keep image", Media: []string{"image.jpg"}},
+		{ID: "video", Caption: "keep video", Videos: []PostVideo{{URL: "video.mp4"}}},
+		{ID: "text", Caption: "keep text"},
+		{ID: "blocked", Caption: "keep blocked", Media: []string{"image.jpg"}},
+	}
+	filtered := filterSourcePosts(incoming, feed)
+	pending, skipped := (&Store{}).postsForHistoryBackfill(filtered, feed)
+	if skipped != 0 || len(pending) != 2 || pending[0].ID != "image" || pending[1].ID != "video" {
+		t.Fatalf("history backfill ignored source filters: %#v", pending)
 	}
 }
 
