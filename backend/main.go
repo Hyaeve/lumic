@@ -48,6 +48,11 @@ const (
 	SourcePixiv    Source = "pixiv"
 	SourceBilibili Source = "bilibili"
 	SourceTwitter  Source = "twitter"
+
+	bilibiliFavoriteOpusPrefix = "bili-opus-favorites-"
+	bilibiliFavoriteOpusName   = "收藏专栏"
+	weiboLikesName             = "我的点赞"
+	pixivBookmarksName         = "P站收藏"
 )
 
 type Post struct {
@@ -182,6 +187,25 @@ func hasWeiboLikesFeed(values []string) bool {
 		}
 	}
 	return false
+}
+
+func hasFeedPrefix(values []string, prefix string) bool {
+	for _, value := range values {
+		if strings.HasPrefix(value, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func isBilibiliFavoriteOpusFeed(feed SourceConfig) bool {
+	return feed.Source == SourceBilibili && strings.HasPrefix(feed.ID, bilibiliFavoriteOpusPrefix)
+}
+
+func isCollectionFeed(feed SourceConfig) bool {
+	return (feed.Source == SourceWeibo && strings.HasPrefix(feed.ID, "weibo-likes-")) ||
+		(feed.Source == SourcePixiv && strings.HasPrefix(feed.ID, "pixiv-bookmarks-")) ||
+		isBilibiliFavoriteOpusFeed(feed)
 }
 
 func filterSourcePosts(posts []Post, feed SourceConfig) []Post {
@@ -576,7 +600,11 @@ func loadBilibiliStore() (*BilibiliStore, error) {
 		store.config.Subscriptions = []SourceConfig{}
 	}
 	for index := range store.config.Subscriptions {
-		store.config.Subscriptions[index].ContentTypes = normalizeBilibiliContentTypes(store.config.Subscriptions[index].ContentTypes, true)
+		if isBilibiliFavoriteOpusFeed(store.config.Subscriptions[index]) {
+			store.config.Subscriptions[index].ContentTypes = []string{"ARTICLE"}
+		} else {
+			store.config.Subscriptions[index].ContentTypes = normalizeBilibiliContentTypes(store.config.Subscriptions[index].ContentTypes, true)
+		}
 	}
 	if store.config.WeiboSubscriptions == nil {
 		store.config.WeiboSubscriptions = []SourceConfig{}
@@ -639,7 +667,13 @@ func sourceStoragePath(source Source, name string) string {
 
 func canonicalSourceName(feed SourceConfig) string {
 	if feed.Source == SourceWeibo && strings.HasPrefix(feed.ID, "weibo-likes-") {
-		return "我的点赞"
+		return weiboLikesName
+	}
+	if feed.Source == SourcePixiv && strings.HasPrefix(feed.ID, "pixiv-bookmarks-") {
+		return pixivBookmarksName
+	}
+	if isBilibiliFavoriteOpusFeed(feed) {
+		return bilibiliFavoriteOpusName
 	}
 	return feed.Name
 }
@@ -729,6 +763,11 @@ func (b *BilibiliStore) reconcileFlowStorage() error {
 			if b.content != nil && strings.HasPrefix(prepared.ID, "weibo-likes-") {
 				if err := b.content.reconcileWeiboLikesPosts(prepared); err != nil {
 					return fmt.Errorf("reconcile weibo likes posts: %w", err)
+				}
+			}
+			if b.content != nil && isCollectionFeed(prepared) {
+				if err := b.content.reconcileCollectionMedia(prepared); err != nil {
+					return fmt.Errorf("reconcile collection media for %s: %w", prepared.Name, err)
 				}
 			}
 		}
@@ -1238,6 +1277,91 @@ func (s *Store) rewriteMediaPrefix(oldPrefix, newPrefix string) error {
 		return nil
 	}
 	return s.saveLocked()
+}
+
+func (s *Store) reconcileCollectionMedia(feed SourceConfig) error {
+	if !isCollectionFeed(feed) {
+		return nil
+	}
+	s.Lock()
+	defer s.Unlock()
+	targetName := canonicalSourceName(feed)
+	targetDirectory := sourceStoragePath(feed.Source, targetName)
+	if err := os.MkdirAll(targetDirectory, 0755); err != nil {
+		return err
+	}
+	targetDirectoryAbsolute, err := filepath.Abs(targetDirectory)
+	if err != nil {
+		return err
+	}
+	type mediaMove struct {
+		postIndex  int
+		mediaIndex int
+		oldPublic  string
+		oldLocal   string
+		newLocal   string
+	}
+	moves := make([]mediaMove, 0)
+	rollback := func() {
+		for index := len(moves) - 1; index >= 0; index-- {
+			move := moves[index]
+			_ = os.MkdirAll(filepath.Dir(move.oldLocal), 0755)
+			_ = os.Rename(move.newLocal, move.oldLocal)
+			s.posts[move.postIndex].Media[move.mediaIndex] = move.oldPublic
+		}
+	}
+	for postIndex := range s.posts {
+		if !containsString(s.posts[postIndex].FeedIDs, feed.ID) {
+			continue
+		}
+		for mediaIndex, media := range s.posts[postIndex].Media {
+			localPath, ok := localFlowArchivePath(media)
+			if !ok {
+				continue
+			}
+			info, statErr := os.Stat(localPath)
+			if statErr != nil {
+				if os.IsNotExist(statErr) {
+					continue
+				}
+				rollback()
+				return statErr
+			}
+			if info.IsDir() {
+				continue
+			}
+			currentDirectory, pathErr := filepath.Abs(filepath.Dir(localPath))
+			if pathErr != nil {
+				rollback()
+				return pathErr
+			}
+			if strings.EqualFold(currentDirectory, targetDirectoryAbsolute) {
+				continue
+			}
+			extension := filepath.Ext(localPath)
+			base := strings.TrimSuffix(filepath.Base(localPath), extension)
+			targetBase := availableMediaTargetBase(targetDirectory, base)
+			targetPath := targetBase + extension
+			if err := os.Rename(localPath, targetPath); err != nil {
+				rollback()
+				return err
+			}
+			moves = append(moves, mediaMove{postIndex: postIndex, mediaIndex: mediaIndex, oldPublic: media, oldLocal: localPath, newLocal: targetPath})
+			s.posts[postIndex].Media[mediaIndex] = flowPublicPath(feed.Source, targetName, filepath.Base(targetPath))
+			if err := deletePostMedia([]string{media}); err != nil {
+				rollback()
+				return err
+			}
+		}
+	}
+	if len(moves) == 0 {
+		return nil
+	}
+	if err := s.saveLocked(); err != nil {
+		rollback()
+		return err
+	}
+	return nil
 }
 
 func (s *Store) reconcileWeiboLikesPosts(feed SourceConfig) error {
@@ -2241,7 +2365,11 @@ func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Requ
 				b.config.Subscriptions[index].Enabled = input.Enabled
 				b.config.Subscriptions[index].IncludePast = input.IncludePast
 				b.config.Subscriptions[index].Schedule = input.Schedule
-				b.config.Subscriptions[index].ContentTypes = normalizeBilibiliContentTypes(input.ContentTypes, false)
+				if isBilibiliFavoriteOpusFeed(b.config.Subscriptions[index]) {
+					b.config.Subscriptions[index].ContentTypes = []string{"ARTICLE"}
+				} else {
+					b.config.Subscriptions[index].ContentTypes = normalizeBilibiliContentTypes(input.ContentTypes, false)
+				}
 				b.config.Subscriptions[index].Tags = normalizeTags(input.Tags)
 				b.config.Subscriptions[index].OnlyWithImages = input.OnlyWithImages
 				b.config.Subscriptions[index].IncludeKeywords = normalizeKeywords(input.IncludeKeywords)
@@ -2271,6 +2399,50 @@ func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Requ
 	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if r.URL.Query().Get("type") == "favorite-opus" {
+		b.RLock()
+		credentials := b.config.Credentials
+		b.RUnlock()
+		if credentials.SESSDATA == "" || credentials.DedeUserID == "" {
+			writeAPIError(w, http.StatusPreconditionFailed, "请先连接哔哩哔哩账号")
+			return
+		}
+		feed := SourceConfig{
+			ID:             bilibiliFavoriteOpusPrefix + credentials.DedeUserID,
+			Source:         SourceBilibili,
+			Name:           bilibiliFavoriteOpusName,
+			Handle:         "UID " + credentials.DedeUserID,
+			Avatar:         credentials.Avatar,
+			Enabled:        true,
+			IncludePast:    true,
+			Schedule:       "0 6 * * *",
+			ContentTypes:   []string{"ARTICLE"},
+			Tags:           []string{"B站收藏"},
+			OnlyWithImages: false,
+		}
+		prepared, err := prepareSourceStorage(feed)
+		if err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "无法创建哔哩哔哩收藏专栏目录")
+			return
+		}
+		feed = prepared
+		b.Lock()
+		for _, existing := range b.config.Subscriptions {
+			if existing.ID == feed.ID {
+				b.Unlock()
+				writeAPIError(w, http.StatusConflict, "收藏专栏来源已经存在")
+				return
+			}
+		}
+		b.config.Subscriptions = append(b.config.Subscriptions, feed)
+		b.Unlock()
+		if err := b.save(); err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "无法保存收藏专栏来源")
+			return
+		}
+		writeJSON(w, feed)
 		return
 	}
 	var input struct {
@@ -2482,7 +2654,7 @@ func mergeDetailedRemoteText(values ...string) string {
 }
 
 func bilibiliDirectText(value map[string]any) string {
-	for _, key := range []string{"text", "orig_text", "raw_text", "text_raw"} {
+	for _, key := range []string{"text", "words", "orig_text", "raw_text", "text_raw"} {
 		if text, ok := value[key].(string); ok {
 			if text = cleanRemoteText(text); text != "" {
 				return text
@@ -2513,7 +2685,17 @@ func bilibiliInlineText(value any) string {
 		}
 		return cleanRemoteText(text.String())
 	case map[string]any:
-		return bilibiliDirectText(typed)
+		if text := bilibiliDirectText(typed); text != "" {
+			return text
+		}
+		for _, key := range []string{"word", "rich", "nodes", "text", "heading", "blockquote"} {
+			if nested, exists := typed[key]; exists {
+				if text := bilibiliInlineText(nested); text != "" {
+					return text
+				}
+			}
+		}
+		return ""
 	default:
 		return ""
 	}
@@ -2553,7 +2735,7 @@ func collectBilibiliRichText(value any, parts *[]string) {
 				}
 			}
 		}
-		for _, key := range []string{"paragraphs", "content", "summary", "desc", "description", "title", "text_content", "opus", "draw", "article", "major", "modules", "module_dynamic", "item", "items"} {
+		for _, key := range []string{"paragraphs", "content", "summary", "desc", "description", "title", "text_content", "text", "word", "heading", "blockquote", "list", "opus", "draw", "article", "major", "modules", "module_content", "module_dynamic", "item", "items"} {
 			if nested, exists := typed[key]; exists {
 				collectBilibiliRichText(nested, parts)
 			}
@@ -2616,6 +2798,195 @@ func (b *BilibiliStore) fetchBilibiliDynamicCaption(dynamicID string, credential
 		}
 	}
 	return mergeDetailedRemoteText(captions...)
+}
+
+func bilibiliInitialState(body []byte) (map[string]any, error) {
+	marker := []byte("window.__INITIAL_STATE__=")
+	start := bytes.Index(body, marker)
+	if start < 0 {
+		return nil, errors.New("专栏页面缺少初始化数据")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body[start+len(marker):]))
+	decoder.UseNumber()
+	var state map[string]any
+	if err := decoder.Decode(&state); err != nil {
+		return nil, fmt.Errorf("解析专栏页面失败: %w", err)
+	}
+	return state, nil
+}
+
+func collectBilibiliOpusImages(value any, images *[]string, seen map[string]bool) {
+	switch typed := value.(type) {
+	case []any:
+		for _, item := range typed {
+			collectBilibiliOpusImages(item, images, seen)
+		}
+	case map[string]any:
+		for key, nested := range typed {
+			if (key == "url" || key == "src") && nested != nil {
+				image := normalizeRemoteImage(jsonValueString(nested))
+				if image != "" && strings.Contains(strings.ToLower(image), "hdslb.com/bfs/") && !seen[image] {
+					seen[image] = true
+					*images = append(*images, image)
+				}
+			}
+			collectBilibiliOpusImages(nested, images, seen)
+		}
+	}
+}
+
+func bilibiliOpusPost(opusID string, state map[string]any, feed SourceConfig) (Post, error) {
+	detail, ok := state["detail"].(map[string]any)
+	if !ok {
+		return Post{}, errors.New("专栏详情不存在")
+	}
+	if id := jsonValueString(detail["id_str"]); id != "" {
+		opusID = id
+	}
+	modules, _ := detail["modules"].([]any)
+	captionParts := make([]string, 0)
+	media := make([]string, 0)
+	seenMedia := make(map[string]bool)
+	author, avatar := "", ""
+	var published time.Time
+	for _, rawModule := range modules {
+		module, _ := rawModule.(map[string]any)
+		if title, ok := module["module_title"].(map[string]any); ok {
+			captionParts = append(captionParts, jsonValueString(title["text"]))
+		}
+		if moduleAuthor, ok := module["module_author"].(map[string]any); ok {
+			author = firstNonEmptyRemoteText(author, jsonValueString(moduleAuthor["name"]))
+			avatar = firstNonEmptyRemoteText(avatar, normalizeRemoteImage(jsonValueString(moduleAuthor["face"])))
+			if timestamp, err := strconv.ParseInt(jsonValueString(moduleAuthor["pub_ts"]), 10, 64); err == nil && timestamp > 0 {
+				published = time.Unix(timestamp, 0)
+			}
+		}
+		if content, ok := module["module_content"].(map[string]any); ok {
+			captionParts = append(captionParts, bilibiliObjectText(content))
+			collectBilibiliOpusImages(content, &media, seenMedia)
+		}
+		if top, ok := module["module_top"].(map[string]any); ok {
+			collectBilibiliOpusImages(top, &media, seenMedia)
+		}
+	}
+	if author == "" {
+		author = feed.Name
+	}
+	if avatar == "" {
+		avatar = feed.Avatar
+	}
+	if published.IsZero() {
+		published = time.Now()
+	}
+	if opusID == "" {
+		return Post{}, errors.New("专栏 ID 为空")
+	}
+	return Post{
+		ID:          "bili-dynamic-" + opusID,
+		Source:      SourceBilibili,
+		FeedIDs:     []string{feed.ID},
+		Author:      author,
+		Avatar:      avatar,
+		Caption:     combineRemoteText(captionParts...),
+		Tags:        append([]string(nil), feed.Tags...),
+		Media:       media,
+		OriginalURL: "https://www.bilibili.com/opus/" + url.PathEscape(opusID),
+		Published:   published,
+	}, nil
+}
+
+func fetchBilibiliOpusPage(client *http.Client, credentials BilibiliCredentials, opusID string, feed SourceConfig) (Post, error) {
+	request, err := http.NewRequest(http.MethodGet, "https://www.bilibili.com/opus/"+url.PathEscape(opusID), nil)
+	if err != nil {
+		return Post{}, err
+	}
+	request.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
+	request.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	request.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	request.Header.Set("Referer", "https://space.bilibili.com/")
+	request.Header.Set("Cookie", bilibiliCookie(credentials))
+	response, err := client.Do(request)
+	if err != nil {
+		return Post{}, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return Post{}, fmt.Errorf("专栏页面返回 HTTP %d", response.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, 12<<20))
+	if err != nil {
+		return Post{}, err
+	}
+	state, err := bilibiliInitialState(body)
+	if err != nil {
+		return Post{}, err
+	}
+	return bilibiliOpusPost(opusID, state, feed)
+}
+
+func (b *BilibiliStore) fetchBilibiliFavoriteOpusPosts(feed SourceConfig, full bool) ([]Post, error) {
+	b.RLock()
+	credentials, proxyURL := b.config.Credentials, b.config.ProxyURL
+	b.RUnlock()
+	if credentials.SESSDATA == "" || credentials.DedeUserID == "" {
+		return nil, errors.New("B 站账号未连接")
+	}
+	client, err := externalHTTPClient(proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	pageLimit := 1
+	if full || (feed.LastSyncedAt.IsZero() && feed.IncludePast) {
+		pageLimit = 100
+	}
+	offset := ""
+	posts := make([]Post, 0)
+	seen := make(map[string]bool)
+	var lastDetailError error
+	for page := 0; page < pageLimit; page++ {
+		query := url.Values{"page_size": {"20"}}
+		if offset != "" {
+			query.Set("offset", offset)
+		}
+		var payload struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+			Data    struct {
+				Items  []map[string]any `json:"items"`
+				Offset string           `json:"offset"`
+			} `json:"data"`
+		}
+		endpoint := "https://api.bilibili.com/x/polymer/web-dynamic/v1/opus/feed/fav?" + query.Encode()
+		if err := bilibiliRequest(endpoint, credentials, proxyURL, &payload); err != nil {
+			return nil, fmt.Errorf("B 站收藏专栏请求失败: %w", err)
+		}
+		if payload.Code != 0 {
+			return nil, fmt.Errorf("B 站收藏专栏接口拒绝访问: %s", payload.Message)
+		}
+		for _, item := range payload.Data.Items {
+			opusID := jsonValueString(item["opus_id"])
+			if opusID == "" || seen[opusID] {
+				continue
+			}
+			seen[opusID] = true
+			post, detailErr := fetchBilibiliOpusPage(client, credentials, opusID, feed)
+			if detailErr != nil {
+				lastDetailError = detailErr
+				continue
+			}
+			posts = append(posts, post)
+			time.Sleep(350 * time.Millisecond)
+		}
+		if len(payload.Data.Items) == 0 || payload.Data.Offset == "" || payload.Data.Offset == offset {
+			break
+		}
+		offset = payload.Data.Offset
+		time.Sleep(500 * time.Millisecond)
+	}
+	if len(posts) == 0 && lastDetailError != nil {
+		return nil, fmt.Errorf("无法读取收藏专栏详情: %w", lastDetailError)
+	}
+	return posts, nil
 }
 
 func shouldFetchBilibiliDynamicDetail(dynamicType, caption string) bool {
@@ -2750,7 +3121,22 @@ type textArchiveKey struct {
 }
 
 func textArchiveKeyForPost(post Post) textArchiveKey {
-	return textArchiveKey{Source: post.Source, AuthorDirectory: safeFlowDirectoryName(post.Author)}
+	archiveName := post.Author
+	switch post.Source {
+	case SourceWeibo:
+		if hasFeedPrefix(post.FeedIDs, "weibo-likes-") {
+			archiveName = weiboLikesName
+		}
+	case SourcePixiv:
+		if hasFeedPrefix(post.FeedIDs, "pixiv-bookmarks-") {
+			archiveName = pixivBookmarksName
+		}
+	case SourceBilibili:
+		if hasFeedPrefix(post.FeedIDs, bilibiliFavoriteOpusPrefix) {
+			archiveName = bilibiliFavoriteOpusName
+		}
+	}
+	return textArchiveKey{Source: post.Source, AuthorDirectory: safeFlowDirectoryName(archiveName)}
 }
 
 func textArchivePaths(key textArchiveKey) (string, string) {
@@ -2804,12 +3190,17 @@ func renderAuthorTextArchive(posts []Post) []byte {
 			content.WriteString("\n\n")
 		}
 		if post.Published.IsZero() {
-			content.WriteString("[未记录时间]\n")
+			content.WriteString("[未记录时间]")
 		} else {
 			content.WriteString("[")
 			content.WriteString(post.Published.Format("2006-01-02 15:04:05"))
-			content.WriteString("]\n")
+			content.WriteString("]")
 		}
+		if author := cleanRemoteText(post.Author); author != "" {
+			content.WriteString(" ")
+			content.WriteString(author)
+		}
+		content.WriteString("\n")
 		content.WriteString(caption)
 	}
 	if content.Len() > 0 {
@@ -2822,10 +3213,20 @@ func (s *Store) reconcileTextArchivesFor(selected map[textArchiveKey]bool) (bool
 	keys := make(map[textArchiveKey]bool)
 	groups := make(map[textArchiveKey][]int)
 	previousPaths := make(map[textArchiveKey]map[string]bool)
+	protectedPaths := make(map[string]bool)
 	changed := false
 	if selected != nil {
 		for key := range selected {
 			keys[key] = true
+		}
+	}
+	for _, post := range s.posts {
+		if cleanRemoteText(post.Caption) == "" {
+			continue
+		}
+		_, publicPath := textArchivePaths(textArchiveKeyForPost(post))
+		if localPath, ok := localFlowArchivePath(publicPath); ok {
+			protectedPaths[strings.ToLower(filepath.Clean(localPath))] = true
 		}
 	}
 	for index := range s.posts {
@@ -2880,6 +3281,9 @@ func (s *Store) reconcileTextArchivesFor(selected map[textArchiveKey]bool) (bool
 			if sameLocalFlowArchivePath(previousPath, publicPath) {
 				continue
 			}
+			if localPath, ok := localFlowArchivePath(previousPath); ok && protectedPaths[strings.ToLower(filepath.Clean(localPath))] {
+				continue
+			}
 			if err := deletePostMedia([]string{previousPath}); err != nil {
 				return false, err
 			}
@@ -2921,7 +3325,7 @@ func (b *BilibiliStore) archiveSourceContent(feed SourceConfig, posts []Post) (S
 		}
 	}
 	for postIndex := range posts {
-		if !strings.HasPrefix(prepared.ID, "weibo-likes-") {
+		if !strings.HasPrefix(prepared.ID, "weibo-likes-") && !strings.HasPrefix(prepared.ID, "pixiv-bookmarks-") && !isBilibiliFavoriteOpusFeed(prepared) {
 			posts[postIndex].Avatar = prepared.Avatar
 		}
 		localMedia := make([]string, 0, len(posts[postIndex].Media))
@@ -3444,7 +3848,7 @@ func (s *Store) postsAfterOrSourceMembership(posts []Post, boundary time.Time, f
 
 func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, error) {
 	originalID := feed.ID
-	if feed.Source == SourceBilibili {
+	if feed.Source == SourceBilibili && !isBilibiliFavoriteOpusFeed(feed) {
 		userID := strings.TrimPrefix(feed.ID, "bili-")
 		if _, err := strconv.ParseUint(userID, 10, 64); err != nil || len(userID) > 15 || strings.TrimSpace(feed.Avatar) == "" {
 			if repaired, repairErr := b.findBilibiliUser(feed.Name); repairErr == nil {
@@ -3474,7 +3878,11 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 	var err error
 	switch feed.Source {
 	case SourceBilibili:
-		posts, err = b.fetchBilibiliPosts(feed, full)
+		if isBilibiliFavoriteOpusFeed(feed) {
+			posts, err = b.fetchBilibiliFavoriteOpusPosts(feed, full)
+		} else {
+			posts, err = b.fetchBilibiliPosts(feed, full)
+		}
 	case SourceWeibo:
 		if strings.HasPrefix(feed.ID, "weibo-likes-") {
 			posts, err = b.fetchWeiboLikedPosts(feed)
@@ -3489,7 +3897,9 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 	added := 0
 	if err == nil {
 		if !full {
-			if feed.Source == SourceBilibili && b.content != nil {
+			if isBilibiliFavoriteOpusFeed(feed) && b.content != nil {
+				posts = b.content.postsAfterOrSourceMembership(posts, feed.LastSyncedAt, feed.ID)
+			} else if feed.Source == SourceBilibili && b.content != nil {
 				posts = b.content.postsAfterOrCaptionRepair(posts, feed.LastSyncedAt)
 			} else if strings.HasPrefix(feed.ID, "weibo-likes-") && b.content != nil {
 				posts = b.content.postsAfterOrSourceMembership(posts, feed.LastSyncedAt, feed.ID)
@@ -3498,7 +3908,7 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 			}
 		}
 		posts = filterSourcePosts(posts, feed)
-		if len(posts) > 0 && !strings.HasPrefix(feed.ID, "weibo-likes-") && !strings.HasPrefix(feed.ID, "pixiv-bookmarks-") {
+		if len(posts) > 0 && !strings.HasPrefix(feed.ID, "weibo-likes-") && !strings.HasPrefix(feed.ID, "pixiv-bookmarks-") && !isBilibiliFavoriteOpusFeed(feed) {
 			if strings.TrimSpace(posts[0].Author) != "" {
 				feed.Name = posts[0].Author
 			}

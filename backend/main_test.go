@@ -196,6 +196,38 @@ func TestBilibiliEmojiRemainsText(t *testing.T) {
 	}
 }
 
+func TestBilibiliOpusPostExtractsArticleTextAndImages(t *testing.T) {
+	state := map[string]any{"detail": map[string]any{
+		"id_str": "979835568137437186",
+		"modules": []any{
+			map[string]any{"module_title": map[string]any{"text": "收藏专栏标题"}},
+			map[string]any{"module_author": map[string]any{"name": "专栏作者", "face": "//i0.hdslb.com/bfs/face/avatar.jpg", "pub_ts": "1726974146"}},
+			map[string]any{"module_content": map[string]any{"paragraphs": []any{
+				map[string]any{"text": map[string]any{"nodes": []any{map[string]any{"word": map[string]any{"words": "正文第一段"}}}}},
+				map[string]any{"pic": map[string]any{"pics": []any{map[string]any{"url": "https://i0.hdslb.com/bfs/new_dyn/content.jpg"}}}},
+			}}},
+			map[string]any{"module_top": map[string]any{"display": map[string]any{"album": map[string]any{"pics": []any{map[string]any{"url": "https://i0.hdslb.com/bfs/new_dyn/cover.jpg"}}}}}},
+		},
+	}}
+	feed := SourceConfig{ID: bilibiliFavoriteOpusPrefix + "42", Source: SourceBilibili, Name: bilibiliFavoriteOpusName, Tags: []string{"B站收藏"}}
+	post, err := bilibiliOpusPost("979835568137437186", state, feed)
+	if err != nil {
+		t.Fatalf("parse favorite opus: %v", err)
+	}
+	if post.ID != "bili-dynamic-979835568137437186" || post.Author != "专栏作者" || post.Avatar != "https://i0.hdslb.com/bfs/face/avatar.jpg" {
+		t.Fatalf("unexpected opus identity: %#v", post)
+	}
+	if !strings.Contains(post.Caption, "收藏专栏标题") || !strings.Contains(post.Caption, "正文第一段") {
+		t.Fatalf("opus text was incomplete: %q", post.Caption)
+	}
+	if len(post.Media) != 2 || !containsString(post.Media, "https://i0.hdslb.com/bfs/new_dyn/content.jpg") || !containsString(post.Media, "https://i0.hdslb.com/bfs/new_dyn/cover.jpg") {
+		t.Fatalf("opus images were incomplete: %#v", post.Media)
+	}
+	if post.OriginalURL != "https://www.bilibili.com/opus/979835568137437186" || !containsString(post.FeedIDs, feed.ID) {
+		t.Fatalf("unexpected opus source metadata: %#v", post)
+	}
+}
+
 func TestAllowedBilibiliDynamicTypeIncludesTextButNotVideo(t *testing.T) {
 	for _, dynamicType := range []string{"DYNAMIC_TYPE_WORD", "DYNAMIC_TYPE_DRAW", "DYNAMIC_TYPE_ARTICLE", "DYNAMIC_TYPE_OPUS"} {
 		if !allowedBilibiliDynamicType(dynamicType) {
@@ -381,6 +413,42 @@ func TestPixivBookmarksSourceUsesDefaultTag(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(feed.StoragePath, "source.json")); err != nil {
 		t.Fatalf("Pixiv bookmarks metadata missing: %v", err)
+	}
+}
+
+func TestBilibiliFavoriteOpusSourceUsesConnectedAccount(t *testing.T) {
+	oldFlowRoot, oldBilibiliFile := flowRoot, bilibiliFile
+	flowRoot = t.TempDir()
+	bilibiliFile = filepath.Join(t.TempDir(), "platforms.enc")
+	t.Cleanup(func() {
+		flowRoot = oldFlowRoot
+		bilibiliFile = oldBilibiliFile
+	})
+	store := &BilibiliStore{
+		key: make([]byte, 32),
+		config: BilibiliConfig{
+			Credentials:   BilibiliCredentials{SESSDATA: "test", DedeUserID: "42", UserName: "收藏账号", Avatar: "https://example.com/avatar.jpg"},
+			Subscriptions: []SourceConfig{},
+		},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/bilibili/subscriptions?type=favorite-opus", nil)
+	response := httptest.NewRecorder()
+	store.subscriptionsHandler(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("add Bilibili favorite opus source: status=%d body=%s", response.Code, response.Body.String())
+	}
+	if len(store.config.Subscriptions) != 1 {
+		t.Fatalf("favorite opus source was not added: %#v", store.config.Subscriptions)
+	}
+	feed := store.config.Subscriptions[0]
+	if feed.ID != bilibiliFavoriteOpusPrefix+"42" || feed.Name != bilibiliFavoriteOpusName || feed.StoragePath != sourceStoragePath(SourceBilibili, bilibiliFavoriteOpusName) {
+		t.Fatalf("unexpected favorite opus source: %#v", feed)
+	}
+	if !feed.IncludePast || feed.OnlyWithImages || !containsString(feed.Tags, "B站收藏") {
+		t.Fatalf("unexpected favorite opus defaults: %#v", feed)
+	}
+	if _, err := os.Stat(filepath.Join(feed.StoragePath, "source.json")); err != nil {
+		t.Fatalf("favorite opus source metadata missing: %v", err)
 	}
 }
 
@@ -1018,9 +1086,122 @@ func TestAuthorTextArchiveCombinesPostsAndPreservesEmoji(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read archived text: %v", err)
 	}
-	want := "[2026-08-12 08:00:00]\n更早的一条\n\n[2026-08-13 09:30:00]\n今天很开心 😄 [doge]\n第二行\n"
+	want := "[2026-08-12 08:00:00] 拾光/作者\n更早的一条\n\n[2026-08-13 09:30:00] 拾光/作者\n今天很开心 😄 [doge]\n第二行\n"
 	if got := string(data); got != want {
 		t.Fatalf("archived text changed: got %q want %q", got, want)
+	}
+}
+
+func TestCollectionTextArchivesUseSourceFolderInsteadOfAuthorFolders(t *testing.T) {
+	root := t.TempDir()
+	oldFlowRoot := flowRoot
+	flowRoot = root
+	t.Cleanup(func() { flowRoot = oldFlowRoot })
+	store := &Store{posts: []Post{
+		{ID: "weibo-a", Source: SourceWeibo, FeedIDs: []string{"weibo-likes-42"}, Author: "微博作者甲", Caption: "点赞正文甲", Published: time.Date(2026, time.August, 12, 8, 0, 0, 0, time.Local)},
+		{ID: "weibo-b", Source: SourceWeibo, FeedIDs: []string{"weibo-likes-42"}, Author: "微博作者乙", Caption: "点赞正文乙", Published: time.Date(2026, time.August, 13, 8, 0, 0, 0, time.Local)},
+		{ID: "pixiv-a", Source: SourcePixiv, FeedIDs: []string{"pixiv-bookmarks-7"}, Author: "画师甲", Caption: "收藏作品甲", Published: time.Date(2026, time.August, 12, 9, 0, 0, 0, time.Local)},
+		{ID: "pixiv-b", Source: SourcePixiv, FeedIDs: []string{"pixiv-bookmarks-7"}, Author: "画师乙", Caption: "收藏作品乙", Published: time.Date(2026, time.August, 13, 9, 0, 0, 0, time.Local)},
+		{ID: "direct", Source: SourcePixiv, FeedIDs: []string{"pixiv-8"}, Author: "普通画师", Caption: "普通作品", Published: time.Date(2026, time.August, 14, 9, 0, 0, 0, time.Local)},
+	}}
+	if _, err := store.reconcileTextArchives(); err != nil {
+		t.Fatalf("reconcile collection text archives: %v", err)
+	}
+	weiboPath := flowPublicPath(SourceWeibo, weiboLikesName, "post_contents.txt")
+	pixivPath := flowPublicPath(SourcePixiv, pixivBookmarksName, "post_contents.txt")
+	if store.posts[0].TextFile != weiboPath || store.posts[1].TextFile != weiboPath {
+		t.Fatalf("Weibo likes were not combined in source folder: %#v", store.posts[:2])
+	}
+	if store.posts[2].TextFile != pixivPath || store.posts[3].TextFile != pixivPath {
+		t.Fatalf("Pixiv bookmarks were not combined in source folder: %#v", store.posts[2:4])
+	}
+	if store.posts[4].TextFile != flowPublicPath(SourcePixiv, "普通画师", "post_contents.txt") {
+		t.Fatalf("regular artist archive path changed unexpectedly: %#v", store.posts[4])
+	}
+	weiboContents, err := os.ReadFile(filepath.Join(sourceStoragePath(SourceWeibo, weiboLikesName), "post_contents.txt"))
+	if err != nil || !bytes.Contains(weiboContents, []byte("微博作者甲")) || !bytes.Contains(weiboContents, []byte("微博作者乙")) {
+		t.Fatalf("Weibo likes archive is incomplete: data=%q err=%v", weiboContents, err)
+	}
+	pixivContents, err := os.ReadFile(filepath.Join(sourceStoragePath(SourcePixiv, pixivBookmarksName), "post_contents.txt"))
+	if err != nil || !bytes.Contains(pixivContents, []byte("画师甲")) || !bytes.Contains(pixivContents, []byte("画师乙")) {
+		t.Fatalf("Pixiv bookmarks archive is incomplete: data=%q err=%v", pixivContents, err)
+	}
+}
+
+func TestCollectionTextMigrationKeepsAuthorArchiveUsedByRegularFeed(t *testing.T) {
+	root := t.TempDir()
+	oldFlowRoot := flowRoot
+	flowRoot = root
+	t.Cleanup(func() { flowRoot = oldFlowRoot })
+	author := "同时订阅的画师"
+	authorPath := filepath.Join(sourceStoragePath(SourcePixiv, author), "post_contents.txt")
+	if err := os.MkdirAll(filepath.Dir(authorPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(authorPath, []byte("legacy"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	legacyPublicPath := flowPublicPath(SourcePixiv, author, "post_contents.txt")
+	store := &Store{posts: []Post{
+		{ID: "bookmarked", Source: SourcePixiv, FeedIDs: []string{"pixiv-bookmarks-7", "pixiv-9"}, Author: author, Caption: "收藏中的作品", TextFile: legacyPublicPath, Published: time.Date(2026, time.August, 12, 8, 0, 0, 0, time.Local)},
+		{ID: "regular", Source: SourcePixiv, FeedIDs: []string{"pixiv-9"}, Author: author, Caption: "普通订阅作品", TextFile: legacyPublicPath, Published: time.Date(2026, time.August, 13, 8, 0, 0, 0, time.Local)},
+	}}
+	if _, err := store.reconcileTextArchives(); err != nil {
+		t.Fatalf("migrate shared text archive: %v", err)
+	}
+	if store.posts[0].TextFile != flowPublicPath(SourcePixiv, pixivBookmarksName, "post_contents.txt") || store.posts[1].TextFile != legacyPublicPath {
+		t.Fatalf("unexpected split archive paths: %#v", store.posts)
+	}
+	authorContents, err := os.ReadFile(authorPath)
+	if err != nil || bytes.Contains(authorContents, []byte("收藏中的作品")) || !bytes.Contains(authorContents, []byte("普通订阅作品")) {
+		t.Fatalf("regular author archive was removed or mixed: data=%q err=%v", authorContents, err)
+	}
+}
+
+func TestReconcileCollectionMediaMovesExistingFilesIntoSourceFolder(t *testing.T) {
+	root := t.TempDir()
+	oldFlowRoot, oldPreviewRoot := flowRoot, previewRoot
+	flowRoot, previewRoot = filepath.Join(root, "flow"), filepath.Join(root, "previews")
+	t.Cleanup(func() { flowRoot, previewRoot = oldFlowRoot, oldPreviewRoot })
+	tests := []struct {
+		name     string
+		source   Source
+		feedID   string
+		feedName string
+		author   string
+		fileName string
+	}{
+		{name: "weibo likes", source: SourceWeibo, feedID: "weibo-likes-42", feedName: weiboLikesName, author: "微博作者", fileName: "weibo.jpg"},
+		{name: "pixiv bookmarks", source: SourcePixiv, feedID: "pixiv-bookmarks-7", feedName: pixivBookmarksName, author: "Pixiv Artist", fileName: "pixiv.png"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			oldPath := filepath.Join(sourceStoragePath(test.source, test.author), test.fileName)
+			if err := os.MkdirAll(filepath.Dir(oldPath), 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(oldPath, []byte(test.name), 0600); err != nil {
+				t.Fatal(err)
+			}
+			store := &Store{
+				posts: []Post{{ID: test.name, Source: test.source, FeedIDs: []string{test.feedID}, Author: test.author, Media: []string{flowPublicPath(test.source, test.author, test.fileName)}}},
+				file:  filepath.Join(root, strings.ReplaceAll(test.name, " ", "-")+".json"),
+			}
+			feed := SourceConfig{ID: test.feedID, Source: test.source, Name: test.feedName}
+			if err := store.reconcileCollectionMedia(feed); err != nil {
+				t.Fatalf("move collection media: %v", err)
+			}
+			expectedPublicPath := flowPublicPath(test.source, test.feedName, test.fileName)
+			if store.posts[0].Media[0] != expectedPublicPath {
+				t.Fatalf("unexpected migrated media path: %q", store.posts[0].Media[0])
+			}
+			if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
+				t.Fatalf("old author media was not moved: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(sourceStoragePath(test.source, test.feedName), test.fileName)); err != nil {
+				t.Fatalf("collection media missing from source folder: %v", err)
+			}
+		})
 	}
 }
 
