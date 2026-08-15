@@ -312,6 +312,23 @@ function handleSourceAvatarError(event, feed, platform) {
   image.dataset.fallbackIndex = String(nextIndex)
   if (candidates[nextIndex]) image.src = candidates[nextIndex]
 }
+function postAvatarCandidates(post) {
+  const candidates = [post?.avatar]
+  const matchingFeed = feeds.value.find(feed => feed.source === post?.source && feed.name === post?.author)
+  if (matchingFeed?.avatar) candidates.push(matchingFeed.avatar)
+  candidates.push(sourceIconFor(post?.source))
+  return [...new Set(candidates.filter(Boolean))]
+}
+function postAvatar(post) {
+  return postAvatarCandidates(post)[0] || ''
+}
+function handlePostAvatarError(event, post) {
+  const image = event.currentTarget
+  const candidates = postAvatarCandidates(post)
+  const nextIndex = Number(image.dataset.fallbackIndex || 0) + 1
+  image.dataset.fallbackIndex = String(nextIndex)
+  if (candidates[nextIndex]) image.src = candidates[nextIndex]
+}
 function platformCardForSource(source) {
   return platformCards.value.find(platform => platform.key === source)
 }
@@ -1888,7 +1905,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
       <div class="sidebar-bottom">
         <button :class="{ active: activeNav === 'settings' }" @click="openSettings()"><span class="nav-line-symbol nav-mask-symbol" :style="{ '--nav-mask': `url(${settingsNavIcon})` }" aria-hidden="true"></span> 设置</button>
         <button class="sidebar-theme-button" type="button" @click="setDarkMode(!isDark); mobileMenuOpen = false" :title="isDark ? '当前为夜间主题' : '当前为日间主题'" :aria-label="isDark ? '当前为夜间主题，点击切换日间主题' : '当前为日间主题，点击切换夜间主题'"><span class="theme-mask-symbol" :style="{ '--nav-mask': `url(${isDark ? nightThemeIcon : dayThemeIcon})` }" aria-hidden="true"></span></button>
-        <button v-if="phonePortrait" class="mobile-logout-button" type="button" title="退出登录" aria-label="退出登录" @click="logout"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H6.5A2.5 2.5 0 0 0 4 7.5v9A2.5 2.5 0 0 0 6.5 19H10M14 8l4 4-4 4M18 12H9"/></svg>退出登录</button>
+        <button v-if="phonePortrait" class="mobile-logout-button" type="button" title="退出登录" aria-label="退出登录" @click="logout"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H6.5A2.5 2.5 0 0 0 4 7.5v9A2.5 2.5 0 0 0 6.5 19H10M14 8l4 4-4 4M18 12H9"/></svg></button>
       </div>
     </aside>
 
@@ -1904,7 +1921,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
       <header v-if="authorProfile" class="topbar author-page-header">
         <div class="author-profile-main">
           <button class="author-back-button" type="button" title="返回时间线" aria-label="返回时间线" @click="closeAuthor">←</button>
-          <img :src="authorProfile.avatar || sourceIconFor(authorProfile.source)" :alt="authorProfile.name">
+          <img :src="postAvatar(authorProfile)" data-fallback-index="0" :alt="authorProfile.name" referrerpolicy="no-referrer" @error="handlePostAvatarError($event, authorProfile)">
           <div><p class="eyebrow">AUTHOR TIMELINE · {{ sourceMeta[authorProfile.source].label }}</p><h1>{{ authorProfile.name }}</h1><p class="subtitle">共 {{ authorProfile.count }} 条已拉取动态</p></div>
         </div>
         <div class="header-actions"><button class="danger-outline-button" :disabled="postActionBusy !== '' || !authorProfile.count" @click="deleteAuthorPosts(authorProfile.source, authorProfile.name)">删除全部动态</button></div>
@@ -1963,7 +1980,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
 <article v-for="post in visiblePosts" :key="post.id" :ref="element => setPostCard(post, element, 'list')" :class="['post-card', { selected: selectedPostIds.includes(post.id), selectable: selectionMode }]" :data-post-id="post.id" @click.capture="handlePostSelectionClick($event, post)" @contextmenu.stop.prevent="openContextMenu($event, post)">
 <label v-if="selectionMode" class="post-select-control" :title="`选择 ${post.author} 的这条动态`" @click.prevent><input type="checkbox" :checked="selectedPostIds.includes(post.id)" tabindex="-1"><span></span></label>
 <div class="post-head">
-<button class="post-author-avatar" type="button" :title="`查看 ${post.author} 的动态`" @click="openAuthor(post)"><img :src="post.avatar" :alt="post.author"></button>
+<button class="post-author-avatar" type="button" :title="`查看 ${post.author} 的动态`" @click="openAuthor(post)"><img :src="postAvatar(post)" data-fallback-index="0" :alt="post.author" referrerpolicy="no-referrer" @error="handlePostAvatarError($event, post)"></button>
 <div class="author">
 <button class="post-author-name" type="button" :title="`查看 ${post.author} 的动态`" @click="openAuthor(post)"><strong>{{ post.author }}</strong></button>
 <span>{{ postDateTime(post.published) }}</span>
@@ -1997,14 +2014,14 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
     <span v-if="masonryPostHasVideo(item.post)" class="masonry-video-mark" aria-label="视频动态"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 7 8 5-8 5Z"/></svg></span>
   </div>
   <div v-else-if="primaryVideo(item.post)" class="masonry-cover masonry-video-cover">
-    <video :src="primaryVideo(item.post).url" muted playsinline preload="metadata" @loadedmetadata="setMasonryCoverRatio(item.post, $event, true)"></video>
+    <div class="masonry-video-placeholder" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="m10 9 5 3-5 3Z"/></svg></div>
     <span class="masonry-video-mark" aria-label="视频动态"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 7 8 5-8 5Z"/></svg></span>
   </div>
   <div class="masonry-card-body">
     <p v-if="item.post.caption" class="masonry-caption">{{ item.post.caption }}</p>
     <div v-if="item.post.tags?.length" class="masonry-tags"><button v-for="tag in item.post.tags.slice(0, 2)" :key="tag" type="button" @click.stop="openTag(tag)">#{{ tag }}</button><span v-if="item.post.tags.length > 2">+{{ item.post.tags.length - 2 }}</span></div>
     <footer class="masonry-meta">
-      <button class="masonry-author" type="button" :title="`查看 ${item.post.author} 的动态`" @click.stop="openAuthor(item.post)"><img :src="item.post.avatar" :alt="item.post.author"><span><strong>{{ item.post.author }}</strong><small>{{ postDateTime(item.post.published) }}</small></span></button>
+      <button class="masonry-author" type="button" :title="`查看 ${item.post.author} 的动态`" @click.stop="openAuthor(item.post)"><img :src="postAvatar(item.post)" data-fallback-index="0" :alt="item.post.author" referrerpolicy="no-referrer" @error="handlePostAvatarError($event, item.post)"><span><strong>{{ item.post.author }}</strong><small>{{ postDateTime(item.post.published) }}</small></span></button>
       <button :class="['masonry-like-button', { liked: item.post.liked }]" type="button" :disabled="postActionBusy === `like:${item.post.id}`" :title="item.post.liked ? '取消收藏' : '收藏'" @click.stop="togglePostLike(item.post)"><span class="post-action-mask post-favorite-symbol" :style="{ '--post-action-mask': `url(${favoriteNavIcon})` }" aria-hidden="true"></span></button>
     </footer>
   </div>
@@ -2040,7 +2057,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
     <main v-if="phonePortrait && masonryDetailPost" class="content mobile-post-detail-page">
       <header class="mobile-post-detail-head">
         <button class="mobile-post-back" type="button" title="返回动态页" aria-label="返回动态页" @click="closePostDetail"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg></button>
-        <button class="mobile-post-author" type="button" @click="openAuthor(masonryDetailPost)"><img :src="masonryDetailPost.avatar" :alt="masonryDetailPost.author"><strong>{{ masonryDetailPost.author }}</strong></button>
+        <button class="mobile-post-author" type="button" @click="openAuthor(masonryDetailPost)"><img :src="postAvatar(masonryDetailPost)" data-fallback-index="0" :alt="masonryDetailPost.author" referrerpolicy="no-referrer" @error="handlePostAvatarError($event, masonryDetailPost)"><strong>{{ masonryDetailPost.author }}</strong></button>
         <span :class="['source-pill', 'mobile-post-source', sourceMeta[masonryDetailPost.source].color]"><img :class="['source-icon', { 'twitter-night-icon': masonryDetailPost.source === 'twitter' && isDark }]" :src="sourceIconFor(masonryDetailPost.source)" :alt="`${sourceMeta[masonryDetailPost.source].label}图标`">{{ sourceMeta[masonryDetailPost.source].label }}</span>
       </header>
       <section v-if="mobileDetailCurrentMedia" :class="['mobile-post-media-stage', { 'video-media': mobileDetailCurrentMedia.type === 'video' }, mobileDetailCurrentMedia.type === 'video' ? postVideoFrameClass(masonryDetailPost) : '']" :style="mobileDetailCurrentMedia.type === 'video' ? postVideoFrameStyle(masonryDetailPost) : undefined" @touchstart.passive="beginMobileDetailSwipe" @touchmove="updateMobileDetailSwipe" @touchend.passive="finishMobileDetailSwipe" @touchcancel.passive="cancelMobileDetailSwipe">
@@ -2067,7 +2084,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
     <div v-if="masonryDetailPost && !phonePortrait" class="modal-backdrop masonry-detail-backdrop" @click.self="closePostDetail">
       <article class="masonry-detail-modal" role="dialog" aria-modal="true" :aria-label="`${masonryDetailPost.author} 的动态详情`">
         <div class="post-head">
-          <button class="post-author-avatar" type="button" :title="`查看 ${masonryDetailPost.author} 的动态`" @click="openAuthor(masonryDetailPost)"><img :src="masonryDetailPost.avatar" :alt="masonryDetailPost.author"></button>
+          <button class="post-author-avatar" type="button" :title="`查看 ${masonryDetailPost.author} 的动态`" @click="openAuthor(masonryDetailPost)"><img :src="postAvatar(masonryDetailPost)" data-fallback-index="0" :alt="masonryDetailPost.author" referrerpolicy="no-referrer" @error="handlePostAvatarError($event, masonryDetailPost)"></button>
           <div class="author"><button class="post-author-name" type="button" @click="openAuthor(masonryDetailPost)"><strong>{{ masonryDetailPost.author }}</strong></button><span>{{ postDateTime(masonryDetailPost.published) }}</span></div>
           <span :class="['source-pill', 'post-source-pill', sourceMeta[masonryDetailPost.source].color]"><img :class="['source-icon', { 'twitter-night-icon': masonryDetailPost.source === 'twitter' && isDark }]" :src="sourceIconFor(masonryDetailPost.source)" :alt="`${sourceMeta[masonryDetailPost.source].label}图标`">{{ sourceMeta[masonryDetailPost.source].label }}</span>
         </div>

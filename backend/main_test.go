@@ -596,6 +596,30 @@ func TestCollectWeiboPostsIncludesPlayableVideo(t *testing.T) {
 	}
 }
 
+func TestCollectWeiboPostsFindsNestedSiblingVideoPoster(t *testing.T) {
+	payload := map[string]any{"mblog": map[string]any{
+		"id":         "nested-video-post",
+		"text_raw":   "nested video caption",
+		"created_at": "Mon Aug 12 10:00:00 +0800 2024",
+		"user":       map[string]any{"idstr": "12345", "screen_name": "author", "cover_image": "https://image.example/profile-cover.jpg"},
+		"page_info": map[string]any{
+			"page_pic": map[string]any{"pic_big": "https://wx1.sinaimg.cn/large/nested-poster.jpg"},
+			"media_info": map[string]any{"playback_list": []any{map[string]any{
+				"play_info": map[string]any{"stream_url_hd": "https://f.video.weibocdn.com/nested-video.mp4"},
+			}}},
+		},
+	}}
+	posts := make([]Post, 0)
+	collectWeiboPosts(payload, SourceConfig{}, &posts, make(map[string]bool))
+	if len(posts) != 1 || len(posts[0].Videos) != 1 {
+		t.Fatalf("nested Weibo video was not collected: %#v", posts)
+	}
+	video := posts[0].Videos[0]
+	if video.URL != "https://f.video.weibocdn.com/nested-video.mp4" || video.Poster != "https://wx1.sinaimg.cn/large/nested-poster.jpg" {
+		t.Fatalf("unexpected nested Weibo video metadata: %#v", video)
+	}
+}
+
 func TestNormalizePostVideosKeepsHighestQualityAndAvailablePoster(t *testing.T) {
 	videos := normalizePostVideos([]PostVideo{
 		{URL: "https://video.example/post-720.mp4", Poster: "https://image.example/poster.jpg"},

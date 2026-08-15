@@ -4160,9 +4160,56 @@ func weiboDirectVideoURL(object map[string]any) string {
 }
 
 func weiboDirectVideoPoster(object map[string]any) string {
-	for _, key := range []string{"poster_url", "poster", "page_pic", "cover", "cover_image"} {
-		if poster := normalizeRemoteImage(remoteURLValue(object[key])); poster != "" && poster != "<nil>" {
+	for _, key := range []string{"poster_url", "poster", "page_pic", "cover", "cover_image", "cover_url", "video_poster", "thumbnail"} {
+		if poster := weiboPosterValue(object[key]); poster != "" {
 			return poster
+		}
+	}
+	return ""
+}
+
+func weiboPosterValue(value any) string {
+	switch typed := value.(type) {
+	case string:
+		poster := normalizeRemoteImage(typed)
+		if poster != "" && poster != "<nil>" {
+			return poster
+		}
+	case map[string]any:
+		for _, key := range []string{"url", "src", "pic_big", "large", "original", "image_url"} {
+			if poster := weiboPosterValue(typed[key]); poster != "" {
+				return poster
+			}
+		}
+	}
+	return ""
+}
+
+func findWeiboVideoPoster(value any) string {
+	switch typed := value.(type) {
+	case []any:
+		for _, item := range typed {
+			if poster := findWeiboVideoPoster(item); poster != "" {
+				return poster
+			}
+		}
+	case map[string]any:
+		if poster := weiboDirectVideoPoster(typed); poster != "" {
+			return poster
+		}
+		for _, key := range []string{"page_info", "media_info", "video", "playback_list", "play_info"} {
+			if poster := findWeiboVideoPoster(typed[key]); poster != "" {
+				return poster
+			}
+		}
+		for key, child := range typed {
+			switch key {
+			case "user", "pics", "pic_infos", "retweeted_status", "page_info", "media_info", "video", "playback_list", "play_info":
+				continue
+			}
+			if poster := findWeiboVideoPoster(child); poster != "" {
+				return poster
+			}
 		}
 	}
 	return ""
@@ -4269,6 +4316,15 @@ func collectWeiboPosts(value any, feed SourceConfig, posts *[]Post, seen map[str
 			videos := make([]PostVideo, 0, 1)
 			collectWeiboVideos(mblog, &videos, make(map[string]int))
 			videos = normalizePostVideos(videos)
+			videoPoster := findWeiboVideoPoster(mblog)
+			if videoPoster == "" && len(media) > 0 {
+				videoPoster = media[0]
+			}
+			for index := range videos {
+				if videos[index].Poster == "" {
+					videos[index].Poster = videoPoster
+				}
+			}
 			rawCaption := jsonValueString(mblog["text"])
 			caption := jsonValueString(mblog["text_raw"])
 			if caption == "" {
