@@ -115,7 +115,10 @@ const masonryViewportTop = ref(0)
 const masonryViewportBottom = ref(900)
 const masonryDetailPost = ref(null)
 const mobileDetailIndex = ref(0)
-const mobileDetailMotion = ref('enter')
+const mobileDetailDragX = ref(0)
+const mobileDetailTrackShift = ref(0)
+const mobileDetailDragging = ref(false)
+const mobileDetailAnimating = ref(false)
 const mobilePostReturnPath = ref('/')
 const pendingPostId = ref('')
 const feedListElement = ref(null)
@@ -176,6 +179,22 @@ const favoriteStatsCount = computed(() => statsPosts.value.filter(post => post.l
 const selectedPostCount = computed(() => selectedPostIds.value.length)
 const mobileDetailMedia = computed(() => postDetailMedia(masonryDetailPost.value))
 const mobileDetailCurrentMedia = computed(() => mobileDetailMedia.value[mobileDetailIndex.value] || null)
+const mobileDetailSlides = computed(() => {
+  const media = mobileDetailMedia.value
+  if (!media.length) return []
+  if (media.length === 1) return [{ media: media[0], index: 0, position: 0 }]
+  return [-1, 0, 1].map(position => {
+    const index = (mobileDetailIndex.value + position + media.length) % media.length
+    return { media: media[index], index, position }
+  })
+})
+const mobileDetailTrackStyle = computed(() => {
+  const baseShift = mobileDetailMedia.value.length > 1 ? -100 : 0
+  return {
+    transform: `translate3d(calc(${baseShift + mobileDetailTrackShift.value}% + ${mobileDetailDragX.value}px), 0, 0)`,
+    transition: mobileDetailDragging.value ? 'none' : mobileDetailAnimating.value ? 'transform .3s cubic-bezier(.22, .72, .2, 1)' : 'none'
+  }
+})
 const filteredPosts = computed(() => {
   const allPosts = Array.isArray(posts.value) ? posts.value : []
   const timeline = activeNav.value === 'liked' ? allPosts.filter(post => post.liked) : allPosts
@@ -335,6 +354,7 @@ async function logout() {
     await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' })
   } finally {
     showBrandMenu.value = false
+    mobileMenuOpen.value = false
     authenticated.value = false
     posts.value = []
     feeds.value = []
@@ -976,6 +996,11 @@ function lightboxMaximumScale() {
 function isLightboxOriginalSize() {
   return Math.abs(lightboxBaseScale() * lightbox.value.scale - 1) < 0.015
 }
+function isMobileLightboxSwipeView() {
+  const centered = Math.abs(lightbox.value.x) < 3 && Math.abs(lightbox.value.y) < 3
+  const defaultFit = lightbox.value.fit && Math.abs(lightbox.value.scale - 1) < 0.02
+  return centered && (defaultFit || isLightboxOriginalSize())
+}
 function lightboxPointerDistance(points) {
   return Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y)
 }
@@ -987,7 +1012,7 @@ function beginLightboxPan(pointer) {
     type: 'pan', pointerId: pointer.id, startX: pointer.x, startY: pointer.y,
     startTime: pointer.time, imageX: lightbox.value.x, imageY: lightbox.value.y,
     startScale: lightbox.value.scale, startFit: lightbox.value.fit,
-    startOriginal: isLightboxOriginalSize(), startedOnImage: pointer.startedOnImage, longPressed: false
+    startSwipeView: isMobileLightboxSwipeView(), startedOnImage: pointer.startedOnImage, longPressed: false
   }
 }
 function beginLightboxPinch() {
@@ -1008,7 +1033,7 @@ function startLightboxGesture(event) {
   if (mobileLightboxMenu.value.open) mobileLightboxMenu.value = { open: false, x: 0, y: 0 }
   event.currentTarget.setPointerCapture(event.pointerId)
   lightboxPointers.set(event.pointerId, { id: event.pointerId, x: event.clientX, y: event.clientY, time: event.timeStamp, startedOnImage: event.target === lightboxImageElement.value })
-  lightbox.value.dragging = !(phonePortrait.value && isLightboxOriginalSize())
+  lightbox.value.dragging = !(phonePortrait.value && isMobileLightboxSwipeView())
   if (lightboxPointers.size === 1) {
     lightboxGestureHadPinch = false
     beginLightboxPan(lightboxPointers.get(event.pointerId))
@@ -1034,14 +1059,14 @@ function moveLightboxGesture(event) {
     return
   }
   if (lightboxGesture?.type !== 'pan' || lightboxGesture.pointerId !== event.pointerId) return
-  if (phonePortrait.value && lightboxGesture.startOriginal) return
+  if (phonePortrait.value && lightboxGesture.startSwipeView) return
   lightbox.value.x = lightboxGesture.imageX + event.clientX - lightboxGesture.startX
   lightbox.value.y = lightboxGesture.imageY + event.clientY - lightboxGesture.startY
 }
 function toggleLightboxDoubleTap() {
   if (phonePortrait.value) {
-    if (isLightboxOriginalSize() && Math.abs(lightbox.value.x) < 2 && Math.abs(lightbox.value.y) < 2) return
-    lightbox.value.fit = false
+    const atDefaultFit = lightbox.value.fit && Math.abs(lightbox.value.scale - 1) < 0.02 && Math.abs(lightbox.value.x) < 2 && Math.abs(lightbox.value.y) < 2
+    lightbox.value.fit = !atDefaultFit
   } else {
     lightbox.value.fit = !lightbox.value.fit || Math.abs(lightbox.value.scale - 1) > 0.02 || Math.abs(lightbox.value.x) > 2 || Math.abs(lightbox.value.y) > 2
   }
@@ -1059,7 +1084,7 @@ function stopLightboxGesture(event) {
   const duration = event.timeStamp - (gesture?.startTime ?? event.timeStamp)
   const wasSinglePan = gesture?.type === 'pan' && gesture.pointerId === event.pointerId && lightboxPointers.size === 1
   const wasCancelled = event.type === 'pointercancel'
-  const canSwipe = phonePortrait.value ? gesture?.startOriginal : gesture?.startFit && gesture?.startScale <= 1.02 && Math.abs(gesture?.imageX || 0) < 3 && Math.abs(gesture?.imageY || 0) < 3
+  const canSwipe = phonePortrait.value ? gesture?.startSwipeView : gesture?.startFit && gesture?.startScale <= 1.02 && Math.abs(gesture?.imageX || 0) < 3 && Math.abs(gesture?.imageY || 0) < 3
   const isSwipe = !wasCancelled && !lightboxGestureHadPinch && wasSinglePan && !gesture.longPressed && canSwipe && duration < 620 && Math.abs(dx) > 58 && Math.abs(dx) > Math.abs(dy) * 1.3
   const isTap = !wasCancelled && !lightboxGestureHadPinch && wasSinglePan && !gesture.longPressed && duration < 280 && Math.hypot(dx, dy) < 10
 
@@ -1085,7 +1110,7 @@ function stopLightboxGesture(event) {
     lightbox.value.dragging = false
     lightboxGesture = null
     lightboxGestureHadPinch = false
-    if (phonePortrait.value && isLightboxOriginalSize()) {
+    if (phonePortrait.value && isMobileLightboxSwipeView()) {
       lightbox.value.x = 0
       lightbox.value.y = 0
     }
@@ -1346,7 +1371,7 @@ function openMasonryPost(post) {
   if (selectionMode.value) return
   masonryDetailPost.value = post
   mobileDetailIndex.value = 0
-  mobileDetailMotion.value = 'enter'
+  resetMobileDetailTrack()
   if (phonePortrait.value) {
     mobilePostReturnPath.value = window.location.pathname.startsWith('/post/') ? '/' : window.location.pathname
     updateRoute(`/post/${encodeURIComponent(post.id)}`)
@@ -1356,21 +1381,42 @@ function openMasonryPost(post) {
 function closePostDetail() {
   masonryDetailPost.value = null
   mobileDetailIndex.value = 0
-  mobileDetailMotion.value = 'enter'
+  resetMobileDetailTrack()
   pendingPostId.value = ''
   if (window.location.pathname.startsWith('/post/')) {
     updateRoute(mobilePostReturnPath.value || '/', true)
   }
 }
-function moveMobileDetailMedia(direction) {
+function resetMobileDetailTrack() {
+  mobileDetailDragX.value = 0
+  mobileDetailTrackShift.value = 0
+  mobileDetailDragging.value = false
+  mobileDetailAnimating.value = false
+  mobileDetailTouch = null
+}
+function moveMobileDetailMedia(direction, targetIndex = null) {
   const count = mobileDetailMedia.value.length
-  if (count < 2) return
-  mobileDetailMotion.value = direction > 0 ? 'next' : 'previous'
-  mobileDetailIndex.value = (mobileDetailIndex.value + direction + count) % count
+  if (count < 2 || mobileDetailAnimating.value) return
+  const step = direction > 0 ? 1 : -1
+  mobileDetailSwipeClickBlocked = true
+  mobileDetailDragging.value = false
+  mobileDetailDragX.value = 0
+  mobileDetailAnimating.value = true
+  mobileDetailTrackShift.value = step > 0 ? -100 : 100
+  scheduleTransient(() => {
+    mobileDetailIndex.value = targetIndex == null ? (mobileDetailIndex.value + step + count) % count : targetIndex
+    mobileDetailAnimating.value = false
+    mobileDetailTrackShift.value = 0
+    mobileDetailDragX.value = 0
+    scheduleTransient(() => { mobileDetailSwipeClickBlocked = false }, 80)
+  }, 300)
 }
 function selectMobileDetailMedia(index) {
-  if (index === mobileDetailIndex.value) return
-  moveMobileDetailMedia(index > mobileDetailIndex.value ? index - mobileDetailIndex.value : index - mobileDetailIndex.value)
+  if (index === mobileDetailIndex.value || mobileDetailAnimating.value) return
+  const count = mobileDetailMedia.value.length
+  const forwardDistance = (index - mobileDetailIndex.value + count) % count
+  const backwardDistance = (mobileDetailIndex.value - index + count) % count
+  moveMobileDetailMedia(forwardDistance <= backwardDistance ? 1 : -1, index)
 }
 function openMobileDetailImage() {
   if (mobileDetailSwipeClickBlocked || mobileDetailCurrentMedia.value?.type !== 'image') {
@@ -1380,21 +1426,57 @@ function openMobileDetailImage() {
   openLightbox(masonryDetailPost.value, mobileDetailIndex.value)
 }
 function beginMobileDetailSwipe(event) {
-  const touch = event.changedTouches?.[0]
-  if (!touch) return
+  const touch = event.touches?.[0] || event.changedTouches?.[0]
+  if (!touch || mobileDetailAnimating.value || mobileDetailMedia.value.length < 2) return
   mobileDetailSwipeClickBlocked = false
-  mobileDetailTouch = { x: touch.clientX, y: touch.clientY }
+  mobileDetailDragX.value = 0
+  mobileDetailTrackShift.value = 0
+  mobileDetailDragging.value = true
+  mobileDetailTouch = { x: touch.clientX, y: touch.clientY, axis: '' }
+}
+function updateMobileDetailSwipe(event) {
+  const touch = event.touches?.[0]
+  if (!touch || !mobileDetailTouch || mobileDetailAnimating.value) return
+  const deltaX = touch.clientX - mobileDetailTouch.x
+  const deltaY = touch.clientY - mobileDetailTouch.y
+  if (!mobileDetailTouch.axis && Math.max(Math.abs(deltaX), Math.abs(deltaY)) > 7) {
+    mobileDetailTouch.axis = Math.abs(deltaX) > Math.abs(deltaY) * 1.08 ? 'horizontal' : 'vertical'
+  }
+  if (mobileDetailTouch.axis !== 'horizontal') return
+  event.preventDefault()
+  mobileDetailSwipeClickBlocked = Math.abs(deltaX) > 7
+  const limit = Math.max(90, window.innerWidth * .82)
+  mobileDetailDragX.value = Math.max(-limit, Math.min(limit, deltaX))
 }
 function finishMobileDetailSwipe(event) {
   const touch = event.changedTouches?.[0]
   if (!touch || !mobileDetailTouch) return
   const deltaX = touch.clientX - mobileDetailTouch.x
   const deltaY = touch.clientY - mobileDetailTouch.y
+  const horizontal = mobileDetailTouch.axis === 'horizontal'
   mobileDetailTouch = null
-  if (Math.abs(deltaX) < 48 || Math.abs(deltaX) <= Math.abs(deltaY) * 1.15) return
-  mobileDetailSwipeClickBlocked = true
-  scheduleTransient(() => { mobileDetailSwipeClickBlocked = false }, 450)
-  moveMobileDetailMedia(deltaX < 0 ? 1 : -1)
+  mobileDetailDragging.value = false
+  if (horizontal && Math.abs(deltaX) >= Math.min(72, window.innerWidth * .17) && Math.abs(deltaX) > Math.abs(deltaY)) {
+    moveMobileDetailMedia(deltaX < 0 ? 1 : -1)
+    return
+  }
+  mobileDetailAnimating.value = true
+  mobileDetailDragX.value = 0
+  scheduleTransient(() => {
+    mobileDetailAnimating.value = false
+    mobileDetailSwipeClickBlocked = false
+  }, 300)
+}
+function cancelMobileDetailSwipe() {
+  if (!mobileDetailTouch) return
+  mobileDetailTouch = null
+  mobileDetailDragging.value = false
+  mobileDetailAnimating.value = true
+  mobileDetailDragX.value = 0
+  scheduleTransient(() => {
+    mobileDetailAnimating.value = false
+    mobileDetailSwipeClickBlocked = false
+  }, 300)
 }
 function masonryItemStyle(item) {
   return {
@@ -1716,7 +1798,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
     </div>
   </div>
   <div v-else class="app-shell" :class="{ dark: isDark, 'lightbox-active': lightbox.open, 'phone-ui': phonePortrait, 'timeline-search-focused': timelineSearchFocused }" @click="showBrandMenu = false">
-    <button v-if="phonePortrait && !timelineSearchFocused && !masonryDetailPost" class="mobile-menu-toggle" type="button" :class="{ open: mobileMenuOpen }" :aria-expanded="mobileMenuOpen" :title="mobileMenuOpen ? '关闭导航' : '打开导航'" :aria-label="mobileMenuOpen ? '关闭导航' : '打开导航'" @pointerdown.stop @click.stop="mobileMenuOpen = !mobileMenuOpen">
+    <button v-if="phonePortrait && !timelineSearchFocused && !masonryDetailPost && !selectedPlatform && !credentialPlatform && !showFeedSettings" class="mobile-menu-toggle" type="button" :class="{ open: mobileMenuOpen }" :aria-expanded="mobileMenuOpen" :title="mobileMenuOpen ? '关闭导航' : '打开导航'" :aria-label="mobileMenuOpen ? '关闭导航' : '打开导航'" @pointerdown.stop @click.stop="mobileMenuOpen = !mobileMenuOpen">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path class="menu-line menu-line-top" d="M5 7h14"/><path class="menu-line menu-line-middle" d="M5 12h14"/><path class="menu-line menu-line-bottom" d="M5 17h14"/></svg>
     </button>
     <button v-if="mobileMenuOpen" class="mobile-menu-scrim" type="button" aria-label="关闭导航" @click="mobileMenuOpen = false"></button>
@@ -1754,6 +1836,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
       <div class="sidebar-bottom">
         <button :class="{ active: activeNav === 'settings' }" @click="openSettings()"><span class="nav-line-symbol nav-mask-symbol" :style="{ '--nav-mask': `url(${settingsNavIcon})` }" aria-hidden="true"></span> 设置</button>
         <button class="sidebar-theme-button" type="button" @click="setDarkMode(!isDark); mobileMenuOpen = false" :title="isDark ? '当前为夜间主题' : '当前为日间主题'" :aria-label="isDark ? '当前为夜间主题，点击切换日间主题' : '当前为日间主题，点击切换夜间主题'"><span class="theme-mask-symbol" :style="{ '--nav-mask': `url(${isDark ? nightThemeIcon : dayThemeIcon})` }" aria-hidden="true"></span></button>
+        <button v-if="phonePortrait" class="mobile-logout-button" type="button" title="退出登录" aria-label="退出登录" @click="logout"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H6.5A2.5 2.5 0 0 0 4 7.5v9A2.5 2.5 0 0 0 6.5 19H10M14 8l4 4-4 4M18 12H9"/></svg>退出登录</button>
       </div>
     </aside>
 
@@ -1908,9 +1991,13 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
         <button class="mobile-post-author" type="button" @click="openAuthor(masonryDetailPost)"><img :src="masonryDetailPost.avatar" :alt="masonryDetailPost.author"><strong>{{ masonryDetailPost.author }}</strong></button>
         <span :class="['source-pill', 'mobile-post-source', sourceMeta[masonryDetailPost.source].color]"><img :class="['source-icon', { 'twitter-night-icon': masonryDetailPost.source === 'twitter' && isDark }]" :src="sourceIconFor(masonryDetailPost.source)" :alt="`${sourceMeta[masonryDetailPost.source].label}图标`">{{ sourceMeta[masonryDetailPost.source].label }}</span>
       </header>
-      <section v-if="mobileDetailCurrentMedia" :class="['mobile-post-media-stage', { 'video-media': mobileDetailCurrentMedia.type === 'video' }, mobileDetailCurrentMedia.type === 'video' ? postVideoFrameClass(masonryDetailPost) : '']" :style="mobileDetailCurrentMedia.type === 'video' ? postVideoFrameStyle(masonryDetailPost) : undefined" @touchstart.passive="beginMobileDetailSwipe" @touchend.passive="finishMobileDetailSwipe">
-        <img v-if="mobileDetailCurrentMedia.type === 'image'" :key="`${mobileDetailCurrentMedia.key}:${mobileDetailMotion}`" :class="`mobile-detail-motion-${mobileDetailMotion}`" :src="mobileDetailCurrentMedia.src" :alt="`${masonryDetailPost.author} 的第 ${mobileDetailIndex + 1} 张图片`" @click="openMobileDetailImage">
-        <video v-else :key="`${mobileDetailCurrentMedia.key}:${mobileDetailMotion}`" :class="`mobile-detail-motion-${mobileDetailMotion}`" :src="mobileDetailCurrentMedia.src" :poster="mobileDetailCurrentMedia.poster || undefined" controls playsinline autoplay muted preload="auto" @loadedmetadata="setPostVideoRatio(masonryDetailPost, $event)"></video>
+      <section v-if="mobileDetailCurrentMedia" :class="['mobile-post-media-stage', { 'video-media': mobileDetailCurrentMedia.type === 'video' }, mobileDetailCurrentMedia.type === 'video' ? postVideoFrameClass(masonryDetailPost) : '']" :style="mobileDetailCurrentMedia.type === 'video' ? postVideoFrameStyle(masonryDetailPost) : undefined" @touchstart.passive="beginMobileDetailSwipe" @touchmove="updateMobileDetailSwipe" @touchend.passive="finishMobileDetailSwipe" @touchcancel.passive="cancelMobileDetailSwipe">
+        <div class="mobile-post-media-track" :style="mobileDetailTrackStyle">
+          <div v-for="slide in mobileDetailSlides" :key="`${slide.position}:${slide.media.key}`" :class="['mobile-post-media-slide', { current: slide.position === 0 }]">
+            <img v-if="slide.media.type === 'image'" :src="previewMedia(slide.media.src)" :alt="`${masonryDetailPost.author} 的第 ${slide.index + 1} 张图片`" loading="eager" decoding="async" @click="slide.position === 0 && openMobileDetailImage()">
+            <video v-else :src="slide.media.src" :poster="slide.media.poster ? previewMedia(slide.media.poster) : undefined" :controls="slide.position === 0" playsinline :autoplay="slide.position === 0" muted preload="metadata" @loadedmetadata="slide.position === 0 && setPostVideoRatio(masonryDetailPost, $event)"></video>
+          </div>
+        </div>
         <div v-if="mobileDetailMedia.length > 1" class="mobile-post-media-dots" aria-label="媒体分页"><button v-for="(media, index) in mobileDetailMedia" :key="media.key" type="button" :class="{ active: index === mobileDetailIndex }" :aria-label="`查看第 ${index + 1} 项媒体`" @click="selectMobileDetailMedia(index)"></button></div>
       </section>
       <section class="mobile-post-copy">
