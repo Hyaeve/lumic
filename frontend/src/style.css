@@ -447,8 +447,8 @@ body, button, input, textarea, select { font-size: 14px; }
   .source-nav-children .sidebar-source-icon { width: 23px; height: 23px; }
   .sidebar-bottom { display: grid; grid-template-columns: 1fr; gap: 5px; margin-top: 7px; padding-top: 7px; }
   .sidebar-bottom .sidebar-theme-button { width: 46px; height: 44px; min-height: 44px; border: 0; font-size: 21px; }
-  .sidebar-bottom .mobile-logout-button { display: grid; place-items: center; width: 46px; height: 44px; min-height: 44px; padding: 0; color: #98706a; background: transparent; border-radius: 8px; }
-  .sidebar-bottom .mobile-logout-button svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.65; stroke-linecap: round; stroke-linejoin: round; }
+  .sidebar-bottom .mobile-logout-button { display: grid; place-items: center; width: 46px; height: 44px; min-height: 44px; margin-top: 4px; padding: 0; color: #98706a; background: transparent; border-radius: 8px; }
+  .sidebar-bottom .mobile-logout-button svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.65; stroke-linecap: round; stroke-linejoin: round; }
   .sidebar-bottom .mobile-logout-button:hover { color: #a4534c; background: #f5e8e1; }
   .dark .sidebar-bottom .mobile-logout-button { color: #bba4a3; }
   .dark .sidebar-bottom .mobile-logout-button:hover { color: #f0bbb5; background: #261d22; box-shadow: 0 0 12px #d8878240; }

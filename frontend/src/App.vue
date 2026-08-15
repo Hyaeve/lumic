@@ -146,6 +146,7 @@ let lightboxScaleFrame = 0
 let lightboxLastTap = { time: 0, x: 0, y: 0 }
 let lightboxDockTimer = 0
 let lightboxLongPressTimer = 0
+let lightboxHistoryActive = false
 let meteorBurstTimer = 0
 let meteorCleanupTimer = 0
 let meteorBurstSequence = 0
@@ -861,6 +862,10 @@ function resetLightboxView() {
   scheduleLightboxScaleUpdate()
 }
 function openLightbox(post, index) {
+  if (phonePortrait.value && !lightboxHistoryActive) {
+    window.history.pushState({ ...(window.history.state || {}), lumicLightbox: true }, '', window.location.href)
+    lightboxHistoryActive = true
+  }
   lightbox.value = { open: true, media: post.media || [], index, author: post.author, scale: 1, rotation: 0, fit: true, x: 0, y: 0, dragging: false, motion: 'enter' }
   lightboxScalePercent.value = 100
   lightboxAtOriginalSize.value = false
@@ -868,7 +873,7 @@ function openLightbox(post, index) {
   showLightboxDock(true)
   scheduleLightboxScaleUpdate()
 }
-function closeLightbox() {
+function resetLightboxState() {
   lightbox.value = { open: false, media: [], index: 0, author: '', scale: 1, rotation: 0, fit: true, x: 0, y: 0, dragging: false, motion: 'enter' }
   lightboxPointers.clear()
   lightboxGesture = null
@@ -880,6 +885,14 @@ function closeLightbox() {
   clearLightboxDockTimer()
   if (lightboxScaleFrame) window.cancelAnimationFrame(lightboxScaleFrame)
   lightboxScaleFrame = 0
+}
+function closeLightbox(fromHistory = false) {
+  if (!fromHistory && lightboxHistoryActive) {
+    window.history.back()
+    return
+  }
+  lightboxHistoryActive = false
+  resetLightboxState()
 }
 function moveLightbox(step) {
   const total = lightbox.value.media.length
@@ -1066,11 +1079,14 @@ function moveLightboxGesture(event) {
 function toggleLightboxDoubleTap() {
   if (phonePortrait.value) {
     const atDefaultFit = lightbox.value.fit && Math.abs(lightbox.value.scale - 1) < 0.02 && Math.abs(lightbox.value.x) < 2 && Math.abs(lightbox.value.y) < 2
-    lightbox.value.fit = !atDefaultFit
+    lightbox.value.fit = true
+    lightbox.value.scale = atDefaultFit
+      ? Math.min(lightboxMaximumScale(), Math.max(1, Number((1 / lightboxBaseScale()).toFixed(3))))
+      : 1
   } else {
     lightbox.value.fit = !lightbox.value.fit || Math.abs(lightbox.value.scale - 1) > 0.02 || Math.abs(lightbox.value.x) > 2 || Math.abs(lightbox.value.y) > 2
+    lightbox.value.scale = 1
   }
-  lightbox.value.scale = 1
   lightbox.value.x = 0
   lightbox.value.y = 0
   scheduleLightboxScaleUpdate()
@@ -1681,6 +1697,13 @@ function updateRoute(path, replace = false) {
   if (window.location.pathname === path) return
   window.history[replace ? 'replaceState' : 'pushState']({}, '', path)
 }
+function handlePopState() {
+  if (lightboxHistoryActive) {
+    closeLightbox(true)
+    return
+  }
+  applyRoute()
+}
 function applyRoute() {
   const segments = window.location.pathname.split('/').filter(Boolean).map(segment => decodeURIComponent(segment))
   showSettings.value = false
@@ -1771,8 +1794,8 @@ watch(platformCards, cards => {
   if (!selectedPlatform.value) return
   selectedPlatform.value = cards.find(platform => platform.key === selectedPlatform.value.key) || null
 })
-onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; timelineView.value = localStorage.getItem('lumic-timeline-view') === 'masonry' ? 'masonry' : 'list'; document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#080a0e' : '#fbf7ea'); phonePortraitQuery = window.matchMedia('(max-width: 760px)'); phonePortrait.value = isPhonePortraitScreen(); phonePortraitQuery.addEventListener('change', updatePhonePortrait); window.addEventListener('orientationchange', updatePhonePortrait); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); if (phonePortrait.value && window.location.pathname === '/') openPhoneDefaultTimeline(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', applyRoute); window.addEventListener('scroll', scheduleTimelineWindow, { passive: true }); window.addEventListener('resize', handleWindowResize) })
-onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLoop(); if (sessionPollTimer) window.clearInterval(sessionPollTimer); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); window.removeEventListener('orientationchange', updatePhonePortrait); postResizeObserver?.disconnect(); observedPostElements.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); closeLightbox(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', applyRoute); window.removeEventListener('scroll', scheduleTimelineWindow); window.removeEventListener('resize', handleWindowResize); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
+onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; timelineView.value = localStorage.getItem('lumic-timeline-view') === 'masonry' ? 'masonry' : 'list'; document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#080a0e' : '#fbf7ea'); phonePortraitQuery = window.matchMedia('(max-width: 760px)'); phonePortrait.value = isPhonePortraitScreen(); phonePortraitQuery.addEventListener('change', updatePhonePortrait); window.addEventListener('orientationchange', updatePhonePortrait); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); if (phonePortrait.value && window.location.pathname === '/') openPhoneDefaultTimeline(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', handlePopState); window.addEventListener('scroll', scheduleTimelineWindow, { passive: true }); window.addEventListener('resize', handleWindowResize) })
+onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLoop(); if (sessionPollTimer) window.clearInterval(sessionPollTimer); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); window.removeEventListener('orientationchange', updatePhonePortrait); postResizeObserver?.disconnect(); observedPostElements.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); lightboxHistoryActive = false; resetLightboxState(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', handlePopState); window.removeEventListener('scroll', scheduleTimelineWindow); window.removeEventListener('resize', handleWindowResize); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
 </script>
 
 <template>
