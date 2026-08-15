@@ -793,7 +793,6 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
 .dark .selection-cancel-button:hover, .dark .selection-select-all-button:hover { background: #24272f; }
 
 /* Mobile portrait shell and night-safe Twitter artwork */
-.mobile-logout-button { display: none; }
 .dark .twitter-night-icon {
   opacity: .96;
   filter: brightness(0) saturate(100%) invert(82%) sepia(9%) saturate(409%) hue-rotate(184deg) brightness(96%) contrast(94%) drop-shadow(0 0 5px #91a8e26e);
@@ -920,19 +919,6 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
     padding-top: 7px;
   }
   .phone-ui .sidebar-bottom .sidebar-theme-button { width: 44px; height: 44px; min-height: 44px; }
-  .phone-ui .mobile-logout-button { display: grid; color: #b57670; }
-  .phone-ui .mobile-logout-button > span { display: none; }
-  .phone-ui .mobile-logout-button svg {
-    width: 22px;
-    height: 22px;
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1.7;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-  }
-  .phone-ui.dark .mobile-logout-button { color: #d8aaa5; }
-
   .phone-ui .content,
   .phone-ui .content.pulls-page,
   .phone-ui .settings-page {
