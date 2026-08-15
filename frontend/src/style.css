@@ -168,7 +168,7 @@ button { border: 0; font: inherit; cursor: pointer; color: inherit; }
 .timeline-search input::placeholder { color: #a0aca5; }
 .filters .timeline-sort-button { display: grid; place-items: center; width: 34px; height: 34px; flex: none; padding: 0; color: #718279; background: var(--card); border: 1px solid var(--line); border-radius: 7px; }
 .filters .timeline-sort-button:hover { color: #426e56; border-color: #b8cbbd; background: #e8f2e9; }
-.filters .timeline-sort-button svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+.filters .timeline-sort-symbol { width: 19px; height: 19px; }
 .dark .filters .timeline-sort-button:hover { color: #b9d8c4; background: #30433b; }
 .content:has(.timeline-hero) { padding-top: 28px; }
 .liked-page { padding-top: 28px; }
@@ -622,7 +622,7 @@ body, button, input, textarea, select { font-size: 14px; }
 }
 
 /* Reference line icons, account menu, and compact source controls */
-.nav-mask-symbol, .theme-mask-symbol {
+.nav-mask-symbol, .theme-mask-symbol, .timeline-sort-symbol {
   display: inline-block;
   flex: none;
   background-color: currentColor;
@@ -676,7 +676,7 @@ body, button, input, textarea, select { font-size: 14px; }
 .dark .night-star.star-four { top: 72px; right: 67%; width: 10px; height: 10px; color: #dac47c; }
 .dark .timeline-hero-copy { position: relative; z-index: 1; }
 
-@media (max-width: 760px) and (orientation: portrait) {
+@media (max-width: 760px) {
   .nav-mask-symbol { width: 23px!important; height: 23px; }
   .theme-mask-symbol { width: 22px!important; height: 22px; }
   .dark .night-sky-decor { top: -12px; right: 42px; width: calc(100vw - 72px); height: 88px; opacity: .72; }
@@ -798,7 +798,7 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
   filter: brightness(0) saturate(100%) invert(82%) sepia(9%) saturate(409%) hue-rotate(184deg) brightness(96%) contrast(94%) drop-shadow(0 0 5px #91a8e26e);
 }
 
-@media (max-width: 760px) and (orientation: portrait) {
+@media (max-width: 760px) {
   html, body, #app {
     width: 100%;
     min-width: 0;
@@ -808,15 +808,29 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
   body { overscroll-behavior-x: none; }
 
   .phone-ui-login {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    width: 100%;
+    height: 100dvh;
     min-height: 100dvh;
+    align-items: center;
+    justify-content: center;
+    overflow-x: hidden;
+    overflow-y: auto;
     padding: max(22px, env(safe-area-inset-top)) 18px max(22px, env(safe-area-inset-bottom));
+    overscroll-behavior: none;
+    touch-action: pan-y;
     background:
       radial-gradient(circle at 14% 9%, #f4e9b977 0, transparent 34%),
       radial-gradient(circle at 88% 86%, #d9d8ef66 0, transparent 36%),
       #faf7ed;
   }
   .phone-ui-login .login-panel {
-    width: min(100%, 390px);
+    width: min(calc(100vw - 36px), 390px);
+    max-width: 100%;
+    flex: none;
+    margin: auto;
     padding: 34px 24px 30px;
     border-radius: 14px;
     box-shadow: 0 20px 55px #5f52351c;
@@ -958,13 +972,17 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
   .phone-ui .stat-card > small { display: none; }
 
   .phone-ui .section-heading {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
     align-items: center;
     gap: 8px;
     margin: 16px 0 12px;
   }
-  .phone-ui .filters { flex: none; max-width: 100%; padding-bottom: 0; }
+  .phone-ui .filters { flex: none; max-width: 100%; overflow: visible; padding-bottom: 0; }
   .phone-ui .filters button { min-height: 38px; padding: 8px 10px; }
-  .phone-ui .timeline-tools { width: 100%; }
+  .phone-ui .filters .timeline-sort-button { width: 38px; padding: 0; }
+  .phone-ui .filters .timeline-sort-symbol { width: 20px; height: 20px; }
+  .phone-ui .timeline-tools { width: auto; min-width: 0; margin-left: 0; }
   .phone-ui .timeline-search { width: 100%; height: 40px; }
   .phone-ui .timeline-search input { font-size: 13px; }
   .phone-ui .feed-list { gap: 11px; }

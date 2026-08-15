@@ -15,6 +15,8 @@ import subscriptionsNavIcon from '../icon/订阅平台.png'
 import settingsNavIcon from '../icon/设置.png'
 import dayThemeIcon from '../icon/日间模式.png'
 import nightThemeIcon from '../icon/夜间模式.png'
+import newestSortIcon from '../icon/时间排序－倒序.png'
+import oldestSortIcon from '../icon/时间排序－正序.png'
 
 const authenticated = ref(false)
 const sessionChecked = ref(false)
@@ -991,10 +993,15 @@ function resetTimelineWindow() {
   timelineEnd.value = Math.min(filteredPosts.value.length, phonePortrait.value ? 7 : 15)
   nextTick(scheduleTimelineWindow)
 }
-function updatePhonePortrait(event) {
-  phonePortrait.value = event.matches
+function isPhonePortraitScreen() {
+  return window.matchMedia('(max-width: 760px)').matches && window.innerHeight >= window.innerWidth
+}
+function updatePhonePortrait() {
+  const nextPhonePortrait = isPhonePortraitScreen()
+  if (phonePortrait.value === nextPhonePortrait) return
+  phonePortrait.value = nextPhonePortrait
   mobileMenuOpen.value = false
-  if (event.matches) openPhoneDefaultTimeline()
+  if (nextPhonePortrait) openPhoneDefaultTimeline()
   resetTimelineWindow()
 }
 function openPhoneDefaultTimeline() {
@@ -1090,8 +1097,8 @@ watch(platformCards, cards => {
   if (!credentialPlatform.value) return
   credentialPlatform.value = cards.find(platform => platform.key === credentialPlatform.value.key) || null
 })
-onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#080a0e' : '#fbf7ea'); phonePortraitQuery = window.matchMedia('(max-width: 760px) and (orientation: portrait)'); phonePortrait.value = phonePortraitQuery.matches; phonePortraitQuery.addEventListener('change', updatePhonePortrait); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); if (phonePortrait.value) openPhoneDefaultTimeline(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', applyRoute); window.addEventListener('scroll', scheduleTimelineWindow, { passive: true }); window.addEventListener('resize', scheduleTimelineWindow) })
-onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); if (sessionPollTimer) window.clearInterval(sessionPollTimer); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); postResizeObserver?.disconnect(); observedPostElements.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); closeLightbox(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', applyRoute); window.removeEventListener('scroll', scheduleTimelineWindow); window.removeEventListener('resize', scheduleTimelineWindow); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
+onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#080a0e' : '#fbf7ea'); phonePortraitQuery = window.matchMedia('(max-width: 760px)'); phonePortrait.value = isPhonePortraitScreen(); phonePortraitQuery.addEventListener('change', updatePhonePortrait); window.addEventListener('orientationchange', updatePhonePortrait); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); if (phonePortrait.value) openPhoneDefaultTimeline(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', applyRoute); window.addEventListener('scroll', scheduleTimelineWindow, { passive: true }); window.addEventListener('resize', scheduleTimelineWindow) })
+onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); if (sessionPollTimer) window.clearInterval(sessionPollTimer); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); window.removeEventListener('orientationchange', updatePhonePortrait); postResizeObserver?.disconnect(); observedPostElements.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); closeLightbox(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', applyRoute); window.removeEventListener('scroll', scheduleTimelineWindow); window.removeEventListener('resize', scheduleTimelineWindow); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
 </script>
 
 <template>
@@ -1202,9 +1209,8 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); if (sessionPollTi
       <div class="section-heading">
 <div class="filters">
 <button v-if="!authorProfile" :class="{ selected: activeSource === 'all' }" @click="activeSource = 'all'"><span>✦</span>全部</button>
-<button class="timeline-sort-button" type="button" :title="timelineSort === 'newest' ? '当前最新优先，点击切换为最早优先' : '当前最早优先，点击切换为最新优先'" :aria-label="timelineSort === 'newest' ? '最新优先，切换为最早优先' : '最早优先，切换为最新优先'" @click="timelineSort = timelineSort === 'newest' ? 'oldest' : 'newest'">
-  <svg v-if="timelineSort === 'newest'" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h7M5 10h5M5 14h3"/><path d="M17 5v14M13.5 15.5 17 19l3.5-3.5"/></svg>
-  <svg v-else viewBox="0 0 24 24" aria-hidden="true"><path d="M5 18h7M5 14h5M5 10h3"/><path d="M17 19V5M13.5 8.5 17 5l3.5 3.5"/></svg>
+<button class="timeline-sort-button" type="button" :title="timelineSort === 'newest' ? '最新' : '最旧'" :aria-label="timelineSort === 'newest' ? '当前按最新排序，点击切换为最旧' : '当前按最旧排序，点击切换为最新'" @click="timelineSort = timelineSort === 'newest' ? 'oldest' : 'newest'">
+  <span class="timeline-sort-symbol" :style="{ '--nav-mask': `url(${timelineSort === 'newest' ? newestSortIcon : oldestSortIcon})` }" aria-hidden="true"></span>
 </button>
 </div>
 <div class="timeline-tools">
