@@ -1025,6 +1025,33 @@ func TestWeiboAccountHandlerReturnsValidatedAvatar(t *testing.T) {
 	}
 }
 
+func TestCollectionFeedsUseConnectedAccountAvatars(t *testing.T) {
+	config := BilibiliConfig{
+		Credentials: BilibiliCredentials{DedeUserID: "11", Avatar: "//i.example.com/bili.jpg"},
+		Weibo:       WeiboCredentials{UserID: "22", UserName: "微博账号", Avatar: "https://i.example.com/weibo.jpg"},
+		Pixiv:       PixivCredentials{UserID: "33", Avatar: "https://i.example.com/pixiv.jpg"},
+	}
+	feeds := []SourceConfig{
+		{ID: bilibiliFavoriteOpusPrefix + "11", Source: SourceBilibili, Name: bilibiliFavoriteOpusName},
+		{ID: "weibo-likes-22", Source: SourceWeibo, Name: weiboLikesName},
+		{ID: "pixiv-bookmarks-33", Source: SourcePixiv, Name: pixivBookmarksName},
+		{ID: "weibo-44", Source: SourceWeibo, Name: "普通订阅", Avatar: "https://i.example.com/author.jpg"},
+	}
+	applyCollectionAccountProfiles(feeds, config)
+	if feeds[0].Avatar != "https://i.example.com/bili.jpg" {
+		t.Fatalf("Bilibili collection avatar was not hydrated: %#v", feeds[0])
+	}
+	if feeds[1].Avatar != config.Weibo.Avatar || feeds[1].Handle != config.Weibo.UserName {
+		t.Fatalf("Weibo likes account profile was not hydrated: %#v", feeds[1])
+	}
+	if feeds[2].Avatar != config.Pixiv.Avatar {
+		t.Fatalf("Pixiv bookmarks avatar was not hydrated: %#v", feeds[2])
+	}
+	if feeds[3].Avatar != "https://i.example.com/author.jpg" {
+		t.Fatalf("regular source avatar changed unexpectedly: %#v", feeds[3])
+	}
+}
+
 func TestWeiboAccountHandlerRefreshesMissingProfile(t *testing.T) {
 	tempDir := t.TempDir()
 	oldFile, oldFetcher := bilibiliFile, fetchWeiboAccountProfile

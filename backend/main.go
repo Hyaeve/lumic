@@ -451,6 +451,38 @@ type WeiboUser struct {
 	Description string `json:"description"`
 }
 
+func collectionFeedWithAccountProfile(feed SourceConfig, config BilibiliConfig) SourceConfig {
+	avatar := ""
+	matched := false
+	switch {
+	case strings.TrimSpace(config.Credentials.DedeUserID) != "" && feed.ID == bilibiliFavoriteOpusPrefix+strings.TrimSpace(config.Credentials.DedeUserID):
+		avatar = config.Credentials.Avatar
+		matched = true
+	case strings.TrimSpace(config.Weibo.UserID) != "" && feed.ID == "weibo-likes-"+strings.TrimSpace(config.Weibo.UserID):
+		avatar = config.Weibo.Avatar
+		matched = true
+		if strings.TrimSpace(feed.Handle) == "" {
+			feed.Handle = config.Weibo.UserName
+		}
+	case strings.TrimSpace(config.Pixiv.UserID) != "" && feed.ID == "pixiv-bookmarks-"+strings.TrimSpace(config.Pixiv.UserID):
+		avatar = config.Pixiv.Avatar
+		matched = true
+	}
+	if strings.TrimSpace(feed.Avatar) == "" && strings.TrimSpace(avatar) != "" {
+		feed.Avatar = avatar
+	}
+	if matched {
+		feed.Avatar = normalizeRemoteImage(feed.Avatar)
+	}
+	return feed
+}
+
+func applyCollectionAccountProfiles(feeds []SourceConfig, config BilibiliConfig) {
+	for index := range feeds {
+		feeds[index] = collectionFeedWithAccountProfile(feeds[index], config)
+	}
+}
+
 func (b *BilibiliStore) allSourceConfigs() []SourceConfig {
 	b.RLock()
 	defer b.RUnlock()
@@ -458,6 +490,7 @@ func (b *BilibiliStore) allSourceConfigs() []SourceConfig {
 	feeds = append(feeds, b.config.Subscriptions...)
 	feeds = append(feeds, b.config.WeiboSubscriptions...)
 	feeds = append(feeds, b.config.PixivSubscriptions...)
+	applyCollectionAccountProfiles(feeds, b.config)
 	return feeds
 }
 
@@ -2501,6 +2534,7 @@ func (b *BilibiliStore) accountHandler(w http.ResponseWriter, r *http.Request) {
 		credentials, proxyURL := b.config.Credentials, b.config.ProxyURL
 		b.RUnlock()
 		account := BilibiliAccount{Configured: credentials.SESSDATA != "", UserID: credentials.DedeUserID, UserName: credentials.UserName, Avatar: credentials.Avatar}
+		account.Avatar = normalizeRemoteImage(account.Avatar)
 		if account.Configured && (account.UserName == "" || account.Avatar == "") {
 			enriched := bilibiliAccountProfile(credentials, proxyURL)
 			if enriched.UserName != "" || enriched.Avatar != "" {
@@ -2600,6 +2634,7 @@ func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Requ
 	if r.Method == http.MethodGet {
 		b.RLock()
 		result := append([]SourceConfig{}, b.config.Subscriptions...)
+		applyCollectionAccountProfiles(result, b.config)
 		b.RUnlock()
 		writeJSON(w, result)
 		return
@@ -4590,6 +4625,9 @@ func (s *Store) postsForHistoryBackfill(posts []Post, feed SourceConfig) ([]Post
 
 func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, error) {
 	originalID := feed.ID
+	b.RLock()
+	feed = collectionFeedWithAccountProfile(feed, b.config)
+	b.RUnlock()
 	if feed.Source == SourceBilibili && !isBilibiliFavoriteOpusFeed(feed) {
 		userID := strings.TrimPrefix(feed.ID, "bili-")
 		if _, err := strconv.ParseUint(userID, 10, 64); err != nil || len(userID) > 15 || strings.TrimSpace(feed.Avatar) == "" {
@@ -4828,9 +4866,9 @@ func pixivBrowserCredentialsRequest(credentials PixivCredentials, proxyURL, base
 		return PixivCredentials{}, errors.New("Pixiv 用户 ID 与浏览器登录账号不一致")
 	}
 	credentials.UserName = strings.TrimSpace(jsonValueString(body["name"]))
-	credentials.Avatar = strings.TrimSpace(jsonValueString(body["imageBig"]))
+	credentials.Avatar = normalizeRemoteImage(jsonValueString(body["imageBig"]))
 	if credentials.Avatar == "" {
-		credentials.Avatar = strings.TrimSpace(jsonValueString(body["image"]))
+		credentials.Avatar = normalizeRemoteImage(jsonValueString(body["image"]))
 	}
 	credentials.RefreshToken, credentials.ClientID, credentials.ClientSecret = "", "", ""
 	return credentials, nil
@@ -4841,6 +4879,7 @@ func (b *BilibiliStore) pixivHandler(w http.ResponseWriter, r *http.Request) {
 	proxyURL, current := b.config.ProxyURL, b.config.Pixiv
 	b.RUnlock()
 	if r.Method == http.MethodGet {
+		current.Avatar = normalizeRemoteImage(current.Avatar)
 		if current.Cookie != "" && current.UserID != "" && (current.UserName == "" || current.Avatar == "") {
 			if enriched, err := pixivBrowserCredentialsRequest(current, proxyURL, "https://www.pixiv.net"); err == nil {
 				current = enriched
@@ -5084,6 +5123,7 @@ func (b *BilibiliStore) pixivSubscriptionsHandler(w http.ResponseWriter, r *http
 	if r.Method == http.MethodGet {
 		b.RLock()
 		result := append([]SourceConfig{}, b.config.PixivSubscriptions...)
+		applyCollectionAccountProfiles(result, b.config)
 		b.RUnlock()
 		writeJSON(w, result)
 		return
@@ -5911,6 +5951,7 @@ func (b *BilibiliStore) weiboSubscriptionsHandler(w http.ResponseWriter, r *http
 	if r.Method == http.MethodGet {
 		b.RLock()
 		result := append([]SourceConfig{}, b.config.WeiboSubscriptions...)
+		applyCollectionAccountProfiles(result, b.config)
 		b.RUnlock()
 		writeJSON(w, result)
 		return
@@ -6188,6 +6229,7 @@ func (b *BilibiliStore) weiboAccountHandler(w http.ResponseWriter, r *http.Reque
 	current, proxyURL := b.config.Weibo, b.config.ProxyURL
 	b.RUnlock()
 	if r.Method == http.MethodGet {
+		current.Avatar = normalizeRemoteImage(current.Avatar)
 		if current.Cookie != "" && current.UserID != "" && (strings.TrimSpace(current.UserName) == "" || strings.TrimSpace(current.Avatar) == "") {
 			if user, err := fetchWeiboAccountProfile(current.UserID, current, proxyURL); err == nil {
 				if strings.TrimSpace(user.Name) != "" {

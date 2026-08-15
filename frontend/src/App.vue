@@ -115,6 +115,7 @@ const masonryViewportTop = ref(0)
 const masonryViewportBottom = ref(900)
 const masonryDetailPost = ref(null)
 const mobileDetailIndex = ref(0)
+const mobileDetailMotion = ref('enter')
 const mobilePostReturnPath = ref('/')
 const pendingPostId = ref('')
 const feedListElement = ref(null)
@@ -144,6 +145,7 @@ let meteorBurstTimer = 0
 let meteorCleanupTimer = 0
 let meteorBurstSequence = 0
 let mobileDetailTouch = null
+let mobileDetailSwipeClickBlocked = false
 
 const sourceMeta = {
   bilibili: { label: '哔哩哔哩', icon: 'bl', image: bilibiliIcon, lineImage: bilibiliLineIcon, color: 'blue' },
@@ -253,6 +255,30 @@ const platformCards = computed(() => [
 const hasWeiboLikesSource = computed(() => feeds.value.some(feed => feed.id?.startsWith('weibo-likes-')))
 const hasPixivBookmarksSource = computed(() => feeds.value.some(feed => feed.id?.startsWith('pixiv-bookmarks-')))
 const hasBilibiliFavoriteOpusSource = computed(() => feeds.value.some(feed => feed.id?.startsWith('bili-opus-favorites-')))
+function isAccountCollectionFeed(feed) {
+  return feed?.id?.startsWith('weibo-likes-') || feed?.id?.startsWith('pixiv-bookmarks-') || feed?.id?.startsWith('bili-opus-favorites-')
+}
+function configuredSourceAvatarCandidates(feed, platform) {
+  const candidates = []
+  if (isAccountCollectionFeed(feed)) {
+    if (feed?.avatar?.startsWith('/flow/')) candidates.push(feed.avatar, platform?.avatar)
+    else candidates.push(platform?.avatar, feed?.avatar)
+  } else {
+    candidates.push(feed?.avatar)
+  }
+  candidates.push(platform?.image)
+  return [...new Set(candidates.filter(Boolean))]
+}
+function configuredSourceAvatar(feed, platform) {
+  return configuredSourceAvatarCandidates(feed, platform)[0] || ''
+}
+function handleConfiguredSourceAvatarError(event, feed, platform) {
+  const image = event.currentTarget
+  const candidates = configuredSourceAvatarCandidates(feed, platform)
+  const nextIndex = Number(image.dataset.fallbackIndex || 0) + 1
+  image.dataset.fallbackIndex = String(nextIndex)
+  if (candidates[nextIndex]) image.src = candidates[nextIndex]
+}
 const localGreeting = computed(() => {
   const hour = new Date().getHours()
   if (hour < 6) return '夜深了'
@@ -373,8 +399,8 @@ function triggerNightMeteorBurst() {
     style: (() => {
       const top = -90 + Math.random() * 72
       const travelY = viewportHeight + 180 + Math.random() * 120
-      const travelX = travelY * (0.55 + Math.random() * 0.3)
-      const angle = -(Math.atan2(travelY, travelX) * 180 / Math.PI)
+      const angle = 37 + Math.random() * 3
+      const travelX = travelY / Math.tan(angle * Math.PI / 180)
       const delay = (count >= 3 ? index * 0.62 : index * 0.32) + Math.random() * 0.34
       const duration = 2.8 + Math.random() * 1.5
       maximumDuration = Math.max(maximumDuration, duration + delay)
@@ -385,7 +411,7 @@ function triggerNightMeteorBurst() {
         '--meteor-top': `${top}px`,
         '--meteor-right': `${Math.max(-5, Math.min(84, right))}%`,
         '--meteor-width': `${24 + Math.random() * 22}px`,
-        '--meteor-angle': `${angle.toFixed(2)}deg`,
+        '--meteor-angle': `${(-angle).toFixed(2)}deg`,
         '--meteor-delay': `${delay}s`,
         '--meteor-duration': `${duration}s`,
         '--meteor-x': `${-travelX}px`,
@@ -1028,9 +1054,6 @@ function stopLightboxGesture(event) {
   lightboxPointers.delete(event.pointerId)
   if (isSwipe && lightbox.value.media.length > 1) {
     moveLightbox(dx < 0 ? 1 : -1)
-  } else if (isTap && !gesture.startedOnImage) {
-    closeLightbox()
-    return
   } else if (isTap) {
     const sinceLastTap = event.timeStamp - lightboxLastTap.time
     const nearLastTap = Math.hypot(event.clientX - lightboxLastTap.x, event.clientY - lightboxLastTap.y) < 34
@@ -1309,6 +1332,7 @@ function openMasonryPost(post) {
   if (selectionMode.value) return
   masonryDetailPost.value = post
   mobileDetailIndex.value = 0
+  mobileDetailMotion.value = 'enter'
   if (phonePortrait.value) {
     mobilePostReturnPath.value = window.location.pathname.startsWith('/post/') ? '/' : window.location.pathname
     updateRoute(`/post/${encodeURIComponent(post.id)}`)
@@ -1318,6 +1342,7 @@ function openMasonryPost(post) {
 function closePostDetail() {
   masonryDetailPost.value = null
   mobileDetailIndex.value = 0
+  mobileDetailMotion.value = 'enter'
   pendingPostId.value = ''
   if (window.location.pathname.startsWith('/post/')) {
     updateRoute(mobilePostReturnPath.value || '/', true)
@@ -1326,11 +1351,24 @@ function closePostDetail() {
 function moveMobileDetailMedia(direction) {
   const count = mobileDetailMedia.value.length
   if (count < 2) return
+  mobileDetailMotion.value = direction > 0 ? 'next' : 'previous'
   mobileDetailIndex.value = (mobileDetailIndex.value + direction + count) % count
+}
+function selectMobileDetailMedia(index) {
+  if (index === mobileDetailIndex.value) return
+  moveMobileDetailMedia(index > mobileDetailIndex.value ? index - mobileDetailIndex.value : index - mobileDetailIndex.value)
+}
+function openMobileDetailImage() {
+  if (mobileDetailSwipeClickBlocked || mobileDetailCurrentMedia.value?.type !== 'image') {
+    mobileDetailSwipeClickBlocked = false
+    return
+  }
+  openLightbox(masonryDetailPost.value, mobileDetailIndex.value)
 }
 function beginMobileDetailSwipe(event) {
   const touch = event.changedTouches?.[0]
   if (!touch) return
+  mobileDetailSwipeClickBlocked = false
   mobileDetailTouch = { x: touch.clientX, y: touch.clientY }
 }
 function finishMobileDetailSwipe(event) {
@@ -1340,6 +1378,8 @@ function finishMobileDetailSwipe(event) {
   const deltaY = touch.clientY - mobileDetailTouch.y
   mobileDetailTouch = null
   if (Math.abs(deltaX) < 48 || Math.abs(deltaX) <= Math.abs(deltaY) * 1.15) return
+  mobileDetailSwipeClickBlocked = true
+  scheduleTransient(() => { mobileDetailSwipeClickBlocked = false }, 450)
   moveMobileDetailMedia(deltaX < 0 ? 1 : -1)
 }
 function masonryItemStyle(item) {
@@ -1619,6 +1659,10 @@ watch(platformCards, cards => {
   if (!credentialPlatform.value) return
   credentialPlatform.value = cards.find(platform => platform.key === credentialPlatform.value.key) || null
 })
+watch(platformCards, cards => {
+  if (!selectedPlatform.value) return
+  selectedPlatform.value = cards.find(platform => platform.key === selectedPlatform.value.key) || null
+})
 onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; timelineView.value = localStorage.getItem('lumic-timeline-view') === 'masonry' ? 'masonry' : 'list'; document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#080a0e' : '#fbf7ea'); phonePortraitQuery = window.matchMedia('(max-width: 760px)'); phonePortrait.value = isPhonePortraitScreen(); phonePortraitQuery.addEventListener('change', updatePhonePortrait); window.addEventListener('orientationchange', updatePhonePortrait); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); if (phonePortrait.value && window.location.pathname === '/') openPhoneDefaultTimeline(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', applyRoute); window.addEventListener('scroll', scheduleTimelineWindow, { passive: true }); window.addEventListener('resize', handleWindowResize) })
 onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLoop(); if (sessionPollTimer) window.clearInterval(sessionPollTimer); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); window.removeEventListener('orientationchange', updatePhonePortrait); postResizeObserver?.disconnect(); observedPostElements.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); closeLightbox(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', applyRoute); window.removeEventListener('scroll', scheduleTimelineWindow); window.removeEventListener('resize', handleWindowResize); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
 </script>
@@ -1744,7 +1788,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
   <span class="timeline-sort-symbol" :style="{ '--nav-mask': `url(${timelineSort === 'newest' ? newestSortIcon : oldestSortIcon})` }" aria-hidden="true"></span>
 </button>
 <button class="timeline-view-button" type="button" :title="isMasonryView ? '当前：瀑布流；点击切换为列表' : '当前：列表；点击切换为瀑布流'" :aria-label="isMasonryView ? '当前为瀑布流视图，点击切换为列表' : '当前为列表视图，点击切换为瀑布流'" @click="toggleTimelineView">
-  <span class="timeline-view-symbol" :style="{ '--nav-mask': `url(${isMasonryView ? masonryViewIcon : listViewIcon})` }" aria-hidden="true"></span>
+  <span :class="['timeline-view-symbol', { 'list-view-symbol': !isMasonryView }]" :style="{ '--nav-mask': `url(${isMasonryView ? masonryViewIcon : listViewIcon})` }" aria-hidden="true"></span>
 </button>
 </div>
 <div class="timeline-tools">
@@ -1839,9 +1883,9 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
         <span :class="['source-pill', 'mobile-post-source', sourceMeta[masonryDetailPost.source].color]"><img :class="['source-icon', { 'twitter-night-icon': masonryDetailPost.source === 'twitter' && isDark }]" :src="sourceIconFor(masonryDetailPost.source)" :alt="`${sourceMeta[masonryDetailPost.source].label}图标`">{{ sourceMeta[masonryDetailPost.source].label }}</span>
       </header>
       <section v-if="mobileDetailCurrentMedia" :class="['mobile-post-media-stage', { 'video-media': mobileDetailCurrentMedia.type === 'video' }, mobileDetailCurrentMedia.type === 'video' ? postVideoFrameClass(masonryDetailPost) : '']" :style="mobileDetailCurrentMedia.type === 'video' ? postVideoFrameStyle(masonryDetailPost) : undefined" @touchstart.passive="beginMobileDetailSwipe" @touchend.passive="finishMobileDetailSwipe">
-        <img v-if="mobileDetailCurrentMedia.type === 'image'" :key="mobileDetailCurrentMedia.key" :src="mobileDetailCurrentMedia.src" :alt="`${masonryDetailPost.author} 的第 ${mobileDetailIndex + 1} 张图片`">
-        <video v-else :key="mobileDetailCurrentMedia.key" :src="mobileDetailCurrentMedia.src" :poster="mobileDetailCurrentMedia.poster || undefined" controls playsinline autoplay muted preload="auto" @loadedmetadata="setPostVideoRatio(masonryDetailPost, $event)"></video>
-        <div v-if="mobileDetailMedia.length > 1" class="mobile-post-media-dots" aria-label="媒体分页"><button v-for="(media, index) in mobileDetailMedia" :key="media.key" type="button" :class="{ active: index === mobileDetailIndex }" :aria-label="`查看第 ${index + 1} 项媒体`" @click="mobileDetailIndex = index"></button></div>
+        <img v-if="mobileDetailCurrentMedia.type === 'image'" :key="`${mobileDetailCurrentMedia.key}:${mobileDetailMotion}`" :class="`mobile-detail-motion-${mobileDetailMotion}`" :src="mobileDetailCurrentMedia.src" :alt="`${masonryDetailPost.author} 的第 ${mobileDetailIndex + 1} 张图片`" @click="openMobileDetailImage">
+        <video v-else :key="`${mobileDetailCurrentMedia.key}:${mobileDetailMotion}`" :class="`mobile-detail-motion-${mobileDetailMotion}`" :src="mobileDetailCurrentMedia.src" :poster="mobileDetailCurrentMedia.poster || undefined" controls playsinline autoplay muted preload="auto" @loadedmetadata="setPostVideoRatio(masonryDetailPost, $event)"></video>
+        <div v-if="mobileDetailMedia.length > 1" class="mobile-post-media-dots" aria-label="媒体分页"><button v-for="(media, index) in mobileDetailMedia" :key="media.key" type="button" :class="{ active: index === mobileDetailIndex }" :aria-label="`查看第 ${index + 1} 项媒体`" @click="selectMobileDetailMedia(index)"></button></div>
       </section>
       <section class="mobile-post-copy">
         <p v-if="masonryDetailPost.caption" class="caption">{{ masonryDetailPost.caption }}</p>
@@ -1857,7 +1901,6 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
     </main>
     <div v-if="masonryDetailPost && !phonePortrait" class="modal-backdrop masonry-detail-backdrop" @click.self="closePostDetail">
       <article class="masonry-detail-modal" role="dialog" aria-modal="true" :aria-label="`${masonryDetailPost.author} 的动态详情`">
-        <button class="modal-close" type="button" title="关闭详情" aria-label="关闭详情" @click="closePostDetail">×</button>
         <div class="post-head">
           <button class="post-author-avatar" type="button" :title="`查看 ${masonryDetailPost.author} 的动态`" @click="openAuthor(masonryDetailPost)"><img :src="masonryDetailPost.avatar" :alt="masonryDetailPost.author"></button>
           <div class="author"><button class="post-author-name" type="button" @click="openAuthor(masonryDetailPost)"><strong>{{ masonryDetailPost.author }}</strong></button><span>{{ postDateTime(masonryDetailPost.published) }}</span></div>
@@ -1886,8 +1929,8 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
     <div v-if="lightbox.open" class="lightbox-layer" role="dialog" aria-modal="true" :aria-label="`${lightbox.author} 的动态媒体`" @click.self="closeLightbox" @wheel.prevent="zoomLightbox">
       <button class="lightbox-close" type="button" title="关闭大图" aria-label="关闭大图" @click="closeLightbox">×</button>
       <figure @click.self="closeLightbox">
-        <div :key="`${lightbox.media[lightbox.index]}:${lightbox.motion}`" :class="['lightbox-image-stage', `motion-${lightbox.motion}`, { 'mobile-original-size': phonePortrait && lightboxAtOriginalSize }]" @click.self="closeLightbox" @contextmenu.prevent @pointerdown.prevent="startLightboxGesture" @pointermove.prevent="moveLightboxGesture" @pointerup.prevent="stopLightboxGesture" @pointercancel.prevent="stopLightboxGesture">
-          <img ref="lightboxImageElement" :src="lightbox.media[lightbox.index]" :alt="`${lightbox.author} 的动态图片 ${lightbox.index + 1}`" :class="{ dragging: lightbox.dragging, 'original-size': !lightbox.fit }" :style="{ transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) rotate(${lightbox.rotation}deg) scale(${lightbox.scale})` }" draggable="false" @load="scheduleLightboxScaleUpdate">
+        <div :key="`${lightbox.media[lightbox.index]}:${lightbox.motion}`" :class="['lightbox-image-stage', `motion-${lightbox.motion}`, { 'mobile-original-size': phonePortrait && lightboxAtOriginalSize }]" @click.self="closeLightbox" @contextmenu.prevent>
+          <img ref="lightboxImageElement" :src="lightbox.media[lightbox.index]" :alt="`${lightbox.author} 的动态图片 ${lightbox.index + 1}`" :class="{ dragging: lightbox.dragging, 'original-size': !lightbox.fit }" :style="{ transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) rotate(${lightbox.rotation}deg) scale(${lightbox.scale})` }" draggable="false" @click.stop @pointerdown.prevent.stop="startLightboxGesture" @pointermove.prevent.stop="moveLightboxGesture" @pointerup.prevent.stop="stopLightboxGesture" @pointercancel.prevent.stop="stopLightboxGesture" @load="scheduleLightboxScaleUpdate">
         </div>
       </figure>
       <div v-if="!phonePortrait" class="lightbox-dock-zone" @pointerenter="showLightboxDock(false)" @pointermove="showLightboxDock(false)" @pointerleave="scheduleLightboxDockHide(650)">
@@ -2050,7 +2093,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
         <div class="configured-source-list">
           <div class="configured-source-heading"><h3>已配置作者</h3><span>{{ selectedPlatform.feeds.length }} 个</span></div>
           <article v-for="feed in selectedPlatform.feeds" :key="feed.id">
-            <img class="configured-source-avatar" :src="feed.avatar || selectedPlatform.image" :alt="`${feed.name}头像`" @error="$event.target.src = selectedPlatform.image">
+            <img :key="`${feed.id}:${configuredSourceAvatar(feed, selectedPlatform)}`" class="configured-source-avatar" :src="configuredSourceAvatar(feed, selectedPlatform)" data-fallback-index="0" :alt="`${feed.name}头像`" @error="handleConfiguredSourceAvatarError($event, feed, selectedPlatform)">
             <div><strong>{{ feed.name }}</strong><span>{{ feed.handle }} · {{ feed.schedule }}</span><div v-if="feed.tags?.length" class="source-tag-preview"><b v-for="tag in feed.tags" :key="tag">#{{ tag }}</b></div><small>{{ feed.storagePath || `${selectedPlatform.path}/${feed.name}` }}</small></div>
             <button :class="['source-enabled-toggle', { disabled: !feed.enabled }]" type="button" :disabled="sourceActionBusy !== ''" :title="feed.enabled ? '自动同步已启用，点击停用' : '自动同步已停用，点击启用'" @click="toggleFeedEnabled(feed)"><i></i>{{ sourceActionBusy === `toggle:${feed.id}` ? '保存中' : feed.enabled ? '同步中' : '已停用' }}</button>
             <div class="source-row-actions">
