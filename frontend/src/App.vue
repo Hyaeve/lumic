@@ -114,9 +114,13 @@ const sourceMeta = {
   bilibili: { label: '哔哩哔哩', icon: 'bl', image: bilibiliIcon, lineImage: bilibiliLineIcon, color: 'blue' },
   weibo: { label: '微博', icon: 'wb', image: weiboIcon, lineImage: weiboLineIcon, color: 'coral' },
   pixiv: { label: 'Pixiv', icon: 'px', image: pixivIcon, lineImage: pixivLineIcon, color: 'violet' },
-  twitter: { label: '推特', icon: 'tw', image: twitterIcon, lineImage: twitterLineIcon, color: 'twitter' }
+  twitter: { label: '推特', icon: 'tw', image: twitterIcon, lineImage: twitterLineIcon, nightImage: twitterLineIcon, color: 'twitter' }
 }
 const validSources = new Set(Object.keys(sourceMeta))
+function sourceIconFor(source) {
+  const meta = sourceMeta[source]
+  return isDark.value && meta?.nightImage ? meta.nightImage : meta?.image
+}
 const statsPosts = computed(() => {
   const allPosts = Array.isArray(posts.value) ? posts.value : []
   return activeSource.value === 'all' ? allPosts : allPosts.filter(post => post.source === activeSource.value)
@@ -163,7 +167,7 @@ const platformCards = computed(() => [
   { key: 'bilibili', label: '哔哩哔哩', short: '哔', ...sourceMeta.bilibili, configured: biliAccount.value.configured, account: biliAccount.value.configured ? (biliAccount.value.userName || `UID ${biliAccount.value.userId}`) : '尚未连接', avatar: biliAccount.value.avatar, path: '/flow/bilibili', description: 'UP 主动态、专栏与账号收藏', feeds: feeds.value.filter(feed => feed.source === 'bilibili') },
   { key: 'weibo', label: '微博', short: '微', ...sourceMeta.weibo, configured: weiboAccount.value.configured, account: weiboAccount.value.configured ? (weiboAccount.value.userName || `UID ${weiboAccount.value.userId}`) : '尚未连接', avatar: weiboAccount.value.avatar, path: '/flow/weibo', description: '博主动态与图文媒体', feeds: feeds.value.filter(feed => feed.source === 'weibo') },
   { key: 'pixiv', label: 'Pixiv', short: 'P', ...sourceMeta.pixiv, configured: pixivAccount.value.configured, account: pixivAccount.value.configured ? (pixivAccount.value.userName || `UID ${pixivAccount.value.userId}`) : '尚未连接', avatar: pixivAccount.value.avatar, path: '/flow/pixiv', description: '画师作品与插画媒体', feeds: feeds.value.filter(feed => feed.source === 'pixiv') },
-  { key: 'twitter', label: '推特', short: '推', ...sourceMeta.twitter, configured: false, account: '暂未开放', avatar: '', path: '/flow/twitter', description: '推文、图片与媒体动态', feeds: feeds.value.filter(feed => feed.source === 'twitter') }
+  { key: 'twitter', label: '推特', short: '推', ...sourceMeta.twitter, image: sourceIconFor('twitter'), configured: false, account: '暂未开放', avatar: '', path: '/flow/twitter', description: '推文、图片与媒体动态', feeds: feeds.value.filter(feed => feed.source === 'twitter') }
 ])
 const hasWeiboLikesSource = computed(() => feeds.value.some(feed => feed.id?.startsWith('weibo-likes-')))
 const hasPixivBookmarksSource = computed(() => feeds.value.some(feed => feed.id?.startsWith('pixiv-bookmarks-')))
@@ -253,6 +257,7 @@ async function loadPlatformAccounts() {
 function setDarkMode(value) {
   isDark.value = Boolean(value)
   localStorage.setItem('lumic-theme', isDark.value ? 'dark' : 'light')
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#080a0e' : '#fbf7ea')
 }
 async function syncNow() {
   syncing.value = true
@@ -878,7 +883,7 @@ function previewMedia(media) {
   const value = String(media || '')
   if (!value.startsWith('/flow/')) return value
   const path = value.split('?', 1)[0]
-  return `/preview/${path.slice('/flow/'.length)}`
+  return `/preview/${path.slice('/flow/'.length)}?v=4`
 }
 function scheduleTransient(callback, delay) {
   const timer = window.setTimeout(() => {
@@ -988,7 +993,8 @@ function resetTimelineWindow() {
 }
 function updatePhonePortrait(event) {
   phonePortrait.value = event.matches
-  if (!event.matches) mobileMenuOpen.value = false
+  mobileMenuOpen.value = false
+  if (event.matches) openPhoneDefaultTimeline()
   resetTimelineWindow()
 }
 function openPhoneDefaultTimeline() {
@@ -1084,7 +1090,7 @@ watch(platformCards, cards => {
   if (!credentialPlatform.value) return
   credentialPlatform.value = cards.find(platform => platform.key === credentialPlatform.value.key) || null
 })
-onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; phonePortraitQuery = window.matchMedia('(max-width: 760px) and (orientation: portrait)'); phonePortrait.value = phonePortraitQuery.matches; phonePortraitQuery.addEventListener('change', updatePhonePortrait); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); if (phonePortrait.value) openPhoneDefaultTimeline(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', applyRoute); window.addEventListener('scroll', scheduleTimelineWindow, { passive: true }); window.addEventListener('resize', scheduleTimelineWindow) })
+onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#080a0e' : '#fbf7ea'); phonePortraitQuery = window.matchMedia('(max-width: 760px) and (orientation: portrait)'); phonePortrait.value = phonePortraitQuery.matches; phonePortraitQuery.addEventListener('change', updatePhonePortrait); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); if (phonePortrait.value) openPhoneDefaultTimeline(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', applyRoute); window.addEventListener('scroll', scheduleTimelineWindow, { passive: true }); window.addEventListener('resize', scheduleTimelineWindow) })
 onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); if (sessionPollTimer) window.clearInterval(sessionPollTimer); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); postResizeObserver?.disconnect(); observedPostElements.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); closeLightbox(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', applyRoute); window.removeEventListener('scroll', scheduleTimelineWindow); window.removeEventListener('resize', scheduleTimelineWindow); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
 </script>
 
@@ -1092,7 +1098,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); if (sessionPollTi
   <div v-if="!sessionChecked" class="session-loading" aria-label="正在恢复登录状态">
     <span></span>
   </div>
-  <div v-else-if="!authenticated" class="login-shell">
+  <div v-else-if="!authenticated" :class="['login-shell', { 'phone-ui-login': phonePortrait }]">
     <div class="login-panel">
       <div class="login-brand">
 <span class="brand-mark">✦</span>
@@ -1110,9 +1116,9 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); if (sessionPollTi
       </form>
     </div>
   </div>
-  <div v-else class="app-shell" :class="{ dark: isDark, 'lightbox-active': lightbox.open }" @click="showBrandMenu = false">
-    <button class="mobile-menu-toggle" type="button" :class="{ open: mobileMenuOpen }" :aria-expanded="mobileMenuOpen" title="打开导航" aria-label="打开导航" @click="mobileMenuOpen = !mobileMenuOpen">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h14"/></svg>
+  <div v-else class="app-shell" :class="{ dark: isDark, 'lightbox-active': lightbox.open, 'phone-ui': phonePortrait }" @click="showBrandMenu = false">
+    <button v-if="phonePortrait" class="mobile-menu-toggle" type="button" :class="{ open: mobileMenuOpen }" :aria-expanded="mobileMenuOpen" :title="mobileMenuOpen ? '关闭导航' : '打开导航'" :aria-label="mobileMenuOpen ? '关闭导航' : '打开导航'" @click="mobileMenuOpen = !mobileMenuOpen">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path class="menu-line menu-line-top" d="M5 7h14"/><path class="menu-line menu-line-middle" d="M5 12h14"/><path class="menu-line menu-line-bottom" d="M5 17h14"/></svg>
     </button>
     <button v-if="mobileMenuOpen" class="mobile-menu-scrim" type="button" aria-label="关闭导航" @click="mobileMenuOpen = false"></button>
     <aside class="sidebar" :class="{ 'mobile-open': mobileMenuOpen }">
@@ -1134,7 +1140,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); if (sessionPollTi
             <button class="source-nav-toggle" type="button" :title="sourcesExpanded ? '收起平台来源' : '展开平台来源'" :aria-expanded="sourcesExpanded" @click="sourcesExpanded = !sourcesExpanded"><span :class="{ collapsed: !sourcesExpanded }">⌄</span></button>
           </div>
           <div v-show="sourcesExpanded" class="source-nav-children">
-            <button v-for="(meta, key) in sourceMeta" :key="key" :class="{ active: activeNav === 'source' && activeSource === key }" @click="navigateTo('source', key)"><img :class="['sidebar-source-icon', { 'twitter-sidebar-icon': key === 'twitter' }]" :src="meta.lineImage" :alt="`${meta.label}线条图标`">{{ meta.label }}</button>
+            <button v-for="(meta, key) in sourceMeta" :key="key" :class="{ active: activeNav === 'source' && activeSource === key }" @click="navigateTo('source', key)"><img :class="['sidebar-source-icon', `sidebar-${key}-icon`]" :src="meta.lineImage" :alt="`${meta.label}线条图标`">{{ meta.label }}</button>
           </div>
         </div>
         <button :class="{ active: activeNav === 'liked' }" @click="navigateTo('liked', 'all')">
@@ -1146,7 +1152,8 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); if (sessionPollTi
       </nav>
       <div class="sidebar-bottom">
         <button :class="{ active: activeNav === 'settings' }" @click="openSettings()"><span class="nav-line-symbol nav-mask-symbol" :style="{ '--nav-mask': `url(${settingsNavIcon})` }" aria-hidden="true"></span> 设置</button>
-        <button class="sidebar-theme-button" type="button" @click="setDarkMode(!isDark)" :title="isDark ? '当前为夜间主题' : '当前为日间主题'" :aria-label="isDark ? '当前为夜间主题，点击切换日间主题' : '当前为日间主题，点击切换夜间主题'"><span class="theme-mask-symbol" :style="{ '--nav-mask': `url(${isDark ? nightThemeIcon : dayThemeIcon})` }" aria-hidden="true"></span></button>
+        <button class="sidebar-theme-button" type="button" @click="setDarkMode(!isDark); mobileMenuOpen = false" :title="isDark ? '当前为夜间主题' : '当前为日间主题'" :aria-label="isDark ? '当前为夜间主题，点击切换日间主题' : '当前为日间主题，点击切换夜间主题'"><span class="theme-mask-symbol" :style="{ '--nav-mask': `url(${isDark ? nightThemeIcon : dayThemeIcon})` }" aria-hidden="true"></span></button>
+        <button class="mobile-logout-button" type="button" title="退出登录" aria-label="退出登录" @click="logout"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H6.5A2.5 2.5 0 0 0 4 7.5v9A2.5 2.5 0 0 0 6.5 19H10M14 8l4 4-4 4M18 12H9"/></svg><span>退出登录</span></button>
       </div>
     </aside>
 
@@ -1154,7 +1161,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); if (sessionPollTi
       <header v-if="authorProfile" class="topbar author-page-header">
         <div class="author-profile-main">
           <button class="author-back-button" type="button" title="返回时间线" aria-label="返回时间线" @click="closeAuthor">←</button>
-          <img :src="authorProfile.avatar || sourceMeta[authorProfile.source].image" :alt="authorProfile.name">
+          <img :src="authorProfile.avatar || sourceIconFor(authorProfile.source)" :alt="authorProfile.name">
           <div><p class="eyebrow">AUTHOR TIMELINE · {{ sourceMeta[authorProfile.source].label }}</p><h1>{{ authorProfile.name }}</h1><p class="subtitle">共 {{ authorProfile.count }} 条已拉取动态</p></div>
         </div>
         <div class="header-actions"><button class="danger-outline-button" :disabled="postActionBusy !== '' || !authorProfile.count" @click="deleteAuthorPosts(authorProfile.source, authorProfile.name)">删除全部动态</button></div>
@@ -1217,7 +1224,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); if (sessionPollTi
 <span>{{ postDateTime(post.published) }}</span>
 </div>
 <span :class="['source-pill', 'post-source-pill', sourceMeta[post.source].color]">
-<img class="source-icon" :src="sourceMeta[post.source].image" :alt="`${sourceMeta[post.source].label}图标`">{{ sourceMeta[post.source].label }}</span>
+<img :class="['source-icon', { 'twitter-night-icon': post.source === 'twitter' && isDark }]" :src="sourceIconFor(post.source)" :alt="`${sourceMeta[post.source].label}图标`">{{ sourceMeta[post.source].label }}</span>
 </div>
 <p v-if="post.caption" class="caption">{{ post.caption }}</p>
 <div v-if="post.media?.length" :class="['media-grid', `media-count-${Math.min(post.media.length, 9)}`]">
@@ -1241,7 +1248,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); if (sessionPollTi
         <div class="section-heading"><div><h2>平台来源</h2><p>查看账号连接状态与订阅数量。</p></div><div class="platform-heading-actions"><span>{{ platformCards.filter(platform => platform.configured).length }} / 4 已连接</span><button class="sync-latest-icon" type="button" :disabled="syncing" title="全部拉取最新动态" aria-label="全部拉取最新动态" @click="runFullSync"><svg :class="{ spin: syncing }" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 9a7 7 0 0 1 11.4-2.5L20 9M4 15l2.5 2.5A7 7 0 0 0 17.9 15"/></svg></button></div></div>
         <div class="platform-source-grid">
           <article v-for="platform in platformCards" :key="platform.key" :class="['platform-source-card', platform.key]" @contextmenu.prevent="openPlatformSettings(platform)">
-            <div class="platform-card-head"><img class="source-icon" :src="platform.image" :alt="`${platform.label}图标`"><span :class="['connection-dot', { online: platform.configured }]">{{ platform.configured ? '已连接' : '未连接' }}</span></div>
+            <div class="platform-card-head"><img :class="['source-icon', { 'twitter-night-icon': platform.key === 'twitter' && isDark }]" :src="platform.image" :alt="`${platform.label}图标`"><span :class="['connection-dot', { online: platform.configured }]">{{ platform.configured ? '已连接' : '未连接' }}</span></div>
             <h4>{{ platform.label }}</h4><p>{{ platform.description }}</p>
             <dl><div><dt>账号</dt><dd>{{ platform.account }}</dd></div><div><dt>订阅来源</dt><dd>{{ platform.feeds.length }} 个</dd></div></dl>
             <button @click="openPlatformSettings(platform)">管理平台 <span>→</span></button>
@@ -1252,7 +1259,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); if (sessionPollTi
       <section class="pull-list">
         <article v-for="feed in feeds" :key="feed.id" class="pull-card">
           <img class="pull-avatar" :src="feed.avatar || sourceMeta[feed.source]?.image || '/favicon.ico'" :alt="feed.name" @error="$event.target.src = sourceMeta[feed.source]?.image || '/favicon.ico'">
-          <div class="pull-info"><div class="pull-title"><strong>{{ feed.name }}</strong><span :class="['source-pill', sourceMeta[feed.source].color]"><img class="source-icon" :src="sourceMeta[feed.source].image" :alt="sourceMeta[feed.source].label">{{ sourceMeta[feed.source].label }}</span></div><span class="pull-handle">{{ feed.handle }}</span><small>{{ feed.lastSyncMessage || (feed.lastSyncedAt ? `上次拉取：${relativeTime(feed.lastSyncedAt)}` : '尚未拉取') }}</small></div>
+          <div class="pull-info"><div class="pull-title"><strong>{{ feed.name }}</strong><span :class="['source-pill', sourceMeta[feed.source].color]"><img :class="['source-icon', { 'twitter-night-icon': feed.source === 'twitter' && isDark }]" :src="sourceIconFor(feed.source)" :alt="sourceMeta[feed.source].label">{{ sourceMeta[feed.source].label }}</span></div><span class="pull-handle">{{ feed.handle }}</span><small>{{ feed.lastSyncMessage || (feed.lastSyncedAt ? `上次拉取：${relativeTime(feed.lastSyncedAt)}` : '尚未拉取') }}</small></div>
           <div class="pull-status"><i :class="['pull-dot', feed.lastSyncStatus]"></i><span>{{ feed.lastSyncStatus === 'success' ? `新增 ${feed.lastSyncCount || 0} 条` : feed.lastSyncStatus === 'failed' ? '拉取失败' : '待拉取' }}</span></div>
           <div class="pull-actions"><button class="pull-action" :disabled="sourceActionBusy !== ''" :title="sourceActionBusy === `sync:${feed.id}` ? '正在同步' : '立即同步'" @click="syncSource(feed)"><svg :class="{ spin: sourceActionBusy === `sync:${feed.id}` }" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 9a7 7 0 0 1 11.4-2.5L20 9M4 15l2.5 2.5A7 7 0 0 0 17.9 15"/></svg><span>{{ sourceActionBusy === `sync:${feed.id}` ? '同步中' : '立即同步' }}</span></button></div>
         </article>
@@ -1311,7 +1318,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); if (sessionPollTi
 <button @click="openPixiv">
 <img class="source-icon" :src="sourceMeta.pixiv.image" alt="pixiv图标">添加 Pixiv 画师</button>
 <button @click="showAdd = false; openSettings('platforms')">
-<img class="source-icon" :src="sourceMeta.twitter.image" alt="推特图标">连接推特</button>
+<img :class="['source-icon', { 'twitter-night-icon': isDark }]" :src="sourceIconFor('twitter')" alt="推特图标">连接推特</button>
 </div>
 </div>
 </div>
@@ -1355,7 +1362,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); if (sessionPollTi
           <div class="pane-heading"><div><h3>平台凭证</h3><p>各平台凭证仅由服务端验证，并加密保存在本地数据目录。</p></div><span>4 个平台</span></div>
           <div class="platform-auth-grid">
             <article v-for="platform in platformCards" :key="platform.key" :class="['platform-auth-card', platform.key]" tabindex="0" @contextmenu.prevent="openCredentialSettings(platform.key)" @click="handleCredentialCardClick(platform.key)" @keydown.enter="openCredentialSettings(platform.key)">
-              <header class="platform-auth-head"><img class="source-icon" :src="platform.image" :alt="`${platform.label}图标`"><div><h3>{{ platform.label }}</h3><span>{{ platform.key === 'twitter' ? '账号连接与作者采集' : '平台账号凭证' }}</span></div><em :class="['connection-dot', { online: platform.configured }]">{{ platform.key === 'twitter' ? '未开放' : platform.configured ? '已连接' : '未连接' }}</em></header>
+              <header class="platform-auth-head"><img :class="['source-icon', { 'twitter-night-icon': platform.key === 'twitter' && isDark }]" :src="platform.image" :alt="`${platform.label}图标`"><div><h3>{{ platform.label }}</h3><span>{{ platform.key === 'twitter' ? '账号连接与作者采集' : '平台账号凭证' }}</span></div><em :class="['connection-dot', { online: platform.configured }]">{{ platform.key === 'twitter' ? '未开放' : platform.configured ? '已连接' : '未连接' }}</em></header>
               <div class="platform-account-summary"><img :src="platform.avatar || platform.image" :alt="`${platform.account}头像`" @error="$event.target.src = platform.image"><div><span>接入账号</span><strong>{{ platform.account }}</strong></div></div>
             </article>
           </div>
@@ -1383,7 +1390,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); if (sessionPollTi
       <div class="modal credential-settings-modal">
         <button class="modal-close" type="button" aria-label="关闭平台配置" @click="credentialPlatform = null">×</button>
         <div class="credential-modal-head">
-          <img class="source-icon" :src="credentialPlatform.image" :alt="`${credentialPlatform.label}图标`">
+          <img :class="['source-icon', { 'twitter-night-icon': credentialPlatform.key === 'twitter' && isDark }]" :src="credentialPlatform.image" :alt="`${credentialPlatform.label}图标`">
           <div><p class="eyebrow">PLATFORM CREDENTIAL</p><h2>{{ credentialPlatform.label }}</h2><span>{{ credentialPlatform.account }}</span></div>
           <em :class="['connection-dot', { online: credentialPlatform.configured }]">{{ credentialPlatform.key === 'twitter' ? '未开放' : credentialPlatform.configured ? '已连接' : '未连接' }}</em>
         </div>
@@ -1408,7 +1415,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); if (sessionPollTi
           <p v-if="pixivError" class="login-error">{{ pixivError }}</p>
         </div>
 
-        <div v-else class="credential-unavailable"><img :src="credentialPlatform.image" alt="推特图标"><strong>连接能力开发中</strong><p>账号授权与作者采集器将在后续版本开放。</p></div>
+        <div v-else class="credential-unavailable"><img :class="{ 'twitter-night-icon': isDark }" :src="sourceIconFor('twitter')" alt="推特图标"><strong>连接能力开发中</strong><p>账号授权与作者采集器将在后续版本开放。</p></div>
       </div>
     </div>
     <div v-if="showPixiv" class="modal-backdrop" @click.self="showPixiv = false">
@@ -1429,7 +1436,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); if (sessionPollTi
     <div v-if="selectedPlatform" class="modal-backdrop platform-detail-backdrop" @click.self="selectedPlatform = null">
       <div class="modal platform-detail-modal">
         <button class="modal-close" @click="selectedPlatform = null">×</button>
-        <div class="platform-detail-title"><img class="source-icon" :src="selectedPlatform.image" alt="平台图标"><div><p class="eyebrow">PLATFORM SOURCE</p><h2>{{ selectedPlatform.label }}</h2></div><span :class="['connection-dot', { online: selectedPlatform.configured }]">{{ selectedPlatform.configured ? '已连接' : '未连接' }}</span></div>
+        <div class="platform-detail-title"><img :class="['source-icon', { 'twitter-night-icon': selectedPlatform.key === 'twitter' && isDark }]" :src="selectedPlatform.image" alt="平台图标"><div><p class="eyebrow">PLATFORM SOURCE</p><h2>{{ selectedPlatform.label }}</h2></div><span :class="['connection-dot', { online: selectedPlatform.configured }]">{{ selectedPlatform.configured ? '已连接' : '未连接' }}</span></div>
         <div class="platform-detail-summary"><div><span>当前账号</span><strong>{{ selectedPlatform.account }}</strong></div><div><span>内容目录</span><strong>{{ selectedPlatform.path }}</strong></div><div><span>作者来源</span><strong>{{ selectedPlatform.feeds.length }} 个</strong></div></div>
         <div class="platform-detail-actions"><button v-if="selectedPlatform.key !== 'twitter'" class="secondary-button" @click="managePlatformCredentials(selectedPlatform.key)">{{ selectedPlatform.configured ? '管理账号凭证' : '连接平台账号' }}</button><button v-if="selectedPlatform.key === 'weibo' && selectedPlatform.configured && !hasWeiboLikesSource" class="secondary-button" :disabled="sourceActionBusy !== ''" @click="addWeiboLikesSource">添加我的点赞</button><button v-if="selectedPlatform.key === 'pixiv' && selectedPlatform.configured && !hasPixivBookmarksSource" class="secondary-button" :disabled="sourceActionBusy !== ''" @click="addPixivBookmarksSource">添加 P站收藏</button><button v-if="selectedPlatform.key === 'bilibili' && selectedPlatform.configured && !hasBilibiliFavoriteOpusSource" class="secondary-button" :disabled="sourceActionBusy !== ''" @click="addBilibiliFavoriteOpusSource">添加收藏专栏</button><button v-if="selectedPlatform.key === 'bilibili' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openBilibili()">添加 UP 主</button><button v-if="selectedPlatform.key === 'weibo' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openWeibo()">添加博主</button><button v-if="selectedPlatform.key === 'pixiv' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openPixiv()">添加画师</button></div>
         <p v-if="sourceActionMessage" class="success-message source-action-message">{{ sourceActionMessage }}</p><p v-if="settingsError" class="login-error">{{ settingsError }}</p>

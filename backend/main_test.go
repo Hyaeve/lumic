@@ -117,6 +117,9 @@ func TestMediaPreviewHandlerCompressesAndCleansCache(t *testing.T) {
 	if config.Width > mediaPreviewMaxDimension || config.Height > mediaPreviewMaxDimension {
 		t.Fatalf("preview was not resized: %dx%d", config.Width, config.Height)
 	}
+	if config.Width != 900 || config.Height != 600 {
+		t.Fatalf("unexpected preview dimensions: %dx%d", config.Width, config.Height)
+	}
 	previewPath, ok := mediaPreviewCachePath(root, sourcePath)
 	if !ok {
 		t.Fatal("preview path was rejected")
@@ -133,6 +136,62 @@ func TestMediaPreviewHandlerCompressesAndCleansCache(t *testing.T) {
 	}
 	if _, err := os.Stat(previewPath); !os.IsNotExist(err) {
 		t.Fatalf("preview cache still exists: %v", err)
+	}
+}
+
+func TestCleanupMediaPreviewCacheRemovesExpiredOrphanedAndLegacyFiles(t *testing.T) {
+	root := t.TempDir()
+	oldFlowRoot, oldPreviewRoot := flowRoot, previewRoot
+	flowRoot, previewRoot = filepath.Join(root, "flow"), filepath.Join(root, "previews")
+	t.Cleanup(func() { flowRoot, previewRoot = oldFlowRoot, oldPreviewRoot })
+	now := time.Date(2026, time.August, 15, 12, 0, 0, 0, time.UTC)
+
+	writeFile := func(filePath string, modified time.Time) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filePath, []byte("preview-cache"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(filePath, modified, modified); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	keepSource := filepath.Join(flowRoot, "weibo", "author", "keep.png")
+	staleSource := filepath.Join(flowRoot, "weibo", "author", "stale.png")
+	writeFile(keepSource, now.Add(-48*time.Hour))
+	writeFile(staleSource, now.Add(-60*24*time.Hour))
+	keepPreview, _ := mediaPreviewCachePath(flowRoot, keepSource)
+	stalePreview, _ := mediaPreviewCachePath(flowRoot, staleSource)
+	orphanPreview := filepath.Join(previewRoot, "weibo", "missing", "orphan.png") + mediaPreviewCacheSuffix
+	legacyPreview := strings.TrimSuffix(keepPreview, mediaPreviewCacheSuffix) + ".v3.jpg"
+	oldTemporary := filepath.Join(previewRoot, "weibo", ".lumic-preview-old.tmp")
+	recentTemporary := filepath.Join(previewRoot, "weibo", ".lumic-preview-recent.tmp")
+	writeFile(keepPreview, now.Add(-7*24*time.Hour))
+	writeFile(stalePreview, now.Add(-31*24*time.Hour))
+	writeFile(orphanPreview, now.Add(-24*time.Hour))
+	writeFile(legacyPreview, now.Add(-24*time.Hour))
+	writeFile(oldTemporary, now.Add(-2*time.Hour))
+	writeFile(recentTemporary, now.Add(-30*time.Minute))
+
+	removed, reclaimed, err := cleanupMediaPreviewCache(now)
+	if err != nil {
+		t.Fatalf("cleanup preview cache: %v", err)
+	}
+	if removed != 4 || reclaimed <= 0 {
+		t.Fatalf("unexpected cleanup result: removed=%d reclaimed=%d", removed, reclaimed)
+	}
+	for _, retained := range []string{keepPreview, recentTemporary} {
+		if _, err := os.Stat(retained); err != nil {
+			t.Fatalf("expected retained cache %s: %v", retained, err)
+		}
+	}
+	for _, deleted := range []string{stalePreview, orphanPreview, legacyPreview, oldTemporary} {
+		if _, err := os.Stat(deleted); !os.IsNotExist(err) {
+			t.Fatalf("expected cache removal %s: %v", deleted, err)
+		}
 	}
 }
 

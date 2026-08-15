@@ -38,6 +38,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/argon2"
+	xdraw "golang.org/x/image/draw"
 	xproxy "golang.org/x/net/proxy"
 )
 
@@ -1675,7 +1676,7 @@ func deletePostMedia(media []string) error {
 			return err
 		}
 		if hasPreview {
-			if err := os.Remove(preview); err != nil && !os.IsNotExist(err) {
+			if _, _, err := removeMediaPreviewCacheFile(preview); err != nil {
 				return err
 			}
 		}
@@ -1688,10 +1689,48 @@ func deletePostMedia(media []string) error {
 	return nil
 }
 
-const mediaPreviewMaxDimension = 760
+const (
+	mediaPreviewMaxDimension    = 900
+	mediaPreviewJPEGQuality     = 88
+	mediaPreviewCacheSuffix     = ".v4.jpg"
+	mediaPreviewMaxAge          = 30 * 24 * time.Hour
+	mediaPreviewTouchInterval   = 24 * time.Hour
+	mediaPreviewCleanupPeriod   = 12 * time.Hour
+	mediaPreviewTemporaryMaxAge = time.Hour
+)
 
-var mediaPreviewLocks sync.Map
+type mediaPreviewLock struct {
+	mutex      sync.Mutex
+	references int
+}
+
+var mediaPreviewLocks = struct {
+	sync.Mutex
+	entries map[string]*mediaPreviewLock
+}{entries: make(map[string]*mediaPreviewLock)}
 var mediaPreviewGenerationSlots = make(chan struct{}, 2)
+
+func acquireMediaPreviewLock(previewPath string) func() {
+	mediaPreviewLocks.Lock()
+	entry := mediaPreviewLocks.entries[previewPath]
+	if entry == nil {
+		entry = &mediaPreviewLock{}
+		mediaPreviewLocks.entries[previewPath] = entry
+	}
+	entry.references++
+	mediaPreviewLocks.Unlock()
+
+	entry.mutex.Lock()
+	return func() {
+		entry.mutex.Unlock()
+		mediaPreviewLocks.Lock()
+		entry.references--
+		if entry.references == 0 && mediaPreviewLocks.entries[previewPath] == entry {
+			delete(mediaPreviewLocks.entries, previewPath)
+		}
+		mediaPreviewLocks.Unlock()
+	}
+}
 
 func mediaPreviewCachePath(root, source string) (string, bool) {
 	relative, err := filepath.Rel(root, source)
@@ -1702,7 +1741,7 @@ func mediaPreviewCachePath(root, source string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	return filepath.Join(previewBase, relative) + ".v3.jpg", true
+	return filepath.Join(previewBase, relative) + mediaPreviewCacheSuffix, true
 }
 
 func obsoleteMediaPreviewCachePaths(root, source string) []string {
@@ -1715,26 +1754,14 @@ func obsoleteMediaPreviewCachePaths(root, source string) []string {
 		return nil
 	}
 	base := filepath.Join(previewBase, relative)
-	return []string{base + ".v2.jpg", base + ".jpg"}
+	return []string{base + ".v3.jpg", base + ".v2.jpg", base + ".jpg"}
 }
 
 func resizeMediaPreview(source image.Image, width, height int) *image.RGBA {
 	preview := image.NewRGBA(image.Rect(0, 0, width, height))
 	background := color.RGBA{R: 242, G: 245, B: 242, A: 255}
 	draw.Draw(preview, preview.Bounds(), &image.Uniform{C: background}, image.Point{}, draw.Src)
-	bounds := source.Bounds()
-	for y := 0; y < height; y++ {
-		sourceY := bounds.Min.Y + y*bounds.Dy()/height
-		for x := 0; x < width; x++ {
-			sourceX := bounds.Min.X + x*bounds.Dx()/width
-			r, g, b, a := source.At(sourceX, sourceY).RGBA()
-			inverseAlpha := uint64(0xffff - a)
-			red := uint64(r) + uint64(background.R)*0x101*inverseAlpha/0xffff
-			green := uint64(g) + uint64(background.G)*0x101*inverseAlpha/0xffff
-			blue := uint64(b) + uint64(background.B)*0x101*inverseAlpha/0xffff
-			preview.SetRGBA(x, y, color.RGBA{R: uint8(red >> 8), G: uint8(green >> 8), B: uint8(blue >> 8), A: 255})
-		}
-	}
+	xdraw.ApproxBiLinear.Scale(preview, preview.Bounds(), source, source.Bounds(), draw.Over, nil)
 	return preview
 }
 
@@ -1771,7 +1798,7 @@ func generateMediaPreview(sourcePath, previewPath string) error {
 	}
 	temporaryName := temporary.Name()
 	defer os.Remove(temporaryName)
-	if err := jpeg.Encode(temporary, resizeMediaPreview(decoded, width, height), &jpeg.Options{Quality: 82}); err != nil {
+	if err := jpeg.Encode(temporary, resizeMediaPreview(decoded, width, height), &jpeg.Options{Quality: mediaPreviewJPEGQuality}); err != nil {
 		temporary.Close()
 		return err
 	}
@@ -1779,6 +1806,129 @@ func generateMediaPreview(sourcePath, previewPath string) error {
 		return err
 	}
 	return replaceFile(temporaryName, previewPath)
+}
+
+func removeMediaPreviewCacheFile(previewPath string) (int64, bool, error) {
+	release := acquireMediaPreviewLock(previewPath)
+	defer release()
+	info, err := os.Stat(previewPath)
+	if os.IsNotExist(err) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	if info.IsDir() {
+		return 0, false, nil
+	}
+	if err := os.Remove(previewPath); err != nil && !os.IsNotExist(err) {
+		return 0, false, err
+	}
+	return info.Size(), true, nil
+}
+
+func cleanupMediaPreviewCache(now time.Time) (int, int64, error) {
+	previewBase, err := filepath.Abs(previewRoot)
+	if err != nil {
+		return 0, 0, err
+	}
+	flowBase, err := filepath.Abs(flowRoot)
+	if err != nil {
+		return 0, 0, err
+	}
+	if err := os.MkdirAll(previewBase, 0755); err != nil {
+		return 0, 0, err
+	}
+	directories := make([]string, 0)
+	removed := 0
+	var reclaimed int64
+	var firstErr error
+	err = filepath.Walk(previewBase, func(currentPath string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			if firstErr == nil {
+				firstErr = walkErr
+			}
+			return nil
+		}
+		if info.IsDir() {
+			if currentPath != previewBase {
+				directories = append(directories, currentPath)
+			}
+			return nil
+		}
+		relative, relativeErr := filepath.Rel(previewBase, currentPath)
+		if relativeErr != nil {
+			if firstErr == nil {
+				firstErr = relativeErr
+			}
+			return nil
+		}
+		name := info.Name()
+		remove := false
+		switch {
+		case strings.HasPrefix(name, ".lumic-preview-") && strings.HasSuffix(name, ".tmp"):
+			remove = now.Sub(info.ModTime()) >= mediaPreviewTemporaryMaxAge
+		case !strings.HasSuffix(relative, mediaPreviewCacheSuffix):
+			remove = true
+		default:
+			sourceRelative := strings.TrimSuffix(relative, mediaPreviewCacheSuffix)
+			sourcePath := filepath.Join(flowBase, sourceRelative)
+			sourceInfo, sourceErr := os.Stat(sourcePath)
+			if os.IsNotExist(sourceErr) || (sourceErr == nil && sourceInfo.IsDir()) {
+				remove = true
+			} else if sourceErr != nil {
+				if firstErr == nil {
+					firstErr = sourceErr
+				}
+				return nil
+			} else if now.Sub(info.ModTime()) >= mediaPreviewMaxAge {
+				remove = true
+			}
+		}
+		if !remove {
+			return nil
+		}
+		size, didRemove, removeErr := removeMediaPreviewCacheFile(currentPath)
+		if removeErr != nil {
+			if firstErr == nil {
+				firstErr = removeErr
+			}
+			return nil
+		}
+		if didRemove {
+			removed++
+			reclaimed += size
+		}
+		return nil
+	})
+	if err != nil && firstErr == nil {
+		firstErr = err
+	}
+	for index := len(directories) - 1; index >= 0; index-- {
+		_ = os.Remove(directories[index])
+	}
+	return removed, reclaimed, firstErr
+}
+
+func startMediaPreviewCleanup() {
+	run := func() {
+		removed, reclaimed, err := cleanupMediaPreviewCache(time.Now())
+		if err != nil {
+			log.Printf("preview cache cleanup failed: %v", err)
+			return
+		}
+		if removed > 0 {
+			log.Printf("preview cache cleanup removed %d files and reclaimed %.1f MiB", removed, float64(reclaimed)/(1024*1024))
+		}
+	}
+	run()
+	go func() {
+		ticker := time.NewTicker(mediaPreviewCleanupPeriod)
+		defer ticker.Stop()
+		for range ticker.C {
+			run()
+		}
+	}()
 }
 
 func mediaPreviewHandler(w http.ResponseWriter, r *http.Request) {
@@ -1811,18 +1961,15 @@ func mediaPreviewHandler(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	lockValue, _ := mediaPreviewLocks.LoadOrStore(previewPath, &sync.Mutex{})
-	lock := lockValue.(*sync.Mutex)
-	lock.Lock()
-	defer func() {
-		lock.Unlock()
-		mediaPreviewLocks.Delete(previewPath)
-	}()
+	release := acquireMediaPreviewLock(previewPath)
+	defer release()
 	previewInfo, previewErr := os.Stat(previewPath)
 	if previewErr != nil || previewInfo.Size() == 0 || previewInfo.ModTime().Before(sourceInfo.ModTime()) {
 		mediaPreviewGenerationSlots <- struct{}{}
-		generationErr := generateMediaPreview(sourcePath, previewPath)
-		<-mediaPreviewGenerationSlots
+		generationErr := func() error {
+			defer func() { <-mediaPreviewGenerationSlots }()
+			return generateMediaPreview(sourcePath, previewPath)
+		}()
 		if generationErr != nil {
 			w.Header().Set("Cache-Control", "public, max-age=3600")
 			http.ServeFile(w, r, sourcePath)
@@ -1831,6 +1978,9 @@ func mediaPreviewHandler(w http.ResponseWriter, r *http.Request) {
 		for _, obsoletePreview := range obsoleteMediaPreviewCachePaths(root, sourcePath) {
 			_ = os.Remove(obsoletePreview)
 		}
+	} else if time.Since(previewInfo.ModTime()) >= mediaPreviewTouchInterval {
+		now := time.Now()
+		_ = os.Chtimes(previewPath, now, now)
 	}
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	w.Header().Set("Content-Type", "image/jpeg")
@@ -5767,6 +5917,7 @@ func main() {
 	if err := initializeFlowStorage(); err != nil {
 		log.Fatal("unable to initialize flow storage: ", err)
 	}
+	startMediaPreviewCleanup()
 	store, err := loadStore()
 	if err != nil {
 		log.Fatal("unable to load content data: ", err)
