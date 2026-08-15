@@ -569,6 +569,58 @@ func TestCollectWeiboPostsIncludesPlayableVideo(t *testing.T) {
 	}
 }
 
+func TestNormalizePostVideosKeepsHighestQualityAndAvailablePoster(t *testing.T) {
+	videos := normalizePostVideos([]PostVideo{
+		{URL: "https://video.example/post-720.mp4", Poster: "https://image.example/poster.jpg"},
+		{URL: "https://video.example/post-1080.mp4"},
+		{URL: "https://video.example/post-360.mp4"},
+	})
+	if len(videos) != 1 {
+		t.Fatalf("expected one normalized video, got %#v", videos)
+	}
+	if videos[0].URL != "https://video.example/post-1080.mp4" || videos[0].Poster != "https://image.example/poster.jpg" {
+		t.Fatalf("unexpected normalized video: %#v", videos[0])
+	}
+}
+
+func TestNormalizeStoredPostVideosRemovesDuplicateLocalFiles(t *testing.T) {
+	root := t.TempDir()
+	oldFlowRoot := flowRoot
+	flowRoot = root
+	t.Cleanup(func() { flowRoot = oldFlowRoot })
+	directory := filepath.Join(root, "weibo", "author")
+	if err := os.MkdirAll(directory, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"post-1080.mp4", "post-720.mp4", "post-360.mp4", "poster.jpg"} {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte(name), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store := &Store{posts: []Post{{ID: "video-post", Source: SourceWeibo, Author: "author", Videos: []PostVideo{
+		{URL: "/flow/weibo/author/post-720.mp4", Poster: "/flow/weibo/author/poster.jpg"},
+		{URL: "/flow/weibo/author/post-1080.mp4"},
+		{URL: "/flow/weibo/author/post-360.mp4"},
+	}}}}
+	changed, err := store.normalizeStoredPostVideos()
+	if err != nil || !changed {
+		t.Fatalf("normalize stored videos: changed=%v err=%v", changed, err)
+	}
+	if len(store.posts[0].Videos) != 1 || store.posts[0].Videos[0].URL != "/flow/weibo/author/post-1080.mp4" || store.posts[0].Videos[0].Poster != "/flow/weibo/author/poster.jpg" {
+		t.Fatalf("unexpected stored video: %#v", store.posts[0].Videos)
+	}
+	for _, name := range []string{"post-720.mp4", "post-360.mp4"} {
+		if _, err := os.Stat(filepath.Join(directory, name)); !os.IsNotExist(err) {
+			t.Fatalf("duplicate video was not removed: %s err=%v", name, err)
+		}
+	}
+	for _, name := range []string{"post-1080.mp4", "poster.jpg"} {
+		if _, err := os.Stat(filepath.Join(directory, name)); err != nil {
+			t.Fatalf("retained video asset missing: %s err=%v", name, err)
+		}
+	}
+}
+
 func TestFilterSourcePosts(t *testing.T) {
 	posts := []Post{
 		{ID: "keep", Caption: "今天分享一张插画", Media: []string{"image.jpg"}},

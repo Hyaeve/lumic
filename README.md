@@ -1,117 +1,253 @@
 # Lumic · 拾光
 
-Lumic 是一个聚合个人内容流的 Docker 项目，中文名为「拾光」。它将微博、pixiv、哔哩哔哩中关注的内容整理为一条按时间排序的时间线，并保留动态作者、头像、配文、标签、媒体和来源信息。
+Lumic（拾光）是一个自托管的个人内容聚合与归档服务。它将微博、Pixiv、哔哩哔哩等平台的订阅内容汇入统一时间线，在本地保存动态正文、原始图片和视频，并提供搜索、标签、收藏、作者视图、瀑布流以及移动端适配。
 
-## 当前版本
+项目采用 Vue 3 + Vite 构建前端，Go 提供 API、平台连接器、同步任务与静态资源服务。正式镜像将前后端打包为一个容器，适合通过 Docker Compose 长期运行。
 
-当前仓库包含可运行的 Vue 前端仪表盘和 Go API 基础服务。后端目前使用演示动态作为数据层占位；B 站已经支持加密保存账号凭证、搜索 UP 主和持久化图文/专栏订阅，实际动态同步解析器以及微博、pixiv 连接器仍需继续接入。
+## 主要功能
 
-## 启动开发环境
+- 多平台时间线：统一浏览微博、Pixiv 和哔哩哔哩动态，并可按平台、作者或标签筛选。
+- 订阅来源：支持启用或停用、Cron 定时同步、来源标签、关键词包含/排除、包含图片和包含视频等规则。
+- 增量与历史获取：定时同步和“拉取最新”仅获取增量内容；“获取历史动态”会遵循来源过滤设置，并跳过本地已经完整归档的内容。
+- 动态浏览：支持正文、Emoji、原图、视频、最多九宫格预览、列表和瀑布流布局。
+- 搜索排序：可搜索动态正文、作者与标签，并按最新或最早排序。
+- 内容管理：支持收藏、右键菜单、多选操作、删除动态及其本地文件、删除来源的全部动态。
+- 图片查看：列表使用较轻的预览图，大图模式加载原图；桌面端支持缩放、旋转、下载和拖拽，移动端支持触控手势。
+- 响应式界面：桌面端提供完整侧栏，手机竖屏自动切换为紧凑的图标菜单和双列瀑布流。
+- 本地归档：原始媒体与作者正文文件保存在可直接访问和备份的目录中。
+- 配置备份：设置页可备份和恢复项目配置。
+- Lumir 接口：提供带客户端令牌认证和游标分页的 `/api/v1`，避免一次加载大量动态。
 
-```bash
-cd frontend
-npm install
-npm run dev
+## 平台支持
+
+| 平台 | 当前能力 |
+| --- | --- |
+| 哔哩哔哩 | 扫码或 Cookie 接入；订阅 UP 主图文动态；可选视频动态与专栏；可添加账号“收藏专栏”来源 |
+| 微博 | 账号密码、扫码或 Cookie 接入；订阅博主；可添加登录账号“我的点赞”来源；保存正文、原图和可选视频 |
+| Pixiv | 使用已登录浏览器的请求头信息接入；订阅画师；可添加账号“P站收藏”来源，并自动附加 `#P站收藏` 标签 |
+| Twitter | 已预留平台入口与数据模型，账号连接和采集器尚未开放 |
+
+平台接口和风控策略可能发生变化。Lumic 已对图片下载进行节流，但实际可用性仍取决于账号状态、网络环境和平台限制。
+
+## Docker Compose 部署
+
+### 1. 准备目录
+
+创建一个部署目录，并在其中保存下面的 `docker-compose.yml`。建议同时创建三个持久化目录：
+
+```powershell
+New-Item -ItemType Directory -Force data, flow, previews
 ```
 
-另开终端启动 API：
+Linux 或 macOS：
 
 ```bash
-cd backend
-go run .
+mkdir -p data flow previews
 ```
 
-API 默认监听 `http://localhost:5500`。Vite 开发服务器默认监听 `http://localhost:5173`；开发时可通过反向代理或将 API 服务映射到同源路径。
+### 2. Compose 配置
 
-## API
+```yaml
+services:
+  lumic:
+    image: ghcr.io/hyaeve/lumic:latest
+    container_name: lumic
+    ports:
+      - "15500:5500"
+    volumes:
+      # 配置、密钥、账号凭证、内容索引和同步状态。
+      - ./data:/data
+      # 动态正文、原始图片、视频和专栏内容。
+      - ./flow:/flow
+      # 列表浏览时按需生成的预览图，可独立清理。
+      - ./previews:/previews
+    environment:
+      TZ: Asia/Shanghai
+      LUMIC_PREVIEW_ROOT: /previews
+    restart: unless-stopped
+```
 
-面向 Lumir 安卓客户端的稳定接口位于 `/api/v1`，支持24小时 Bearer Token、动态游标分页、统一来源列表以及全部平台管理路径。完整接入说明见 [`docs/api-v1.md`](docs/api-v1.md)。
+平台账号凭证、项目代理和登录账号均在 Lumic 设置页中管理，不需要在 Compose 中配置 Pixiv Client ID、Client Secret 或平台 Cookie。
 
-- `POST /api/v1/auth/login`：使用 Lumic 账号密码换取客户端 Bearer Token
-- `GET /api/v1/posts?limit=30&cursor=...`：按游标分页读取动态，单页最大100条
-- `GET /api/v1/feeds`：统一读取所有平台的订阅来源
-- `POST /api/v1/sync`：触发所有已启用来源的增量同步
-
-- `GET /api/posts?source=all|weibo|pixiv|bilibili`：获取按发布时间倒序的动态
-- `GET /api/feeds`：获取来源与同步配置
-- `POST /api/feeds`：新增一个来源配置
-- `POST /api/sync`：触发同步任务
-- `GET|PUT /api/project/settings`：读取脱敏项目设置或保存项目代理
-- `POST /api/project/settings`：测试代理能否访问 pixiv
-- `GET|PUT /api/bilibili/account`：读取脱敏配置状态或手动验证并保存 B 站凭证
-- `GET|POST /api/bilibili/qr`：创建 B 站登录二维码或携带 `id` 轮询扫码状态
-- `GET|PUT /api/pixiv/account`：读取 Pixiv 连接状态或验证并加密保存浏览器请求头凭证
-- `GET|POST /api/weibo/qr`：读取微博账号状态、创建二维码或携带 `id` 轮询扫码状态
-- `GET|PUT /api/weibo/account`：读取微博连接状态，或通过账号密码 / Cookie 建立并加密保存会话
-- `GET /api/bilibili/search?keyword=名称`：搜索 B 站 UP 主
-- `GET|POST /api/bilibili/subscriptions`：读取或新增 UP 主图文/专栏订阅
-- `GET /api/health`：健康检查
-
-## Docker
-
-项目已配置使用 GitHub Container Registry 镜像 [`ghcr.io/hyaeve/lumic:latest`](https://ghcr.io/hyaeve/lumic)。Compose 中宿主机端口 `15500` 映射到容器端口 `5500`，因此访问地址为 `http://localhost:15500`；容器内 API 和前端仍由 `5500` 提供服务。
+### 3. 启动
 
 ```bash
-mkdir data flow
 docker compose pull
 docker compose up -d
+```
+
+启动后访问：`http://localhost:15500`
+
+首次启动的初始账号和密码均为 `Lumic`。登录后请立即前往设置页修改账号和密码。
+
+### 4. 常用命令
+
+查看运行状态与日志：
+
+```bash
+docker compose ps
 docker compose logs -f lumic
 ```
 
-Compose 使用三个职责不同的持久化挂载：
+更新到最新镜像：
 
-- `./data:/data`：保存应用基础设置、加密密钥、平台账号凭证、订阅配置、数据库、同步游标和任务状态。这是应用内部状态目录，不保存采集到的正文与媒体。
-- `./flow:/flow`：保存平台采集的动态、图文、专栏正文和媒体文件。可通过 `LUMIC_FLOW_ROOT` 修改容器内根路径，Compose 默认固定为 `/flow`。
-- `./previews:/previews`：保存动态列表按需生成的压缩预览图，可独立清理或重建。可通过 `LUMIC_PREVIEW_ROOT` 修改容器内缓存路径，Compose 默认固定为 `/previews`。
+```bash
+docker compose pull
+docker compose up -d
+```
 
-`/flow` 按“平台 → 作者”组织：
+停止服务：
+
+```bash
+docker compose down
+```
+
+`docker compose down` 不会删除上述绑定目录。不要使用会主动删除宿主机数据目录的清理命令。
+
+### 可选环境变量
+
+| 变量 | 用途 | 默认值 |
+| --- | --- | --- |
+| `TZ` | 容器时区，影响界面时间和 Cron 执行时间 | 系统时区 |
+| `LUMIC_PREVIEW_ROOT` | 预览图缓存目录 | `/previews` |
+| `LUMIC_FLOW_ROOT` | 动态正文与原始媒体目录 | `/flow` |
+| `LUMIC_COOKIE_SECURE` | HTTPS 反向代理后设为 `true`，令登录 Cookie 仅通过 HTTPS 发送 | `false` |
+| `LUMIC_AUTH_FILE` | 登录账号配置文件路径 | `/data/auth.json` |
+| `LUMIC_CONTENT_FILE` | 动态索引与应用状态文件路径 | `/data/content.json` |
+| `LUMIC_BILIBILI_FILE` | 平台加密凭证文件路径 | `/data/bilibili.enc` |
+| `LUMIC_SECRET_FILE` | AES-GCM 本地密钥文件路径 | `/data/secret.key` |
+| `LUMIC_IMAGE_DOWNLOAD_DELAY_MS` | 平台图片请求之间的最小间隔，用于降低触发风控的概率 | 内置节流值 |
+
+通常只需保留推荐 Compose 中的 `TZ` 和 `LUMIC_PREVIEW_ROOT`。修改存储路径时，应同步调整对应的卷挂载。
+
+## 登录与安全
+
+- 浏览器登录会话有效期为 24 小时，服务重启后现有会话也会失效，需要重新登录。
+- Web 会话使用 `HttpOnly`、`SameSite=Lax` Cookie；部署在 HTTPS 后时建议启用 `LUMIC_COOKIE_SECURE=true`。
+- Lumir 等客户端通过 `/api/v1/auth/login` 获取 24 小时 Bearer Token；服务重启后令牌失效。
+- 平台 Cookie、Token 和请求头不会返回给前端，服务使用 AES-GCM 加密后写入 `/data/bilibili.enc`，密钥写入 `/data/secret.key`。
+- `data` 目录包含账号、密钥与连接凭证，应限制访问权限、定期备份，并且不要提交到 Git 仓库。
+
+## 平台接入
+
+平台账号统一在“设置 → 平台凭证”中管理，右键平台卡片可打开详细配置。
+
+### 哔哩哔哩
+
+推荐使用手机客户端扫码登录，也可手动导入有效 Cookie。连接后可搜索并添加 UP 主，添加来源本身不会立即拉取动态。UP 主来源默认采集图文动态，可在来源设置中额外启用视频动态和专栏。
+
+账号的“收藏专栏”可作为独立来源添加。该来源用于手动获取历史动态和后续增量同步，不会与普通 UP 主目录混合。
+
+### 微博
+
+支持账号密码、移动端扫码和手动 Cookie。账号密码仅用于当次换取登录会话，不会以明文写入项目配置；遇到验证码或二次验证时请改用扫码或 Cookie。
+
+登录后可订阅博主，也可将“我的点赞”添加为一个普通来源。它参与统一动态流，但不自动归入 Lumic 侧栏的“收藏”。
+
+### Pixiv
+
+从已登录 Pixiv 的浏览器开发者工具中取得并填写 User-Agent、Baggage、Cookie、用户 ID，以及页面要求的可选请求头。连接后可订阅画师，也可添加账号的“P站收藏”来源。
+
+“P站收藏”来源默认带有 `#P站收藏` 标签，归档内容统一保存在该来源目录中。
+
+## 来源与同步规则
+
+每个来源都可以独立配置：
+
+- 启用或停用自动同步。
+- Cron 表达式，默认 `0 6 * * *`，即每天 06:00。
+- 标签，多个标签使用空格分隔；保存后会应用到该来源已有和后续拉取的全部动态。
+- 包含关键词和排除关键词，多个关键词使用空格分隔。
+- “包含图片”：启用后排除纯文字动态。
+- “包含视频”：将符合条件的视频动态纳入拉取范围。
+- 哔哩哔哩来源可额外选择是否包含专栏。
+
+添加订阅只创建来源，不会自动触发历史拉取：
+
+- “立即同步”或“全部拉取最新”只获取各来源的新内容。
+- “获取历史动态”由用户手动触发；符合当前来源设置、且本地尚未完整归档的内容会被拉取，已经完整归档的动态会自动跳过。
+- 获取历史动态同样遵循来源的图片、视频、专栏和关键词过滤设置，可用于断点补全本地内容。
+
+## 动态浏览
+
+- “全部动态、今日动态、收藏动态”统计会随当前平台筛选变化。
+- 搜索同时匹配正文、作者名称和标签。
+- 支持最新/最早排序，进入作者页或标签页后仍可继续搜索和排序。
+- 列表模式展示完整动态信息；瀑布流模式以第一张图片作为封面，桌面端自适应 3–5 列，手机端固定 2 列。
+- 多图动态最多展示九宫格，超过九张时最后一格显示剩余数量，完整内容可在详情或大图模式中查看。
+- 删除动态时会同时删除关联的本地正文、原始媒体和预览缓存；批量删除提供二次确认。
+
+## 数据目录
+
+### `/data`
+
+保存 Lumic 的运行状态，包括：
+
+- 登录账号配置。
+- AES-GCM 密钥与加密后的平台凭证。
+- 订阅来源、过滤规则、同步游标和任务状态。
+- 动态索引、收藏状态与其他应用配置。
+
+### `/flow`
+
+保存采集到的正文和原始媒体，基本结构如下：
 
 ```text
 /flow/
 ├─ bilibili/
-│  └─ Comelee/
-│     ├─ source.json
-│     └─ （后续同步的动态图文、专栏及媒体）
-├─ pixiv/
-│  └─ 画师名称/
-│     └─ （作品元数据与图片）
-└─ weibo/
-   └─ 博主名称/
-      └─ （微博正文与媒体）
+│  ├─ UP主名称/
+│  │  ├─ post_contents.txt
+│  │  └─ 原始媒体文件
+│  └─ 收藏专栏/
+│     ├─ post_contents.txt
+│     └─ 原始媒体文件
+├─ weibo/
+│  ├─ 博主名称/
+│  │  ├─ post_contents.txt
+│  │  └─ 原始媒体文件
+│  └─ 我的点赞/
+│     ├─ post_contents.txt
+│     └─ 原始媒体文件
+└─ pixiv/
+   ├─ 画师名称/
+   │  ├─ post_contents.txt
+   │  └─ 原始图片
+   └─ P站收藏/
+      ├─ post_contents.txt
+      └─ 原始图片
 ```
 
-服务启动时会自动创建 `/flow/bilibili`、`/flow/pixiv` 和 `/flow/weibo`。新增 B 站 UP 主订阅时，会立即创建对应的作者目录，并写入不含账号凭证的 `source.json`。已有 B 站订阅会在升级后的首次启动时自动补建目录。作者名称中的路径分隔符、Windows 非法字符及保留设备名会被安全替换，避免目录穿越和跨平台挂载失败。
+普通订阅以作者为目录，一个作者使用一个 `post_contents.txt` 持续记录动态正文，而不是每条动态创建一个文本文件。微博“我的点赞”、Pixiv“P站收藏”和哔哩哔哩“收藏专栏”等账号集合来源统一写入各自来源目录，不再按原动态作者拆分文件夹。
 
-浏览动态产生的预览缓存不会写入 `/flow`。服务会在 `/previews` 中按平台和作者镜像原图路径，使用最长边 900 像素、JPEG 质量 88 的平滑缩放预览；进入大图模式仍读取 `/flow` 中的原图。预览首次浏览时按需生成，后续由浏览器长期缓存并直接复用。
+正文中的 Emoji 作为 Unicode 文本写入 `post_contents.txt`，不会单独下载为图片。
 
-预览缓存具有自动回收机制：删除动态原图时会同步删除对应预览；服务启动时及之后每 12 小时会清理旧版本、孤儿文件和超过 1 小时的临时文件；连续 30 天没有被使用的预览也会删除，并在下次浏览时自动重建。服务每 24 小时至多刷新一次已访问预览的使用时间，避免频繁写盘。升级后还会自动清理旧的 `/flow/.previews` 缓存目录，也可以随时直接清空宿主机的 `./previews`，不会影响原图。
+图片按作者与发布日期命名：
 
-本地构建镜像时使用：
-
-```bash
-docker compose build
-docker compose up -d
+```text
+作者-20260813.jpg
+作者-20260813·1.jpg
+作者-20260813·2.jpg
 ```
 
-生产环境建议将数据库、平台授权 Cookie / Token 和加密密钥通过 Docker secrets 或环境变量注入，不要写入镜像或提交到仓库。登录账号和密码不再由 Compose 环境变量配置，而是在登录后通过设置页面修改并保存到挂载的 `/data/auth.json`。
+同一动态仅一张图片时不加序号；多张图片从 `·1` 开始编号。Lumic 保存平台可获取的原图，不会用列表预览图替换 `/flow` 中的原始文件。
 
-### 登录与安全
+### `/previews`
 
-应用启动后会先显示空白登录表单，页面不会自动填写、展示或提示账号密码。所有 `/api` 业务接口均要求通过服务端会话认证；会话 Cookie 使用 `HttpOnly` 和 `SameSite=Strict`，不会暴露给前端脚本。
+动态列表不会直接加载原图，而是在 `/previews` 中按需生成最长边 900 像素、JPEG 质量 88 的预览图。进入大图模式时仍读取 `/flow` 中的原始文件。
 
-首次启动使用内置初始账号后，在左侧「设置」中输入当前密码并设置新账号和新密码。新密码至少 8 位；修改结果保存在 Compose 挂载的 `./data/auth.json` 中，重建或更新容器不会丢失。登录表单不会自动填写或提示初始账号密码。
+预览缓存回收规则：
 
-反向代理启用 HTTPS 后建议设置 `LUMIC_COOKIE_SECURE=true`；该变量不属于当前 Compose 默认配置，可按部署环境单独添加。服务还发送 CSP、`X-Frame-Options: DENY`、`X-Content-Type-Options: nosniff` 和严格 Referrer Policy 等响应头。
+- 删除动态或原图时同步删除关联预览。
+- 服务启动时以及每 12 小时清理孤儿文件、旧版本缓存和超过 1 小时的临时文件。
+- 连续 30 天未使用的预览会被删除，下次浏览时自动重建。
+- 已访问预览的使用时间最多每 24 小时更新一次，减少磁盘写入。
+- `./previews` 可以独立清空，不会影响 `/flow` 中的正文与原始媒体。
 
-平台账号统一在设置页管理。B 站默认使用手机客户端扫码登录：后端先访问 B 站主页建立设备会话，再生成二维码并轮询确认状态；登录成功后自动从响应 Cookie 中提取并加密保存所需凭证。手动 Cookie 导入仅作为高级备用方式。Pixiv 改为浏览器请求头接入：从已登录 Pixiv 的浏览器开发者工具中复制 User-Agent、Baggage、Cookie、用户 ID，以及可选的 Sentry-Trace 和 X-CSRF-TOKEN，在平台凭证卡片中验证并加密保存。微博支持账号密码、移动端扫码和手动 Cookie 三种登录方式。账号密码只用于当次向微博交换会话，不会写入本地配置；若微博要求验证码或二次安全验证，页面会提示改用扫码。成功后服务端仅加密保存会话 Cookie。
+## 网络代理
 
-保存前服务会验证平台登录状态。原始请求头、token 与 Cookie 不会返回前端，而是随平台配置通过 AES-GCM 加密保存在 `/data/bilibili.enc`，密钥保存在 `/data/secret.key`。应将整个 `data` 目录视为敏感数据，限制宿主机访问权限并定期备份；不要提交到 Git 仓库。Pixiv 和微博接口策略可能随平台调整，使用时应遵守各平台服务条款，并使用自己有权访问的账号。
+“设置 → 网络代理”支持 `http://`、`https://`、`socks5://` 和 `socks5h://`，可供平台登录、验证与采集共用。
 
-### 项目代理
-
-「设置 → 网络代理」可配置供所有平台连接器复用的项目代理，支持 `http://`、`https://`、`socks5://` 和 `socks5h://`，也支持在 URL 中携带用户名与密码。设置页只显示脱敏地址，修改代理时需要重新输入完整地址。
-
-Docker 容器中的 `127.0.0.1` 指向容器自身，并不是宿主机。如果代理软件运行在宿主机的 `7890` 端口，应填写：
+容器内的 `127.0.0.1` 指向容器本身。代理运行在 Docker 宿主机的 `7890` 端口时，应填写：
 
 ```text
 http://host.docker.internal:7890
@@ -123,24 +259,86 @@ http://host.docker.internal:7890
 socks5://host.docker.internal:7890
 ```
 
-代理软件还必须允许来自 Docker 网络的连接。保存前可以使用「测试连接」检查是否能够访问 pixiv；保存后 B 站凭证验证、UP 主搜索以及后续 Pixiv connector 都会使用该代理。
+代理程序还需要允许 Docker 网络访问。设置页提供连接测试，保存时只显示脱敏后的代理地址。
 
-### 来源详细设置
+## 配置备份与恢复
 
-「订阅平台」展示所有来源卡片。桌面端可右键卡片打开详细设置，触屏设备可点击「详细设置」。B 站来源可以调整启用状态、执行计划和内容范围，历史动态由用户手动补全。
+设置页提供配置备份和恢复。备份前请确认其中是否包含敏感账号配置，并将备份文件保存在可信位置。媒体归档和预览目录体积通常较大，应通过宿主机文件备份单独保护 `flow`；`previews` 可随时重新生成。
 
-### GitHub Actions
+## Lumir 客户端 API
 
-工作流 [`docker-publish.yml`](.github/workflows/docker-publish.yml) 会在 `main` 分支推送、`v*` 标签和手动触发时构建并推送镜像；Pull Request 只执行构建校验，不推送镜像。默认构建 `linux/amd64` 与 `linux/arm64`，并使用 `GITHUB_TOKEN` 登录 GHCR。
+面向 Lumir 安卓客户端的稳定接口位于 `/api/v1`，客户端健康检查位于 `/api/v1/health`。完整字段和请求示例见 [`docs/api-v1.md`](docs/api-v1.md)。
 
-仓库 Settings → Actions → General 中应允许 Actions 创建和写入 packages；如果发布失败，请确认工作流权限包含 `packages: write`，并确保仓库归属账号与镜像路径中的 `hyaeve` 一致。
+核心接口：
 
-## 采集器实现建议
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `POST` | `/api/v1/auth/login` | 使用 Lumic 账号密码换取 Bearer Token |
+| `GET` | `/api/v1/auth/session` | 检查客户端令牌会话 |
+| `POST` | `/api/v1/auth/logout` | 注销当前令牌 |
+| `GET` | `/api/v1/posts?limit=30&cursor=...` | 游标分页读取动态，默认 30 条，单页最多 100 条 |
+| `GET` | `/api/v1/feeds` | 获取统一订阅来源 |
+| `POST` | `/api/v1/sync` | 触发所有已启用来源的增量同步 |
+| `GET` | `/api/v1/health` | 客户端 API 健康检查 |
 
-平台采集应优先使用官方开放接口或获得授权的账号会话，并遵守平台服务条款、robots 规则、访问频率限制和隐私要求。建议将每个平台实现为独立 connector：
+动态接口支持 `source`、`liked`、`author`、`tag`、`q` 和最新/最早顺序等筛选条件。受保护接口使用：
 
-- 微博：点赞流、指定博主、手动历史补全、增量同步
-- pixiv：关注画师作品流、标签和作品媒体
-- 哔哩哔哩：按昵称搜索并订阅指定 UP 主，仅允许图文动态与专栏；视频投稿、视频动态和转发视频卡片必须过滤
+```http
+Authorization: Bearer <token>
+```
 
-添加订阅只保存来源，不会立即拉取动态。定时同步和“立即同步”只拉取最新内容；需要补全全部历史时，在订阅平台页面手动执行“补全全部历史动态”。
+客户端应持续使用响应中的游标加载下一页，不要一次请求全部动态。媒体响应同时提供适合列表的预览资源和查看模式使用的原始资源。
+
+## 本地开发
+
+需要 Node.js 22、Go 1.22 以及 npm。
+
+启动后端：
+
+```bash
+cd backend
+go run .
+```
+
+另开终端启动前端：
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+后端默认监听 `http://localhost:5500`，Vite 开发服务器默认监听 `http://localhost:5173`。
+
+执行检查与构建：
+
+```bash
+cd backend
+go test ./...
+
+cd ../frontend
+npm run build
+```
+
+本地构建容器镜像：
+
+```bash
+docker build -t lumic:local .
+```
+
+如需使用本地镜像启动，将 Compose 中的 `image` 临时改为 `lumic:local` 后执行 `docker compose up -d`。
+
+## 镜像发布
+
+GitHub Actions 工作流 [`.github/workflows/docker-publish.yml`](.github/workflows/docker-publish.yml) 会在以下情况构建镜像：
+
+- 推送到 `main` 分支。
+- 推送 `v*` 版本标签。
+- 手动触发工作流。
+- Pull Request 仅执行构建验证，不发布镜像。
+
+发布镜像支持 `linux/amd64` 和 `linux/arm64`，目标为 `ghcr.io/hyaeve/lumic`。
+
+## 使用说明
+
+Lumic 用于归档你本人有权访问的内容。请遵守各平台服务条款、版权要求、访问频率限制和当地法律，不要公开分发他人的受限内容或泄露账号凭证。

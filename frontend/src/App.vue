@@ -103,6 +103,7 @@ const timelineSearch = ref('')
 const timelineSearchFocused = ref(false)
 const mediaShapes = ref({})
 const mediaRatios = ref({})
+const videoRatios = ref({})
 const timelineStart = ref(0)
 const timelineEnd = ref(15)
 const timelineHeights = ref({})
@@ -113,6 +114,9 @@ const masonryGap = ref(14)
 const masonryViewportTop = ref(0)
 const masonryViewportBottom = ref(900)
 const masonryDetailPost = ref(null)
+const mobileDetailIndex = ref(0)
+const mobilePostReturnPath = ref('/')
+const pendingPostId = ref('')
 const feedListElement = ref(null)
 const estimatedPostHeight = 560
 const timelineOverscan = 5
@@ -137,7 +141,9 @@ let lightboxLastTap = { time: 0, x: 0, y: 0 }
 let lightboxDockTimer = 0
 let lightboxLongPressTimer = 0
 let meteorBurstTimer = 0
+let meteorCleanupTimer = 0
 let meteorBurstSequence = 0
+let mobileDetailTouch = null
 
 const sourceMeta = {
   bilibili: { label: '哔哩哔哩', icon: 'bl', image: bilibiliIcon, lineImage: bilibiliLineIcon, color: 'blue' },
@@ -164,6 +170,8 @@ const todayStatsCount = computed(() => {
 })
 const favoriteStatsCount = computed(() => statsPosts.value.filter(post => post.liked).length)
 const selectedPostCount = computed(() => selectedPostIds.value.length)
+const mobileDetailMedia = computed(() => postDetailMedia(masonryDetailPost.value))
+const mobileDetailCurrentMedia = computed(() => mobileDetailMedia.value[mobileDetailIndex.value] || null)
 const filteredPosts = computed(() => {
   const allPosts = Array.isArray(posts.value) ? posts.value : []
   const timeline = activeNav.value === 'liked' ? allPosts.filter(post => post.liked) : allPosts
@@ -182,7 +190,7 @@ const filteredPosts = computed(() => {
     return timelineSort.value === 'newest' ? difference : -difference
   })
 })
-const effectiveTimelineView = computed(() => phonePortrait.value ? 'masonry' : timelineView.value)
+const effectiveTimelineView = computed(() => timelineView.value)
 const isMasonryView = computed(() => effectiveTimelineView.value === 'masonry')
 const visiblePosts = computed(() => filteredPosts.value.slice(timelineStart.value, timelineEnd.value))
 function estimateMasonryPostHeight(post) {
@@ -190,13 +198,12 @@ function estimateMasonryPostHeight(post) {
   const inset = phonePortrait.value ? 9 : 12
   let height = inset * 2 + 40
   const firstMedia = post.media?.[0]
-  const firstPoster = post.videos?.find(video => video.poster)?.poster
-  if (firstMedia || firstPoster) {
+  const firstVideo = primaryVideo(post)
+  const firstPoster = firstVideo?.poster
+  if (firstMedia || firstVideo) {
     const ratioKey = `${post.id}:${firstMedia ? 0 : 'video'}`
-    const ratio = mediaRatios.value[ratioKey] || (mediaShapes.value[`${post.id}:0`] === 'portrait' ? 0.74 : mediaShapes.value[`${post.id}:0`] === 'landscape' ? 1.42 : 1)
+    const ratio = mediaRatios.value[ratioKey] || videoRatios.value[post.id] || (firstMedia ? (mediaShapes.value[`${post.id}:0`] === 'portrait' ? 0.74 : mediaShapes.value[`${post.id}:0`] === 'landscape' ? 1.42 : 1) : 16 / 9)
     height += Math.min(width * 1.75, Math.max(width * 0.56, width / ratio)) + 9
-  } else if (post.videos?.length) {
-    height += width * 0.56 + 9
   }
   if (post.caption) {
     const charactersPerLine = Math.max(12, Math.floor((width - inset * 2) / (phonePortrait.value ? 13 : 13.5)))
@@ -302,6 +309,7 @@ async function loadData() {
     if (!postResponse.ok) throw new Error('api unavailable')
     const payload = await postResponse.json()
     posts.value = Array.isArray(payload) ? payload : []
+    resolveRoutedPost()
   } catch { posts.value = [] }
   await loadFeeds()
 }
@@ -342,8 +350,15 @@ function setDarkMode(value) {
 }
 function stopNightMeteorLoop() {
   if (meteorBurstTimer) window.clearTimeout(meteorBurstTimer)
+  if (meteorCleanupTimer) window.clearTimeout(meteorCleanupTimer)
   meteorBurstTimer = 0
+  meteorCleanupTimer = 0
   meteorBurst.value = []
+}
+function scheduleNightMeteorBurst(delay = 22000 + Math.random() * 16000) {
+  if (meteorBurstTimer) window.clearTimeout(meteorBurstTimer)
+  if (!isDark.value) return
+  meteorBurstTimer = window.setTimeout(triggerNightMeteorBurst, delay)
 }
 function triggerNightMeteorBurst() {
   if (!isDark.value) {
@@ -351,34 +366,43 @@ function triggerNightMeteorBurst() {
     return
   }
   const count = 1 + Math.floor(Math.random() * 5)
-  const contentHeight = Math.max(document.querySelector('.content')?.scrollHeight || 0, document.documentElement.scrollHeight, window.innerHeight)
-  const baseDuration = Math.min(13, Math.max(5.5, contentHeight / 540))
+  const viewportHeight = Math.max(window.innerHeight, 560)
   let maximumDuration = 0
   meteorBurst.value = Array.from({ length: count }, (_, index) => ({
     id: `${Date.now()}-${meteorBurstSequence++}`,
     style: (() => {
-      const top = 8 + Math.random() * 96
-      const duration = baseDuration + Math.random() * 1.8
-      maximumDuration = Math.max(maximumDuration, duration + index * 0.32)
+      const top = -90 + Math.random() * 72
+      const travelY = viewportHeight + 180 + Math.random() * 120
+      const travelX = travelY * (0.55 + Math.random() * 0.3)
+      const angle = -(Math.atan2(travelY, travelX) * 180 / Math.PI)
+      const delay = (count >= 3 ? index * 0.62 : index * 0.32) + Math.random() * 0.34
+      const duration = 2.8 + Math.random() * 1.5
+      maximumDuration = Math.max(maximumDuration, duration + delay)
+      const right = count >= 3
+        ? 3 + (index / (count - 1)) * 78 + (Math.random() - 0.5) * 7
+        : -4 + Math.random() * 68
       return {
         '--meteor-top': `${top}px`,
-        '--meteor-right': `${-4 + Math.random() * 58}%`,
-        '--meteor-width': `${130 + Math.random() * 110}px`,
-        '--meteor-delay': `${index * 0.32 + Math.random() * 0.3}s`,
+        '--meteor-right': `${Math.max(-5, Math.min(84, right))}%`,
+        '--meteor-width': `${24 + Math.random() * 22}px`,
+        '--meteor-angle': `${angle.toFixed(2)}deg`,
+        '--meteor-delay': `${delay}s`,
         '--meteor-duration': `${duration}s`,
-        '--meteor-x': `${-Math.max(window.innerWidth * (0.42 + Math.random() * 0.48), 360)}px`,
-        '--meteor-y': `${Math.max(contentHeight - top + 140, window.innerHeight)}px`
+        '--meteor-x': `${-travelX}px`,
+        '--meteor-y': `${travelY}px`
       }
     })()
   }))
-  meteorBurstTimer = window.setTimeout(() => {
+  if (meteorCleanupTimer) window.clearTimeout(meteorCleanupTimer)
+  meteorCleanupTimer = window.setTimeout(() => {
     meteorBurst.value = []
-    meteorBurstTimer = window.setTimeout(triggerNightMeteorBurst, 2400 + Math.random() * 3800)
-  }, maximumDuration * 1000 + 900)
+    meteorCleanupTimer = 0
+  }, maximumDuration * 1000 + 500)
+  scheduleNightMeteorBurst(22000 + Math.random() * 16000)
 }
 function startNightMeteorLoop() {
   stopNightMeteorLoop()
-  if (isDark.value) meteorBurstTimer = window.setTimeout(triggerNightMeteorBurst, 100)
+  if (isDark.value) scheduleNightMeteorBurst(7000 + Math.random() * 5000)
 }
 async function syncNow() {
   syncing.value = true
@@ -705,6 +729,30 @@ function sourceOperationEndpoint(feed) {
   if (feed.source === 'weibo' && feed.id.startsWith('weibo-')) return '/api/weibo/subscriptions'
   if (feed.source === 'pixiv' && feed.id.startsWith('pixiv-')) return '/api/pixiv/subscriptions'
   return '/api/feeds'
+}
+async function toggleFeedEnabled(feed) {
+  if (!feed || sourceActionBusy.value) return
+  const enabled = !feed.enabled
+  sourceActionBusy.value = `toggle:${feed.id}`
+  sourceActionMessage.value = ''
+  settingsError.value = ''
+  try {
+    const response = await fetch(sourceOperationEndpoint(feed), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...feed, enabled }) })
+    if (!response.ok) throw new Error(await responseError(response, enabled ? '启用自动同步失败' : '停用自动同步失败'))
+    const saved = await response.json()
+    const index = feeds.value.findIndex(item => item.id === saved.id)
+    if (index >= 0) feeds.value[index] = saved
+    if (selectedPlatform.value) {
+      const platformIndex = selectedPlatform.value.feeds.findIndex(item => item.id === saved.id)
+      if (platformIndex >= 0) selectedPlatform.value.feeds[platformIndex] = saved
+    }
+    if (selectedFeed.value?.id === saved.id) selectedFeed.value = { ...selectedFeed.value, ...saved }
+    sourceActionMessage.value = saved.enabled ? `已启用“${saved.name}”自动同步` : `已停用“${saved.name}”自动同步`
+  } catch (error) {
+    settingsError.value = error.message
+  } finally {
+    sourceActionBusy.value = ''
+  }
 }
 async function syncSource(feed, full = false) {
   const action = full ? 'resync' : 'sync'
@@ -1036,7 +1084,7 @@ function handleGlobalKeydown(event) {
     return
   }
   if (masonryDetailPost.value && event.key === 'Escape') {
-    masonryDetailPost.value = null
+    closePostDetail()
     return
   }
   if (credentialPlatform.value && event.key === 'Escape') {
@@ -1100,7 +1148,6 @@ function openContextMenu(event, post = null) {
 function startMultiSelectMode() {
   const unfavoriteMode = activeNav.value === 'liked'
   closeContextMenu()
-  if (!unfavoriteMode) navigateTo('all', 'all')
   selectionAction.value = unfavoriteMode ? 'unfavorite' : 'delete'
   selectedPostIds.value = []
   selectionMode.value = true
@@ -1197,7 +1244,7 @@ async function addBilibiliFavoriteOpusSource() {
     if (!response.ok) throw new Error(await responseError(response, response.status === 409 ? 'B站收藏专栏来源已添加' : '添加 B站收藏专栏来源失败'))
     const feed = await response.json(); await loadFeeds(feed)
     if (selectedPlatform.value?.key === 'bilibili') selectedPlatform.value.feeds = feeds.value.filter(item => item.source === 'bilibili')
-    sourceActionMessage.value = '已添加“收藏专栏”，可手动补全历史收藏'
+    sourceActionMessage.value = '已添加“收藏专栏”，可手动获取尚未归档的历史收藏'
   } catch (error) { settingsError.value = error.message } finally { sourceActionBusy.value = '' }
 }
 function setMediaShape(post, mediaIndex, event) {
@@ -1207,27 +1254,93 @@ function setMediaShape(post, mediaIndex, event) {
   mediaRatios.value[`${post.id}:${mediaIndex}`] = image.naturalWidth / image.naturalHeight
 }
 function setMasonryCoverRatio(post, event, videoPoster = false) {
-  const image = event.target
-  if (!image.naturalWidth || !image.naturalHeight) return
-  mediaRatios.value[`${post.id}:${videoPoster ? 'video' : 0}`] = image.naturalWidth / image.naturalHeight
+  const media = event.target
+  const width = media.naturalWidth || media.videoWidth
+  const height = media.naturalHeight || media.videoHeight
+  if (!width || !height) return
+  const ratio = width / height
+  mediaRatios.value[`${post.id}:${videoPoster ? 'video' : 0}`] = ratio
+  if (videoPoster) videoRatios.value[post.id] = ratio
   scheduleTimelineWindow()
 }
 function mediaShape(post, mediaIndex) {
   return mediaShapes.value[`${post.id}:${mediaIndex}`] || 'unknown'
 }
 function masonryCover(post) {
-  return post.media?.[0] || post.videos?.find(video => video.poster)?.poster || ''
+  return post.media?.[0] || primaryVideo(post)?.poster || ''
 }
 function masonryCoverIsVideo(post) {
-  return !post.media?.length && Boolean(post.videos?.length)
+  return !post.media?.length && Boolean(primaryVideo(post))
 }
-function toggleTimelineView() {
-  if (phonePortrait.value) return
+function masonryPostHasVideo(post) {
+  return Boolean(primaryVideo(post))
+}
+function primaryVideo(post) {
+  return post?.videos?.find(video => String(video?.url || '').trim()) || null
+}
+function postDetailMedia(post) {
+  if (!post) return []
+  const images = (post.media || []).map((src, index) => ({ type: 'image', src, key: `image:${index}:${src}` }))
+  const video = primaryVideo(post)
+  if (video) images.push({ type: 'video', src: video.url, poster: video.poster || '', key: `video:${video.url}` })
+  return images
+}
+function setPostVideoRatio(post, event) {
+  const video = event.target
+  if (!video.videoWidth || !video.videoHeight) return
+  const ratio = video.videoWidth / video.videoHeight
+  videoRatios.value[post.id] = ratio
+  mediaRatios.value[`${post.id}:video`] = ratio
+  scheduleTimelineWindow()
+}
+function postVideoFrameClass(post) {
+  const ratio = videoRatios.value[post?.id] || mediaRatios.value[`${post?.id}:video`] || 16 / 9
+  return ratio < 1 ? 'portrait' : 'landscape'
+}
+function postVideoFrameStyle(post) {
+  const ratio = videoRatios.value[post?.id] || mediaRatios.value[`${post?.id}:video`] || 16 / 9
+  return { '--post-video-ratio': String(ratio) }
+}
+function toggleTimelineView(event) {
   timelineView.value = timelineView.value === 'list' ? 'masonry' : 'list'
+  if (event?.detail > 0) event.currentTarget?.blur()
 }
 function openMasonryPost(post) {
   if (selectionMode.value) return
   masonryDetailPost.value = post
+  mobileDetailIndex.value = 0
+  if (phonePortrait.value) {
+    mobilePostReturnPath.value = window.location.pathname.startsWith('/post/') ? '/' : window.location.pathname
+    updateRoute(`/post/${encodeURIComponent(post.id)}`)
+    window.scrollTo({ top: 0, behavior: 'auto' })
+  }
+}
+function closePostDetail() {
+  masonryDetailPost.value = null
+  mobileDetailIndex.value = 0
+  pendingPostId.value = ''
+  if (window.location.pathname.startsWith('/post/')) {
+    updateRoute(mobilePostReturnPath.value || '/', true)
+  }
+}
+function moveMobileDetailMedia(direction) {
+  const count = mobileDetailMedia.value.length
+  if (count < 2) return
+  mobileDetailIndex.value = (mobileDetailIndex.value + direction + count) % count
+}
+function beginMobileDetailSwipe(event) {
+  const touch = event.changedTouches?.[0]
+  if (!touch) return
+  mobileDetailTouch = { x: touch.clientX, y: touch.clientY }
+}
+function finishMobileDetailSwipe(event) {
+  const touch = event.changedTouches?.[0]
+  if (!touch || !mobileDetailTouch) return
+  const deltaX = touch.clientX - mobileDetailTouch.x
+  const deltaY = touch.clientY - mobileDetailTouch.y
+  mobileDetailTouch = null
+  if (Math.abs(deltaX) < 48 || Math.abs(deltaX) <= Math.abs(deltaY) * 1.15) return
+  moveMobileDetailMedia(deltaX < 0 ? 1 : -1)
 }
 function masonryItemStyle(item) {
   return {
@@ -1263,6 +1376,7 @@ function prunePostCaches() {
   masonryHeights.value = Object.fromEntries(Object.entries(masonryHeights.value).filter(([id]) => activeIds.has(id)))
   mediaShapes.value = Object.fromEntries(Object.entries(mediaShapes.value).filter(([key]) => activeIds.has(key.split(':', 1)[0])))
   mediaRatios.value = Object.fromEntries(Object.entries(mediaRatios.value).filter(([key]) => activeIds.has(key.split(':', 1)[0])))
+  videoRatios.value = Object.fromEntries(Object.entries(videoRatios.value).filter(([id]) => activeIds.has(id)))
   if (masonryDetailPost.value && !activeIds.has(String(masonryDetailPost.value.id))) masonryDetailPost.value = null
 }
 async function updatePostFavorite(post, liked) {
@@ -1386,10 +1500,15 @@ function updatePhonePortrait() {
   phonePortrait.value = nextPhonePortrait
   mobileMenuOpen.value = false
   if (lightbox.value.open && !nextPhonePortrait) showLightboxDock(true)
+  if (nextPhonePortrait && masonryDetailPost.value && !window.location.pathname.startsWith('/post/')) {
+    mobilePostReturnPath.value = window.location.pathname
+    updateRoute(`/post/${encodeURIComponent(masonryDetailPost.value.id)}`)
+  }
   if (nextPhonePortrait) openPhoneDefaultTimeline()
   resetTimelineWindow()
 }
 function openPhoneDefaultTimeline() {
+  if (window.location.pathname.startsWith('/post/')) return
   showSettings.value = false
   activeNav.value = 'all'
   activeSource.value = 'all'
@@ -1417,8 +1536,15 @@ function updateRoute(path, replace = false) {
 function applyRoute() {
   const segments = window.location.pathname.split('/').filter(Boolean).map(segment => decodeURIComponent(segment))
   showSettings.value = false
+  masonryDetailPost.value = null
   selectedAuthor.value = null
   selectedTag.value = ''
+  pendingPostId.value = ''
+  if (segments[0] === 'post' && segments[1]) {
+    activeNav.value = 'all'; activeSource.value = 'all'; pendingPostId.value = segments.slice(1).join('/')
+    resolveRoutedPost()
+    return
+  }
   if (segments[0] === 'source' && validSources.has(segments[1])) {
     activeNav.value = 'source'; activeSource.value = segments[1]
     return
@@ -1447,6 +1573,13 @@ function applyRoute() {
   }
   activeNav.value = 'all'; activeSource.value = 'all'
   if (segments.length) updateRoute('/', true)
+}
+function resolveRoutedPost() {
+  if (!pendingPostId.value) return
+  const post = posts.value.find(item => String(item.id) === pendingPostId.value)
+  if (!post) return
+  masonryDetailPost.value = post
+  mobileDetailIndex.value = 0
 }
 function formatFans(count) { return count >= 10000 ? `${(count / 10000).toFixed(1)}万` : count }
 function platformEmptyMessage(platformKey) {
@@ -1486,7 +1619,7 @@ watch(platformCards, cards => {
   if (!credentialPlatform.value) return
   credentialPlatform.value = cards.find(platform => platform.key === credentialPlatform.value.key) || null
 })
-onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; timelineView.value = localStorage.getItem('lumic-timeline-view') === 'masonry' ? 'masonry' : 'list'; document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#080a0e' : '#fbf7ea'); phonePortraitQuery = window.matchMedia('(max-width: 760px)'); phonePortrait.value = isPhonePortraitScreen(); phonePortraitQuery.addEventListener('change', updatePhonePortrait); window.addEventListener('orientationchange', updatePhonePortrait); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); if (phonePortrait.value) openPhoneDefaultTimeline(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', applyRoute); window.addEventListener('scroll', scheduleTimelineWindow, { passive: true }); window.addEventListener('resize', handleWindowResize) })
+onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; timelineView.value = localStorage.getItem('lumic-timeline-view') === 'masonry' ? 'masonry' : 'list'; document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#080a0e' : '#fbf7ea'); phonePortraitQuery = window.matchMedia('(max-width: 760px)'); phonePortrait.value = isPhonePortraitScreen(); phonePortraitQuery.addEventListener('change', updatePhonePortrait); window.addEventListener('orientationchange', updatePhonePortrait); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); if (phonePortrait.value && window.location.pathname === '/') openPhoneDefaultTimeline(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', applyRoute); window.addEventListener('scroll', scheduleTimelineWindow, { passive: true }); window.addEventListener('resize', handleWindowResize) })
 onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLoop(); if (sessionPollTimer) window.clearInterval(sessionPollTimer); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); window.removeEventListener('orientationchange', updatePhonePortrait); postResizeObserver?.disconnect(); observedPostElements.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); closeLightbox(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', applyRoute); window.removeEventListener('scroll', scheduleTimelineWindow); window.removeEventListener('resize', handleWindowResize); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
 </script>
 
@@ -1513,7 +1646,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
     </div>
   </div>
   <div v-else class="app-shell" :class="{ dark: isDark, 'lightbox-active': lightbox.open, 'phone-ui': phonePortrait, 'timeline-search-focused': timelineSearchFocused }" @click="showBrandMenu = false">
-    <button v-if="phonePortrait && !timelineSearchFocused" class="mobile-menu-toggle" type="button" :class="{ open: mobileMenuOpen }" :aria-expanded="mobileMenuOpen" :title="mobileMenuOpen ? '关闭导航' : '打开导航'" :aria-label="mobileMenuOpen ? '关闭导航' : '打开导航'" @pointerdown.stop @click.stop="mobileMenuOpen = !mobileMenuOpen">
+    <button v-if="phonePortrait && !timelineSearchFocused && !masonryDetailPost" class="mobile-menu-toggle" type="button" :class="{ open: mobileMenuOpen }" :aria-expanded="mobileMenuOpen" :title="mobileMenuOpen ? '关闭导航' : '打开导航'" :aria-label="mobileMenuOpen ? '关闭导航' : '打开导航'" @pointerdown.stop @click.stop="mobileMenuOpen = !mobileMenuOpen">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path class="menu-line menu-line-top" d="M5 7h14"/><path class="menu-line menu-line-middle" d="M5 12h14"/><path class="menu-line menu-line-bottom" d="M5 17h14"/></svg>
     </button>
     <button v-if="mobileMenuOpen" class="mobile-menu-scrim" type="button" aria-label="关闭导航" @click="mobileMenuOpen = false"></button>
@@ -1554,7 +1687,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
       </div>
     </aside>
 
-    <main v-if="!showSettings && activeNav !== 'pulls'" :class="['content', { 'liked-page': activeNav === 'liked' }]" @click="closeContextMenu" @contextmenu.prevent="openContextMenu($event)">
+    <main v-if="!showSettings && activeNav !== 'pulls' && !(phonePortrait && masonryDetailPost)" :class="['content', { 'liked-page': activeNav === 'liked' }]" @click="closeContextMenu" @contextmenu.prevent="openContextMenu($event)">
       <div v-if="!authorProfile && activeNav !== 'liked'" class="night-sky-decor" aria-hidden="true"><i class="night-haze"></i><i class="night-moon"></i><i class="night-star star-one"></i><i class="night-star star-two"></i><i class="night-star star-three"></i><i class="night-star star-four"></i><i class="night-star star-five"></i><i class="night-star star-six"></i><i class="night-star star-seven"></i><i class="night-star star-eight"></i></div>
       <div v-if="!authorProfile && activeNav !== 'liked'" class="night-meteor-layer" aria-hidden="true"><i v-for="meteor in meteorBurst" :key="meteor.id" class="night-meteor" :style="meteor.style"></i></div>
       <div v-if="!authorProfile && activeNav !== 'liked'" class="seasonal-decor" :class="`season-${localSeason}`" aria-hidden="true">
@@ -1610,7 +1743,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
 <button class="timeline-sort-button" type="button" :title="timelineSort === 'newest' ? '最新' : '最旧'" :aria-label="timelineSort === 'newest' ? '当前按最新排序，点击切换为最旧' : '当前按最旧排序，点击切换为最新'" @click="timelineSort = timelineSort === 'newest' ? 'oldest' : 'newest'">
   <span class="timeline-sort-symbol" :style="{ '--nav-mask': `url(${timelineSort === 'newest' ? newestSortIcon : oldestSortIcon})` }" aria-hidden="true"></span>
 </button>
-<button v-if="!phonePortrait" class="timeline-view-button" type="button" :class="{ selected: isMasonryView }" :title="isMasonryView ? '当前：瀑布流；点击切换为列表' : '当前：列表；点击切换为瀑布流'" :aria-label="isMasonryView ? '当前为瀑布流视图，点击切换为列表' : '当前为列表视图，点击切换为瀑布流'" @click="toggleTimelineView">
+<button class="timeline-view-button" type="button" :title="isMasonryView ? '当前：瀑布流；点击切换为列表' : '当前：列表；点击切换为瀑布流'" :aria-label="isMasonryView ? '当前为瀑布流视图，点击切换为列表' : '当前为列表视图，点击切换为瀑布流'" @click="toggleTimelineView">
   <span class="timeline-view-symbol" :style="{ '--nav-mask': `url(${isMasonryView ? masonryViewIcon : listViewIcon})` }" aria-hidden="true"></span>
 </button>
 </div>
@@ -1637,8 +1770,8 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
 <div v-if="post.media?.length" :class="['media-grid', `media-count-${Math.min(post.media.length, 9)}`]">
 <button v-for="(media, mediaIndex) in post.media.slice(0, 9)" :key="media" :class="['media-frame', mediaShape(post, mediaIndex)]" type="button" :aria-label="`查看 ${post.author} 的第 ${mediaIndex + 1} 张图片`" @click="openLightbox(post, mediaIndex)"><img :src="previewMedia(media)" alt="" loading="lazy" decoding="async" fetchpriority="low" @load="setMediaShape(post, mediaIndex, $event); scheduleTimelineWindow()"><span v-if="mediaIndex === 8 && post.media.length > 9" class="media-more-count">+{{ post.media.length - 9 }}</span></button>
 </div>
-<div v-if="post.videos?.length" class="post-video-list">
-<video v-for="video in post.videos" :key="video.url" :src="video.url" :poster="video.poster ? previewMedia(video.poster) : undefined" controls playsinline preload="metadata" @loadedmetadata="scheduleTimelineWindow"></video>
+<div v-if="primaryVideo(post)" class="post-video-list">
+<div :class="['post-video-frame', postVideoFrameClass(post)]" :style="postVideoFrameStyle(post)"><video :src="primaryVideo(post).url" :poster="primaryVideo(post).poster ? previewMedia(primaryVideo(post).poster) : undefined" controls playsinline preload="metadata" @loadedmetadata="setPostVideoRatio(post, $event)"></video></div>
 </div>
 <div class="post-foot">
 <div class="tag-row"><button v-for="tag in post.tags" :key="tag" type="button" :class="{ active: selectedTag === tag }" @click="openTag(tag)">#{{ tag }}</button></div>
@@ -1656,9 +1789,12 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
   <div v-if="masonryCover(item.post)" class="masonry-cover">
     <img :src="previewMedia(masonryCover(item.post))" alt="" loading="lazy" decoding="async" fetchpriority="low" @load="setMasonryCoverRatio(item.post, $event, masonryCoverIsVideo(item.post))">
     <span v-if="item.post.media?.length > 1" class="masonry-media-count">1 / {{ item.post.media.length }}</span>
-    <span v-if="masonryCoverIsVideo(item.post)" class="masonry-video-mark" aria-label="视频动态"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 7 8 5-8 5Z"/></svg></span>
+    <span v-if="masonryPostHasVideo(item.post)" class="masonry-video-mark" aria-label="视频动态"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 7 8 5-8 5Z"/></svg></span>
   </div>
-  <div v-else-if="item.post.videos?.length" class="masonry-video-placeholder"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3Z"/></svg></div>
+  <div v-else-if="primaryVideo(item.post)" class="masonry-cover masonry-video-cover">
+    <video :src="primaryVideo(item.post).url" muted playsinline preload="metadata" @loadedmetadata="setMasonryCoverRatio(item.post, $event, true)"></video>
+    <span class="masonry-video-mark" aria-label="视频动态"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 7 8 5-8 5Z"/></svg></span>
+  </div>
   <div class="masonry-card-body">
     <p v-if="item.post.caption" class="masonry-caption">{{ item.post.caption }}</p>
     <div v-if="item.post.tags?.length" class="masonry-tags"><button v-for="tag in item.post.tags.slice(0, 2)" :key="tag" type="button" @click.stop="openTag(tag)">#{{ tag }}</button><span v-if="item.post.tags.length > 2">+{{ item.post.tags.length - 2 }}</span></div>
@@ -1696,19 +1832,42 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
         <div v-if="!feeds.length" class="empty">还没有订阅作者，请先添加 UP 主或微博博主。</div>
       </section>
     </main>
-    <div v-if="masonryDetailPost" class="modal-backdrop masonry-detail-backdrop" @click.self="masonryDetailPost = null">
+    <main v-if="phonePortrait && masonryDetailPost" class="content mobile-post-detail-page">
+      <header class="mobile-post-detail-head">
+        <button class="mobile-post-back" type="button" title="返回动态页" aria-label="返回动态页" @click="closePostDetail"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg></button>
+        <button class="mobile-post-author" type="button" @click="openAuthor(masonryDetailPost)"><img :src="masonryDetailPost.avatar" :alt="masonryDetailPost.author"><strong>{{ masonryDetailPost.author }}</strong></button>
+        <span :class="['source-pill', 'mobile-post-source', sourceMeta[masonryDetailPost.source].color]"><img :class="['source-icon', { 'twitter-night-icon': masonryDetailPost.source === 'twitter' && isDark }]" :src="sourceIconFor(masonryDetailPost.source)" :alt="`${sourceMeta[masonryDetailPost.source].label}图标`">{{ sourceMeta[masonryDetailPost.source].label }}</span>
+      </header>
+      <section v-if="mobileDetailCurrentMedia" :class="['mobile-post-media-stage', { 'video-media': mobileDetailCurrentMedia.type === 'video' }, mobileDetailCurrentMedia.type === 'video' ? postVideoFrameClass(masonryDetailPost) : '']" :style="mobileDetailCurrentMedia.type === 'video' ? postVideoFrameStyle(masonryDetailPost) : undefined" @touchstart.passive="beginMobileDetailSwipe" @touchend.passive="finishMobileDetailSwipe">
+        <img v-if="mobileDetailCurrentMedia.type === 'image'" :key="mobileDetailCurrentMedia.key" :src="mobileDetailCurrentMedia.src" :alt="`${masonryDetailPost.author} 的第 ${mobileDetailIndex + 1} 张图片`">
+        <video v-else :key="mobileDetailCurrentMedia.key" :src="mobileDetailCurrentMedia.src" :poster="mobileDetailCurrentMedia.poster || undefined" controls playsinline autoplay muted preload="auto" @loadedmetadata="setPostVideoRatio(masonryDetailPost, $event)"></video>
+        <div v-if="mobileDetailMedia.length > 1" class="mobile-post-media-dots" aria-label="媒体分页"><button v-for="(media, index) in mobileDetailMedia" :key="media.key" type="button" :class="{ active: index === mobileDetailIndex }" :aria-label="`查看第 ${index + 1} 项媒体`" @click="mobileDetailIndex = index"></button></div>
+      </section>
+      <section class="mobile-post-copy">
+        <p v-if="masonryDetailPost.caption" class="caption">{{ masonryDetailPost.caption }}</p>
+        <div v-if="masonryDetailPost.tags?.length" class="tag-row"><button v-for="tag in masonryDetailPost.tags" :key="tag" type="button" @click="openTag(tag)">#{{ tag }}</button></div>
+      </section>
+      <footer class="mobile-post-detail-foot">
+        <time :datetime="masonryDetailPost.published">{{ postDateTime(masonryDetailPost.published) }}</time>
+        <div class="mobile-post-detail-actions">
+          <button :class="['post-like-button', { liked: masonryDetailPost.liked }]" type="button" :disabled="postActionBusy === `like:${masonryDetailPost.id}`" :title="masonryDetailPost.liked ? '取消收藏' : '收藏'" :aria-label="masonryDetailPost.liked ? '取消收藏' : '收藏'" @click="togglePostLike(masonryDetailPost)"><span class="post-action-mask post-favorite-symbol" :style="{ '--post-action-mask': `url(${favoriteNavIcon})` }" aria-hidden="true"></span></button>
+          <button class="post-visit-button" type="button" :disabled="!masonryDetailPost.originalUrl" title="访问原动态" aria-label="访问原动态" @click="openOriginalPost(masonryDetailPost)"><span class="post-action-mask post-visit-symbol" :style="{ '--post-action-mask': `url(${visitPostIcon})` }" aria-hidden="true"></span></button>
+        </div>
+      </footer>
+    </main>
+    <div v-if="masonryDetailPost && !phonePortrait" class="modal-backdrop masonry-detail-backdrop" @click.self="closePostDetail">
       <article class="masonry-detail-modal" role="dialog" aria-modal="true" :aria-label="`${masonryDetailPost.author} 的动态详情`">
-        <button class="modal-close" type="button" title="关闭详情" aria-label="关闭详情" @click="masonryDetailPost = null">×</button>
+        <button class="modal-close" type="button" title="关闭详情" aria-label="关闭详情" @click="closePostDetail">×</button>
         <div class="post-head">
           <button class="post-author-avatar" type="button" :title="`查看 ${masonryDetailPost.author} 的动态`" @click="openAuthor(masonryDetailPost)"><img :src="masonryDetailPost.avatar" :alt="masonryDetailPost.author"></button>
           <div class="author"><button class="post-author-name" type="button" @click="openAuthor(masonryDetailPost)"><strong>{{ masonryDetailPost.author }}</strong></button><span>{{ postDateTime(masonryDetailPost.published) }}</span></div>
           <span :class="['source-pill', 'post-source-pill', sourceMeta[masonryDetailPost.source].color]"><img :class="['source-icon', { 'twitter-night-icon': masonryDetailPost.source === 'twitter' && isDark }]" :src="sourceIconFor(masonryDetailPost.source)" :alt="`${sourceMeta[masonryDetailPost.source].label}图标`">{{ sourceMeta[masonryDetailPost.source].label }}</span>
         </div>
         <p v-if="masonryDetailPost.caption" class="caption">{{ masonryDetailPost.caption }}</p>
-        <div v-if="masonryDetailPost.media?.length" :class="['media-grid', `media-count-${Math.min(masonryDetailPost.media.length, 9)}`]">
-          <button v-for="(media, mediaIndex) in masonryDetailPost.media.slice(0, 9)" :key="media" :class="['media-frame', mediaShape(masonryDetailPost, mediaIndex)]" type="button" :aria-label="`查看第 ${mediaIndex + 1} 张图片`" @click="openLightbox(masonryDetailPost, mediaIndex)"><img :src="previewMedia(media)" alt="" loading="lazy" decoding="async" @load="setMediaShape(masonryDetailPost, mediaIndex, $event)"><span v-if="mediaIndex === 8 && masonryDetailPost.media.length > 9" class="media-more-count">+{{ masonryDetailPost.media.length - 9 }}</span></button>
+        <div v-if="masonryDetailPost.media?.length" :class="['media-grid', 'masonry-detail-media-grid', `media-count-${Math.min(masonryDetailPost.media.length, 4)}`]">
+          <button v-for="(media, mediaIndex) in masonryDetailPost.media.slice(0, 4)" :key="media" :class="['media-frame', mediaShape(masonryDetailPost, mediaIndex)]" type="button" :aria-label="`查看第 ${mediaIndex + 1} 张图片`" @click="openLightbox(masonryDetailPost, mediaIndex)"><img :src="previewMedia(media)" alt="" loading="lazy" decoding="async" @load="setMediaShape(masonryDetailPost, mediaIndex, $event)"><span v-if="mediaIndex === 3 && masonryDetailPost.media.length > 4" class="media-more-count">+{{ masonryDetailPost.media.length - 4 }}</span></button>
         </div>
-        <div v-if="masonryDetailPost.videos?.length" class="post-video-list"><video v-for="video in masonryDetailPost.videos" :key="video.url" :src="video.url" :poster="video.poster ? previewMedia(video.poster) : undefined" controls playsinline preload="metadata"></video></div>
+        <div v-if="primaryVideo(masonryDetailPost)" class="post-video-list"><div :class="['post-video-frame', postVideoFrameClass(masonryDetailPost)]" :style="postVideoFrameStyle(masonryDetailPost)"><video :src="primaryVideo(masonryDetailPost).url" :poster="primaryVideo(masonryDetailPost).poster ? previewMedia(primaryVideo(masonryDetailPost).poster) : undefined" controls playsinline autoplay muted preload="auto" @loadedmetadata="setPostVideoRatio(masonryDetailPost, $event)"></video></div></div>
         <div class="post-foot masonry-detail-foot"><div class="tag-row"><button v-for="tag in masonryDetailPost.tags" :key="tag" type="button" @click="openTag(tag)">#{{ tag }}</button></div><div class="post-foot-actions"><button :class="['post-like-button', { liked: masonryDetailPost.liked }]" :title="masonryDetailPost.liked ? '取消收藏' : '收藏'" @click="togglePostLike(masonryDetailPost)"><span class="post-action-mask post-favorite-symbol" :style="{ '--post-action-mask': `url(${favoriteNavIcon})` }" aria-hidden="true"></span></button><button class="post-visit-button" :disabled="!masonryDetailPost.originalUrl" title="访问原动态" @click="openOriginalPost(masonryDetailPost)"><span class="post-action-mask post-visit-symbol" :style="{ '--post-action-mask': `url(${visitPostIcon})` }" aria-hidden="true"></span></button></div></div>
       </article>
     </div>
@@ -1778,7 +1937,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
         <button class="modal-close" @click="showBilibili = false">×</button>
         <p class="eyebrow">BILIBILI SOURCE</p>
         <h2>订阅 UP 主图文</h2>
-        <p>仅添加订阅，不会立即拉取动态。历史内容可在订阅平台页面手动补全；专栏可在来源设置中单独开启。</p>
+        <p>仅添加订阅，不会立即拉取动态。历史内容可在订阅平台页面手动获取；专栏可在来源设置中单独开启。</p>
         <div class="bili-account"><span>已连接 B 站账号 · UID {{ biliAccount.userId }}</span><button @click="showBilibili = false; openSettings('platforms')">管理凭证</button></div>
         <form class="bili-search" @submit.prevent="searchBilibili"><input v-model="biliKeyword" placeholder="搜索 UP 主昵称" maxlength="40" required><button :disabled="biliBusy">⌕ 搜索</button></form>
         <label class="subscription-tag-field"><span>作者标签</span><input v-model="biliSubscriptionTags" placeholder="#标签1 #标签2" maxlength="120"><small>订阅搜索结果中的作者时，会同时保存这些标签。</small></label>
@@ -1794,7 +1953,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
         <button class="modal-close" @click="showWeibo = false">×</button>
         <p class="eyebrow">WEIBO SOURCE</p>
         <h2>添加微博博主</h2>
-        <p>搜索并添加微博博主，不会立即拉取动态。历史内容可在订阅平台页面手动补全。</p>
+        <p>搜索并添加微博博主，不会立即拉取动态。历史内容可在订阅平台页面手动获取。</p>
         <div class="bili-account"><span>已连接微博账号 · {{ weiboAccount.userName || `UID ${weiboAccount.userId}` }}</span><button @click="showWeibo = false; openSettings('platforms')">管理凭证</button></div>
         <form class="bili-search" @submit.prevent="searchWeibo"><input v-model="weiboKeyword" placeholder="搜索微博博主昵称" maxlength="40" required><button :disabled="weiboBusy">⌕ 搜索</button></form>
         <label class="subscription-tag-field"><span>作者标签</span><input v-model="weiboSubscriptionTags" placeholder="#标签1 #标签2" maxlength="120"><small>订阅搜索结果中的作者时，会同时保存这些标签。</small></label>
@@ -1872,7 +2031,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
         <button class="modal-close" @click="showPixiv = false">×</button>
         <p class="eyebrow">PIXIV SOURCE</p>
         <h2>订阅 Pixiv 画师</h2>
-        <p>填写画师主页中的数字用户 ID，仅添加订阅。历史作品可在订阅平台页面手动补全。</p>
+        <p>填写画师主页中的数字用户 ID，仅添加订阅。历史作品可在订阅平台页面手动获取。</p>
         <div class="bili-account"><span>已连接 Pixiv · {{ pixivAccount.userName || `UID ${pixivAccount.userId}` }}</span><button @click="showPixiv = false; openSettings('platforms')">管理凭证</button></div>
         <form class="pixiv-source-form" @submit.prevent="subscribePixiv">
           <div class="bili-search pixiv-subscribe-row"><input v-model="pixivArtistId" required inputmode="numeric" pattern="[0-9]+" placeholder="画师用户 ID，例如 12345678"><button :disabled="pixivBusy">{{ pixivBusy ? '添加中…' : '订阅' }}</button></div>
@@ -1893,10 +2052,10 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
           <article v-for="feed in selectedPlatform.feeds" :key="feed.id">
             <img class="configured-source-avatar" :src="feed.avatar || selectedPlatform.image" :alt="`${feed.name}头像`" @error="$event.target.src = selectedPlatform.image">
             <div><strong>{{ feed.name }}</strong><span>{{ feed.handle }} · {{ feed.schedule }}</span><div v-if="feed.tags?.length" class="source-tag-preview"><b v-for="tag in feed.tags" :key="tag">#{{ tag }}</b></div><small>{{ feed.storagePath || `${selectedPlatform.path}/${feed.name}` }}</small></div>
-            <em :class="{ disabled: !feed.enabled }">{{ feed.enabled ? '同步中' : '已停用' }}</em>
+            <button :class="['source-enabled-toggle', { disabled: !feed.enabled }]" type="button" :disabled="sourceActionBusy !== ''" :title="feed.enabled ? '自动同步已启用，点击停用' : '自动同步已停用，点击启用'" @click="toggleFeedEnabled(feed)"><i></i>{{ sourceActionBusy === `toggle:${feed.id}` ? '保存中' : feed.enabled ? '同步中' : '已停用' }}</button>
             <div class="source-row-actions">
               <button class="source-icon-action" title="立即拉取最新动态" aria-label="立即拉取最新动态" @click="syncSource(feed)" :disabled="sourceActionBusy !== ''"><svg :class="{ spin: sourceActionBusy === `sync:${feed.id}` }" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 9a7 7 0 0 1 11.4-2.5L20 9M4 15l2.5 2.5A7 7 0 0 0 17.9 15"/></svg></button>
-              <button class="source-icon-action" title="补全全部历史动态（跳过已归档内容）" aria-label="补全全部历史动态" @click="syncSource(feed, true)" :disabled="sourceActionBusy !== ''"><svg :class="{ spin: sourceActionBusy === `resync:${feed.id}` }" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg></button>
+              <button class="source-icon-action" title="获取历史动态：仅拉取符合当前订阅设置且本地尚未完整归档的内容，已存在的动态自动跳过" aria-label="获取历史动态" @click="syncSource(feed, true)" :disabled="sourceActionBusy !== ''"><svg :class="{ spin: sourceActionBusy === `resync:${feed.id}` }" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg></button>
               <button class="source-icon-action" title="来源设置" aria-label="来源设置" @click="openFeedSettings(feed)"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg></button>
               <button class="source-icon-action delete-posts-button" title="删除此作者全部动态及文件" aria-label="删除此作者全部动态及文件" @click="deleteAuthorPosts(feed.source, feed.name)" :disabled="sourceActionBusy !== '' || postActionBusy !== ''"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M6 6l1 15h10l1-15"/><path d="M10 10v7M14 10v7"/></svg></button>
               <button class="source-icon-action delete-source-button" title="删除订阅来源" aria-label="删除订阅来源" @click="deleteSource(feed)" :disabled="sourceActionBusy !== ''"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>

@@ -1154,6 +1154,11 @@ func loadStoreFile(path string) (*Store, error) {
 		if cleanupErr != nil {
 			return nil, fmt.Errorf("remove legacy emoji images: %w", cleanupErr)
 		}
+		videoChanged, videoErr := store.normalizeStoredPostVideos()
+		if videoErr != nil {
+			return nil, fmt.Errorf("normalize stored post videos: %w", videoErr)
+		}
+		changed = changed || videoChanged
 		textChanged, textErr := store.reconcileTextArchives()
 		if textErr != nil {
 			return nil, fmt.Errorf("archive post text: %w", textErr)
@@ -1200,6 +1205,93 @@ func (s *Store) removeLegacyEmojiImages() (bool, error) {
 	return changed, nil
 }
 
+func videoQualityScore(value string) int {
+	lower := strings.ToLower(value)
+	score := 0
+	for _, quality := range []struct {
+		label  string
+		weight int
+	}{{"2160", 600}, {"1440", 500}, {"1080", 400}, {"720", 300}, {"480", 200}, {"360", 100}} {
+		if strings.Contains(lower, quality.label) {
+			score = quality.weight
+			break
+		}
+	}
+	if strings.Contains(lower, "_hd") || strings.Contains(lower, "-hd") || strings.Contains(lower, "high") {
+		score += 40
+	}
+	if strings.Contains(lower, ".mp4") {
+		score += 10
+	}
+	return score
+}
+
+func normalizePostVideos(videos []PostVideo) []PostVideo {
+	bestIndex := -1
+	bestScore := -1
+	poster := ""
+	seen := make(map[string]bool, len(videos))
+	for index, video := range videos {
+		video.URL = strings.TrimSpace(video.URL)
+		video.Poster = strings.TrimSpace(video.Poster)
+		if video.URL == "" || seen[video.URL] {
+			continue
+		}
+		seen[video.URL] = true
+		if poster == "" && video.Poster != "" {
+			poster = video.Poster
+		}
+		score := videoQualityScore(video.URL)
+		if bestIndex < 0 || score > bestScore {
+			bestIndex = index
+			bestScore = score
+		}
+	}
+	if bestIndex < 0 {
+		return nil
+	}
+	selected := videos[bestIndex]
+	selected.URL = strings.TrimSpace(selected.URL)
+	selected.Poster = strings.TrimSpace(selected.Poster)
+	if selected.Poster == "" {
+		selected.Poster = poster
+	}
+	return []PostVideo{selected}
+}
+
+func (s *Store) normalizeStoredPostVideos() (bool, error) {
+	changed := false
+	for index := range s.posts {
+		videos := s.posts[index].Videos
+		normalized := normalizePostVideos(videos)
+		if len(videos) == len(normalized) {
+			if len(videos) == 0 || (videos[0].URL == normalized[0].URL && videos[0].Poster == normalized[0].Poster) {
+				continue
+			}
+		}
+		retained := make(map[string]bool, 2)
+		for _, video := range normalized {
+			retained[video.URL] = true
+			retained[video.Poster] = true
+		}
+		removed := make([]string, 0, len(videos)*2)
+		for _, video := range videos {
+			if video.URL != "" && !retained[video.URL] {
+				removed = append(removed, video.URL)
+			}
+			if video.Poster != "" && !retained[video.Poster] {
+				removed = append(removed, video.Poster)
+			}
+		}
+		if err := deletePostMedia(removed); err != nil {
+			return false, err
+		}
+		s.posts[index].Videos = normalized
+		changed = true
+	}
+	return changed, nil
+}
+
 func (s *Store) reconcileTextArchives() (bool, error) {
 	return s.reconcileTextArchivesFor(nil)
 }
@@ -1229,6 +1321,7 @@ func (s *Store) mergePosts(incoming []Post) (int, error) {
 	affectedArchives := make(map[textArchiveKey]bool)
 	added, changed := 0, false
 	for _, post := range incoming {
+		post.Videos = normalizePostVideos(post.Videos)
 		if post.ID == "" {
 			continue
 		}
@@ -3640,6 +3733,7 @@ func (b *BilibiliStore) archiveSourceContent(feed SourceConfig, posts []Post) (S
 		}
 	}
 	for postIndex := range posts {
+		posts[postIndex].Videos = normalizePostVideos(posts[postIndex].Videos)
 		if !strings.HasPrefix(prepared.ID, "weibo-likes-") && !strings.HasPrefix(prepared.ID, "pixiv-bookmarks-") && !isBilibiliFavoriteOpusFeed(prepared) {
 			posts[postIndex].Avatar = prepared.Avatar
 		}
@@ -4105,6 +4199,7 @@ func collectWeiboPosts(value any, feed SourceConfig, posts *[]Post, seen map[str
 			}
 			videos := make([]PostVideo, 0, 1)
 			collectWeiboVideos(mblog, &videos, make(map[string]int))
+			videos = normalizePostVideos(videos)
 			rawCaption := jsonValueString(mblog["text"])
 			caption := jsonValueString(mblog["text_raw"])
 			if caption == "" {
@@ -4606,7 +4701,7 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 					if repaired < 0 {
 						repaired = 0
 					}
-					(*list)[index].LastSyncMessage = fmt.Sprintf("历史补全完成：符合设置 %d 条，新增 %d 条，修复或补充 %d 条，跳过 %d 条已完整归档动态", historyEligible, added, repaired, historySkipped)
+					(*list)[index].LastSyncMessage = fmt.Sprintf("历史动态获取完成：符合设置 %d 条，新增 %d 条，修复或补充 %d 条，跳过 %d 条本地已完整归档动态", historyEligible, added, repaired, historySkipped)
 				} else {
 					(*list)[index].LastSyncMessage = fmt.Sprintf("增量拉取完成，新增 %d 条动态", added)
 				}
