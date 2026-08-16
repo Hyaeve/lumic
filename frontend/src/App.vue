@@ -58,7 +58,6 @@ const showBrandMenu = ref(false)
 const phonePortrait = ref(false)
 const selectedAuthor = ref(null)
 const selectedTag = ref('')
-const authorReturnState = ref({ nav: 'all', source: 'all' })
 const isDark = ref(false)
 const showAdd = ref(false)
 const showBilibili = ref(false)
@@ -302,7 +301,8 @@ const visibleMasonryItems = computed(() => {
   return masonryLayout.value.items.filter(item => item.y + item.height >= top && item.y <= bottom)
 })
 const masonryFeedStyle = computed(() => isMasonryView.value && filteredPosts.value.length ? { height: `${Math.ceil(masonryLayout.value.height)}px` } : undefined)
-const allFilteredPostsSelected = computed(() => filteredPosts.value.length > 0 && filteredPosts.value.every(post => selectedPostIds.value.includes(post.id)))
+const loadedSelectionPosts = computed(() => isMasonryView.value ? visibleMasonryItems.value.map(item => item.post) : visiblePosts.value)
+const allLoadedPostsSelected = computed(() => loadedSelectionPosts.value.length > 0 && loadedSelectionPosts.value.every(post => selectedPostIds.value.includes(post.id)))
 const timelineTopSpace = computed(() => filteredPosts.value.slice(0, timelineStart.value).reduce((height, post) => height + (timelineHeights.value[post.id] || estimatedPostHeight) + 15, 0))
 const timelineBottomSpace = computed(() => filteredPosts.value.slice(timelineEnd.value).reduce((height, post) => height + (timelineHeights.value[post.id] || estimatedPostHeight) + 15, 0))
 const authorProfile = computed(() => {
@@ -1419,8 +1419,15 @@ function startMultiSelectMode() {
   selectedPostIds.value = []
   selectionMode.value = true
 }
-function toggleSelectAllPosts() {
-  selectedPostIds.value = allFilteredPostsSelected.value ? [] : filteredPosts.value.map(post => post.id)
+function toggleSelectAllLoadedPosts() {
+  const loadedIDs = loadedSelectionPosts.value.map(post => post.id)
+  if (!loadedIDs.length) return
+  if (allLoadedPostsSelected.value) {
+    const loadedIDSet = new Set(loadedIDs)
+    selectedPostIds.value = selectedPostIds.value.filter(id => !loadedIDSet.has(id))
+    return
+  }
+  selectedPostIds.value = [...new Set([...selectedPostIds.value, ...loadedIDs])]
 }
 function deleteContextPost() {
   const post = contextMenu.value.post
@@ -1873,19 +1880,24 @@ function openPhoneDefaultTimeline() {
   selectedTag.value = ''
   updateRoute('/', true)
 }
-function openAuthor(post) {
+function openAuthorPage(name, source, avatar = '') {
   clearPhoneOverlayHistoryForNavigation()
   mobileSourcesOpen.value = false
+  mobileMenuOpen.value = false
+  selectedPlatform.value = null
   masonryDetailPost.value = null
-  authorReturnState.value = { nav: activeNav.value, source: activeSource.value }
   showSettings.value = false
   activeNav.value = 'author'
-  activeSource.value = post.source
-  selectedAuthor.value = { name: post.author, source: post.source, avatar: post.avatar }
-  updateRoute(`/author/${post.source}/${encodeURIComponent(post.author)}`)
+  activeSource.value = source
+  selectedAuthor.value = { name, source, avatar }
+  updateRoute(`/author/${source}/${encodeURIComponent(name)}`)
+  window.scrollTo({ top: 0, behavior: 'auto' })
 }
-function closeAuthor() {
-  navigateTo(authorReturnState.value.nav, authorReturnState.value.source)
+function openAuthor(post) {
+  openAuthorPage(post.author, post.source, post.avatar)
+}
+function openFeedAuthor(feed) {
+  openAuthorPage(feed.name, feed.source, sourceAvatar(feed, platformCardForSource(feed.source)))
 }
 function closeSettingsPage() { navigateTo(activeSource.value === 'all' ? 'all' : 'source') }
 function updateRoute(path, replace = false) {
@@ -2106,11 +2118,9 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
       </div>
       <header v-if="authorProfile" class="topbar author-page-header">
         <div class="author-profile-main">
-          <button class="author-back-button" type="button" title="返回时间线" aria-label="返回时间线" @click="closeAuthor">←</button>
           <img :src="postAvatar(authorProfile)" data-fallback-index="0" :alt="authorProfile.name" referrerpolicy="no-referrer" @error="handlePostAvatarError($event, authorProfile)">
           <div><p class="eyebrow">AUTHOR TIMELINE · {{ sourceMeta[authorProfile.source].label }}</p><h1>{{ authorProfile.name }}</h1><p class="subtitle">共 {{ authorProfile.count }} 条已拉取动态</p></div>
         </div>
-        <div class="header-actions"><button class="danger-outline-button" :disabled="postActionBusy !== '' || !authorProfile.count" @click="deleteAuthorPosts(authorProfile.source, authorProfile.name)">删除全部动态</button></div>
       </header>
       <header v-else-if="activeNav !== 'liked'" class="topbar timeline-hero">
 <div class="timeline-hero-copy">
@@ -2232,7 +2242,8 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
       <div class="section-heading subscription-list-heading"><div><h2>订阅作者</h2><p>查看同步状态并手动拉取内容。</p></div><span>{{ feeds.length }} 个来源</span></div>
       <section class="pull-list">
         <article v-for="feed in feeds" :key="feed.id" class="pull-card">
-          <img :key="`${feed.id}:${sourceAvatar(feed, platformCardForSource(feed.source))}`" class="pull-avatar" :src="sourceAvatar(feed, platformCardForSource(feed.source))" data-fallback-index="0" :alt="feed.name" referrerpolicy="no-referrer" @error="handleSourceAvatarError($event, feed, platformCardForSource(feed.source))">
+          <button v-if="!isAccountCollectionFeed(feed)" class="pull-avatar-button" type="button" :title="`查看 ${feed.name} 的动态`" :aria-label="`查看 ${feed.name} 的动态`" @click="openFeedAuthor(feed)"><img :key="`${feed.id}:${sourceAvatar(feed, platformCardForSource(feed.source))}`" class="pull-avatar" :src="sourceAvatar(feed, platformCardForSource(feed.source))" data-fallback-index="0" :alt="feed.name" referrerpolicy="no-referrer" @error="handleSourceAvatarError($event, feed, platformCardForSource(feed.source))"></button>
+          <img v-else :key="`${feed.id}:${sourceAvatar(feed, platformCardForSource(feed.source))}`" class="pull-avatar pull-avatar-static" :src="sourceAvatar(feed, platformCardForSource(feed.source))" data-fallback-index="0" :alt="feed.name" referrerpolicy="no-referrer" @error="handleSourceAvatarError($event, feed, platformCardForSource(feed.source))">
           <div class="pull-info"><div class="pull-title"><strong>{{ feed.name }}</strong><span :class="['source-pill', sourceMeta[feed.source].color]"><img :class="['source-icon', { 'twitter-night-icon': feed.source === 'twitter' && isDark }]" :src="sourceIconFor(feed.source)" :alt="sourceMeta[feed.source].label">{{ sourceMeta[feed.source].label }}</span></div><span class="pull-handle">{{ feed.handle }}</span><small>{{ feed.lastSyncMessage || (feed.lastSyncedAt ? `上次拉取：${relativeTime(feed.lastSyncedAt)}` : '尚未拉取') }}</small></div>
           <div class="pull-status"><i :class="['pull-dot', feed.lastSyncStatus]"></i><span>{{ feed.lastSyncStatus === 'success' ? `新增 ${feed.lastSyncCount || 0} 条` : feed.lastSyncStatus === 'failed' ? '拉取失败' : '待拉取' }}</span></div>
           <div class="pull-actions"><button class="pull-action" :disabled="sourceActionBusy !== ''" :title="sourceActionBusy === `sync:${feed.id}` ? '正在同步' : '立即同步'" @click="syncSource(feed)"><svg :class="{ spin: sourceActionBusy === `sync:${feed.id}` }" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 9a7 7 0 0 1 11.4-2.5L20 9M4 15l2.5 2.5A7 7 0 0 0 17.9 15"/></svg><span>{{ sourceActionBusy === `sync:${feed.id}` ? '同步中' : '立即同步' }}</span></button></div>
@@ -2289,7 +2300,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
     </div>
     <div v-if="selectionMode" class="selection-dock">
       <button type="button" class="selection-cancel-button" title="取消多选" aria-label="取消多选" @click="stopSelection"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
-      <button v-if="selectionAction === 'unfavorite'" type="button" class="selection-select-all-button" :title="allFilteredPostsSelected ? '取消全选' : '全选'" :aria-label="allFilteredPostsSelected ? '取消全选' : '全选'" @click="toggleSelectAllPosts"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path v-if="allFilteredPostsSelected" d="M8 12h8"/><path v-else d="m8 12 2.3 2.3L16 8.7"/></svg><b>{{ allFilteredPostsSelected ? '取消全选' : '全选' }}</b></button>
+      <button type="button" class="selection-select-all-button" :disabled="!loadedSelectionPosts.length" :title="allLoadedPostsSelected ? '取消选择当前已加载动态' : '全选当前已加载动态'" :aria-label="allLoadedPostsSelected ? '取消选择当前已加载动态' : '全选当前已加载动态'" @click="toggleSelectAllLoadedPosts"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path v-if="allLoadedPostsSelected" d="M8 12h8"/><path v-else d="m8 12 2.3 2.3L16 8.7"/></svg><b>{{ allLoadedPostsSelected ? '取消全选' : '全选' }}</b></button>
       <span>已选择 {{ selectedPostCount }} 条</span>
       <button v-if="selectionAction === 'unfavorite'" type="button" class="selection-delete-button selection-unfavorite-button" :disabled="!selectedPostCount || postActionBusy === 'batch-unfavorite'" title="取消收藏所选动态" aria-label="取消收藏所选动态" @click="unfavoriteSelectedPosts"><svg viewBox="0 0 24 24"><path d="M12 20.5S4.5 16.2 4.5 10.2A4.2 4.2 0 0 1 12 7.6a4.2 4.2 0 0 1 7.5 2.6c0 6-7.5 10.3-7.5 10.3Z"/><path d="M8.5 11.5h7"/></svg><b>取消收藏</b></button>
       <button v-else type="button" class="selection-delete-button" :disabled="!selectedPostCount || postActionBusy === 'batch-delete'" title="删除所选动态" aria-label="删除所选动态" @click="deleteSelectedPosts"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg><b>删除</b></button>
@@ -2469,7 +2480,8 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
         <div class="configured-source-list">
           <div class="configured-source-heading"><h3>已配置作者</h3><span>{{ selectedPlatform.feeds.length }} 个</span></div>
           <article v-for="feed in selectedPlatform.feeds" :key="feed.id">
-            <img :key="`${feed.id}:${sourceAvatar(feed, selectedPlatform)}`" class="configured-source-avatar" :src="sourceAvatar(feed, selectedPlatform)" data-fallback-index="0" :alt="`${feed.name}头像`" referrerpolicy="no-referrer" @error="handleSourceAvatarError($event, feed, selectedPlatform)">
+            <button v-if="!isAccountCollectionFeed(feed)" class="configured-source-avatar-button" type="button" :title="`查看 ${feed.name} 的动态`" :aria-label="`查看 ${feed.name} 的动态`" @click="openFeedAuthor(feed)"><img :key="`${feed.id}:${sourceAvatar(feed, selectedPlatform)}`" class="configured-source-avatar" :src="sourceAvatar(feed, selectedPlatform)" data-fallback-index="0" :alt="`${feed.name}头像`" referrerpolicy="no-referrer" @error="handleSourceAvatarError($event, feed, selectedPlatform)"></button>
+            <img v-else :key="`${feed.id}:${sourceAvatar(feed, selectedPlatform)}`" class="configured-source-avatar configured-source-avatar-static" :src="sourceAvatar(feed, selectedPlatform)" data-fallback-index="0" :alt="`${feed.name}头像`" referrerpolicy="no-referrer" @error="handleSourceAvatarError($event, feed, selectedPlatform)">
             <div><strong>{{ feed.name }}</strong><span>{{ feed.handle }} · {{ feed.schedule }}</span><div v-if="feed.tags?.length" class="source-tag-preview"><b v-for="tag in feed.tags" :key="tag">#{{ tag }}</b></div><small>{{ feed.storagePath || `${selectedPlatform.path}/${feed.name}` }}</small></div>
             <button :class="['source-enabled-toggle', { disabled: !feed.enabled }]" type="button" :disabled="sourceActionBusy !== ''" :title="feed.enabled ? '自动同步已启用，点击停用' : '自动同步已停用，点击启用'" @click="toggleFeedEnabled(feed)"><i></i>{{ sourceActionBusy === `toggle:${feed.id}` ? '保存中' : feed.enabled ? '同步中' : '已停用' }}</button>
             <div class="source-row-actions">
