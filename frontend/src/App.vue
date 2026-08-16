@@ -1142,6 +1142,11 @@ async function downloadLightboxImage() {
   const source = lightbox.value.media[lightbox.value.index]
   if (!source) return
   const fallbackName = `${lightbox.value.author || 'Lumic'}-${lightbox.value.index + 1}.jpg`
+  if (window.Lumir?.saveFile) {
+    const downloadUrl = new URL(source, window.location.href).href
+    window.Lumir.saveFile(downloadUrl, decodeURIComponent(source.split('/').pop()?.split('?')[0] || fallbackName))
+    return
+  }
   try {
     const response = await fetch(source)
     if (!response.ok) throw new Error('download failed')
