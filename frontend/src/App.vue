@@ -122,6 +122,9 @@ const mobileDetailDragX = ref(0)
 const mobileDetailTrackShift = ref(0)
 const mobileDetailDragging = ref(false)
 const mobileDetailAnimating = ref(false)
+const mobileDetailPageDragX = ref(0)
+const mobileDetailPageDragging = ref(false)
+const mobileDetailPageAnimating = ref(false)
 const mobilePostReturnPath = ref('/')
 const pendingPostId = ref('')
 const feedListElement = ref(null)
@@ -144,6 +147,10 @@ const lightboxClosing = ref(false)
 const lightboxTransitioning = ref(false)
 const lightboxDisplaySource = ref('')
 const lightboxOriginalLoaded = ref(false)
+const mobileLightboxDragX = ref(0)
+const mobileLightboxTrackShift = ref(0)
+const mobileLightboxDragging = ref(false)
+const mobileLightboxAnimating = ref(false)
 const mobileLightboxMenu = ref({ open: false, x: 0, y: 0 })
 const meteorBurst = ref([])
 const lightboxPointers = new Map()
@@ -165,6 +172,14 @@ let meteorCleanupTimer = 0
 let meteorBurstSequence = 0
 let mobileDetailTouch = null
 let mobileDetailSwipeClickBlocked = false
+let mobileDetailAnimationTimer = 0
+let mobileDetailAnimationFrame = 0
+let mobileDetailTransition = null
+let mobileDetailPageTouch = null
+let mobileDetailPageTimer = 0
+let mobileLightboxAnimationTimer = 0
+let mobileLightboxAnimationFrame = 0
+let mobileLightboxTransitionStep = 0
 
 const sourceMeta = {
   bilibili: { label: '哔哩哔哩', icon: 'bl', image: bilibiliIcon, lineImage: bilibiliLineIcon, color: 'blue' },
@@ -206,9 +221,31 @@ const mobileDetailTrackStyle = computed(() => {
   const baseShift = mobileDetailMedia.value.length > 1 ? -100 : 0
   return {
     transform: `translate3d(calc(${baseShift + mobileDetailTrackShift.value}% + ${mobileDetailDragX.value}px), 0, 0)`,
-    transition: mobileDetailDragging.value ? 'none' : mobileDetailAnimating.value ? 'transform .38s cubic-bezier(.18, .78, .18, 1)' : 'none'
+    transition: mobileDetailDragging.value ? 'none' : mobileDetailAnimating.value ? 'transform .26s cubic-bezier(.18, .84, .22, 1)' : 'none'
   }
 })
+const mobileLightboxSlides = computed(() => {
+  const media = lightbox.value.media || []
+  if (!media.length) return []
+  if (media.length === 1) return [{ source: lightboxDisplaySource.value || media[0], media: media[0], index: 0, position: 0 }]
+  return [-1, 0, 1].map(position => {
+    const index = (lightbox.value.index + position + media.length) % media.length
+    const source = position === 0 ? (lightboxDisplaySource.value || previewMedia(media[index])) : previewMedia(media[index])
+    return { source, media: media[index], index, position }
+  })
+})
+const mobileLightboxTrackStyle = computed(() => {
+  const baseShift = lightbox.value.media.length > 1 ? -100 : 0
+  return {
+    transform: `translate3d(calc(${baseShift + mobileLightboxTrackShift.value}% + ${mobileLightboxDragX.value}px), 0, 0)`,
+    transition: mobileLightboxDragging.value ? 'none' : mobileLightboxAnimating.value ? 'transform .24s cubic-bezier(.18, .86, .22, 1)' : 'none'
+  }
+})
+const mobileDetailPageStyle = computed(() => ({
+  transform: `translate3d(${mobileDetailPageDragX.value}px, 0, 0)`,
+  opacity: String(Math.max(.72, 1 - Math.abs(mobileDetailPageDragX.value) / Math.max(1, window.innerWidth) * .28)),
+  transition: mobileDetailPageDragging.value ? 'none' : mobileDetailPageAnimating.value ? 'transform .24s cubic-bezier(.18, .84, .22, 1), opacity .2s ease' : 'none'
+}))
 const filteredPosts = computed(() => {
   const allPosts = Array.isArray(posts.value) ? posts.value : []
   const timeline = activeNav.value === 'liked' ? allPosts.filter(post => post.liked) : allPosts
@@ -913,7 +950,22 @@ function askConfirm({ title, message, confirmText = '确认', cancelText = '取�
   confirmDialog.value = { open: true, title, message, confirmText, cancelText, tone }
   return new Promise(resolve => { confirmResolver = resolve })
 }
+function clearMobileLightboxAnimation() {
+  if (mobileLightboxAnimationTimer) window.clearTimeout(mobileLightboxAnimationTimer)
+  if (mobileLightboxAnimationFrame) window.cancelAnimationFrame(mobileLightboxAnimationFrame)
+  mobileLightboxAnimationTimer = 0
+  mobileLightboxAnimationFrame = 0
+}
+function resetMobileLightboxTrack() {
+  clearMobileLightboxAnimation()
+  mobileLightboxDragX.value = 0
+  mobileLightboxTrackShift.value = 0
+  mobileLightboxDragging.value = false
+  mobileLightboxAnimating.value = false
+  mobileLightboxTransitionStep = 0
+}
 function resetLightboxView() {
+  resetMobileLightboxTrack()
   lightbox.value.scale = 1
   lightbox.value.rotation = 0
   lightbox.value.fit = true
@@ -946,6 +998,7 @@ function openLightbox(post, index) {
   scheduleLightboxScaleUpdate()
 }
 function resetLightboxState() {
+  resetMobileLightboxTrack()
   lightbox.value = { open: false, media: [], index: 0, author: '', scale: 1, rotation: 0, fit: true, x: 0, y: 0, dragging: false, motion: 'enter' }
   lightboxPointers.clear()
   lightboxGesture = null
@@ -976,11 +1029,58 @@ function closeLightbox(fromHistory = false) {
       lightboxHistoryPopPending = true
       window.history.back()
     }
-  }, 190)
+  }, 145)
+}
+function finishMobileLightboxTransition(commit = true) {
+  const step = mobileLightboxTransitionStep
+  clearMobileLightboxAnimation()
+  mobileLightboxAnimating.value = false
+  mobileLightboxDragging.value = false
+  mobileLightboxDragX.value = 0
+  mobileLightboxTrackShift.value = 0
+  mobileLightboxTransitionStep = 0
+  if (!commit || !step || lightbox.value.media.length < 2) return
+  lightbox.value.index = (lightbox.value.index + step + lightbox.value.media.length) % lightbox.value.media.length
+  resetLightboxView()
+  lightbox.value.motion = 'idle'
+  prepareLightboxSource()
+}
+function animateMobileLightbox(step) {
+  const total = lightbox.value.media.length
+  if (total < 2) return
+  if (mobileLightboxAnimating.value) finishMobileLightboxTransition(true)
+  mobileLightboxTransitionStep = step > 0 ? 1 : -1
+  mobileLightboxDragging.value = false
+  mobileLightboxAnimating.value = true
+  mobileLightboxAnimationFrame = window.requestAnimationFrame(() => {
+    mobileLightboxAnimationFrame = 0
+    mobileLightboxDragX.value = 0
+    mobileLightboxTrackShift.value = mobileLightboxTransitionStep > 0 ? -100 : 100
+  })
+  mobileLightboxAnimationTimer = window.setTimeout(() => finishMobileLightboxTransition(true), 245)
+}
+function snapMobileLightboxTrack() {
+  if (!mobileLightboxDragX.value) {
+    resetMobileLightboxTrack()
+    return
+  }
+  clearMobileLightboxAnimation()
+  mobileLightboxDragging.value = false
+  mobileLightboxAnimating.value = true
+  mobileLightboxAnimationFrame = window.requestAnimationFrame(() => {
+    mobileLightboxAnimationFrame = 0
+    mobileLightboxDragX.value = 0
+  })
+  mobileLightboxAnimationTimer = window.setTimeout(resetMobileLightboxTrack, 205)
 }
 function moveLightbox(step) {
   const total = lightbox.value.media.length
-  if (total < 2 || lightboxTransitioning.value) return
+  if (total < 2) return
+  if (phonePortrait.value) {
+    animateMobileLightbox(step)
+    return
+  }
+  if (lightboxTransitioning.value) return
   lightboxTransitioning.value = true
   lightbox.value.motion = step > 0 ? 'leave-next' : 'leave-previous'
   scheduleTransient(() => {
@@ -1091,7 +1191,7 @@ function scheduleLightboxSingleTapClose() {
   lightboxSingleTapTimer = window.setTimeout(() => {
     lightboxSingleTapTimer = 0
     closeLightbox()
-  }, 310)
+  }, 225)
 }
 function scheduleLightboxLongPress(event) {
   clearLightboxLongPress()
@@ -1155,7 +1255,8 @@ function beginLightboxPan(pointer) {
     type: 'pan', pointerId: pointer.id, startX: pointer.x, startY: pointer.y,
     startTime: pointer.time, imageX: lightbox.value.x, imageY: lightbox.value.y,
     startScale: lightbox.value.scale, startFit: lightbox.value.fit,
-    startSwipeView: isMobileLightboxSwipeView(), startedOnImage: pointer.startedOnImage, longPressed: false
+    startSwipeView: isMobileLightboxSwipeView(), startedOnImage: pointer.startedOnImage, longPressed: false,
+    axis: '', prevX: pointer.x, prevTime: pointer.time, lastX: pointer.x, lastTime: pointer.time
   }
 }
 function beginLightboxPinch() {
@@ -1173,6 +1274,7 @@ function beginLightboxPinch() {
 }
 function startLightboxGesture(event) {
   if (event.pointerType === 'mouse' && event.button !== 0) return
+  if (phonePortrait.value && mobileLightboxAnimating.value) finishMobileLightboxTransition(true)
   if (mobileLightboxMenu.value.open) mobileLightboxMenu.value = { open: false, x: 0, y: 0 }
   clearLightboxSingleTap()
   event.currentTarget.setPointerCapture(event.pointerId)
@@ -1203,7 +1305,24 @@ function moveLightboxGesture(event) {
     return
   }
   if (lightboxGesture?.type !== 'pan' || lightboxGesture.pointerId !== event.pointerId) return
-  if (phonePortrait.value && lightboxGesture.startSwipeView) return
+  if (phonePortrait.value && lightboxGesture.startSwipeView) {
+    const dx = event.clientX - lightboxGesture.startX
+    const dy = event.clientY - lightboxGesture.startY
+    if (!lightboxGesture.axis && Math.max(Math.abs(dx), Math.abs(dy)) > 5) {
+      lightboxGesture.axis = Math.abs(dx) > Math.abs(dy) * 1.04 ? 'horizontal' : 'vertical'
+    }
+    lightboxGesture.prevX = lightboxGesture.lastX
+    lightboxGesture.prevTime = lightboxGesture.lastTime
+    lightboxGesture.lastX = event.clientX
+    lightboxGesture.lastTime = event.timeStamp
+    if (lightboxGesture.axis !== 'horizontal') return
+    clearLightboxLongPress()
+    lightbox.value.dragging = false
+    mobileLightboxDragging.value = true
+    const limit = Math.max(120, window.innerWidth * .96)
+    mobileLightboxDragX.value = Math.max(-limit, Math.min(limit, dx))
+    return
+  }
   lightbox.value.x = lightboxGesture.imageX + event.clientX - lightboxGesture.startX
   lightbox.value.y = lightboxGesture.imageY + event.clientY - lightboxGesture.startY
 }
@@ -1213,7 +1332,7 @@ function toggleLightboxDoubleTap(event) {
     lightbox.value.fit = true
     if (atDefaultFit) {
       const previousScale = lightbox.value.scale
-      const targetScale = Math.min(lightboxMaximumScale(), lightboxBaseScale() > .82 ? 1.55 : 1.82)
+      const targetScale = Math.min(lightboxMaximumScale(), lightboxBaseScale() > .82 ? 2.05 : 2.45)
       const scaleRatio = targetScale / previousScale
       const focusX = event.clientX - window.innerWidth / 2
       const focusY = event.clientY - window.innerHeight / 2
@@ -1242,10 +1361,13 @@ function stopLightboxGesture(event) {
   const dx = event.clientX - (gesture?.startX ?? event.clientX)
   const dy = event.clientY - (gesture?.startY ?? event.clientY)
   const duration = event.timeStamp - (gesture?.startTime ?? event.timeStamp)
+  const velocityDuration = Math.max(1, (gesture?.lastTime ?? event.timeStamp) - (gesture?.prevTime ?? gesture?.startTime ?? event.timeStamp))
+  const velocityX = ((gesture?.lastX ?? event.clientX) - (gesture?.prevX ?? gesture?.startX ?? event.clientX)) / velocityDuration
   const wasSinglePan = gesture?.type === 'pan' && gesture.pointerId === event.pointerId && lightboxPointers.size === 1
   const wasCancelled = event.type === 'pointercancel'
   const canSwipe = phonePortrait.value ? gesture?.startSwipeView : gesture?.startFit && gesture?.startScale <= 1.02 && Math.abs(gesture?.imageX || 0) < 3 && Math.abs(gesture?.imageY || 0) < 3
-  const isSwipe = !wasCancelled && !lightboxGestureHadPinch && wasSinglePan && !gesture.longPressed && canSwipe && duration < 620 && Math.abs(dx) > 58 && Math.abs(dx) > Math.abs(dy) * 1.3
+  const swipeDistance = Math.min(52, window.innerWidth * .13)
+  const isSwipe = !wasCancelled && !lightboxGestureHadPinch && wasSinglePan && !gesture.longPressed && canSwipe && duration < 850 && (Math.abs(dx) > swipeDistance || Math.abs(velocityX) > .42) && Math.abs(dx) > Math.abs(dy) * 1.12
   const isTap = !wasCancelled && !lightboxGestureHadPinch && wasSinglePan && !gesture.longPressed && duration < 280 && Math.hypot(dx, dy) < 10
 
   clearLightboxLongPress()
@@ -1264,6 +1386,8 @@ function stopLightboxGesture(event) {
       lightboxLastTap = { time: event.timeStamp, x: event.clientX, y: event.clientY }
       scheduleLightboxSingleTapClose()
     }
+  } else if (phonePortrait.value && gesture?.startSwipeView) {
+    snapMobileLightboxTrack()
   }
 
   if (lightboxPointers.size >= 2) beginLightboxPinch()
@@ -1581,6 +1705,9 @@ function toggleTimelineView(event) {
 }
 function openMasonryPost(post) {
   if (selectionMode.value) return
+  resetMobileDetailPageSwipe()
+  mobileMenuOpen.value = false
+  mobileSourcesOpen.value = false
   masonryDetailPost.value = post
   mobileDetailIndex.value = 0
   resetMobileDetailTrack()
@@ -1591,6 +1718,7 @@ function openMasonryPost(post) {
   }
 }
 function closePostDetail() {
+  resetMobileDetailPageSwipe()
   masonryDetailPost.value = null
   mobileDetailIndex.value = 0
   resetMobileDetailTrack()
@@ -1599,32 +1727,56 @@ function closePostDetail() {
     updateRoute(mobilePostReturnPath.value || '/', true)
   }
 }
+function clearMobileDetailAnimation() {
+  if (mobileDetailAnimationTimer) window.clearTimeout(mobileDetailAnimationTimer)
+  if (mobileDetailAnimationFrame) window.cancelAnimationFrame(mobileDetailAnimationFrame)
+  mobileDetailAnimationTimer = 0
+  mobileDetailAnimationFrame = 0
+}
+function finishMobileDetailTransition(commit = true) {
+  const transition = mobileDetailTransition
+  clearMobileDetailAnimation()
+  mobileDetailTransition = null
+  mobileDetailAnimating.value = false
+  mobileDetailDragging.value = false
+  mobileDetailDragX.value = 0
+  mobileDetailTrackShift.value = 0
+  if (commit && transition && mobileDetailMedia.value.length > 1) {
+    const count = mobileDetailMedia.value.length
+    mobileDetailIndex.value = transition.targetIndex == null
+      ? (mobileDetailIndex.value + transition.step + count) % count
+      : transition.targetIndex
+  }
+  mobileDetailSwipeClickBlocked = false
+}
 function resetMobileDetailTrack() {
+  clearMobileDetailAnimation()
   mobileDetailDragX.value = 0
   mobileDetailTrackShift.value = 0
   mobileDetailDragging.value = false
   mobileDetailAnimating.value = false
+  mobileDetailTransition = null
   mobileDetailTouch = null
 }
 function moveMobileDetailMedia(direction, targetIndex = null) {
   const count = mobileDetailMedia.value.length
-  if (count < 2 || mobileDetailAnimating.value) return
+  if (count < 2) return
+  if (mobileDetailAnimating.value) finishMobileDetailTransition(true)
   const step = direction > 0 ? 1 : -1
   mobileDetailSwipeClickBlocked = true
   mobileDetailDragging.value = false
-  mobileDetailDragX.value = 0
   mobileDetailAnimating.value = true
-  mobileDetailTrackShift.value = step > 0 ? -100 : 100
-  scheduleTransient(() => {
-    mobileDetailIndex.value = targetIndex == null ? (mobileDetailIndex.value + step + count) % count : targetIndex
-    mobileDetailAnimating.value = false
-    mobileDetailTrackShift.value = 0
+  mobileDetailTransition = { step, targetIndex }
+  mobileDetailAnimationFrame = window.requestAnimationFrame(() => {
+    mobileDetailAnimationFrame = 0
     mobileDetailDragX.value = 0
-    scheduleTransient(() => { mobileDetailSwipeClickBlocked = false }, 80)
-  }, 380)
+    mobileDetailTrackShift.value = step > 0 ? -100 : 100
+  })
+  mobileDetailAnimationTimer = window.setTimeout(() => finishMobileDetailTransition(true), 265)
 }
 function selectMobileDetailMedia(index) {
-  if (index === mobileDetailIndex.value || mobileDetailAnimating.value) return
+  if (mobileDetailAnimating.value) finishMobileDetailTransition(true)
+  if (index === mobileDetailIndex.value) return
   const count = mobileDetailMedia.value.length
   const forwardDistance = (index - mobileDetailIndex.value + count) % count
   const backwardDistance = (mobileDetailIndex.value - index + count) % count
@@ -1639,16 +1791,17 @@ function openMobileDetailImage() {
 }
 function beginMobileDetailSwipe(event) {
   const touch = event.touches?.[0] || event.changedTouches?.[0]
-  if (!touch || mobileDetailAnimating.value || mobileDetailMedia.value.length < 2) return
+  if (!touch || mobileDetailMedia.value.length < 2) return
+  if (mobileDetailAnimating.value) finishMobileDetailTransition(true)
   mobileDetailSwipeClickBlocked = false
   mobileDetailDragX.value = 0
   mobileDetailTrackShift.value = 0
   mobileDetailDragging.value = true
-  mobileDetailTouch = { x: touch.clientX, y: touch.clientY, axis: '' }
+  mobileDetailTouch = { x: touch.clientX, y: touch.clientY, time: event.timeStamp, prevX: touch.clientX, prevTime: event.timeStamp, lastX: touch.clientX, lastTime: event.timeStamp, axis: '' }
 }
 function updateMobileDetailSwipe(event) {
   const touch = event.touches?.[0]
-  if (!touch || !mobileDetailTouch || mobileDetailAnimating.value) return
+  if (!touch || !mobileDetailTouch) return
   const deltaX = touch.clientX - mobileDetailTouch.x
   const deltaY = touch.clientY - mobileDetailTouch.y
   if (!mobileDetailTouch.axis && Math.max(Math.abs(deltaX), Math.abs(deltaY)) > 7) {
@@ -1656,6 +1809,10 @@ function updateMobileDetailSwipe(event) {
   }
   if (mobileDetailTouch.axis !== 'horizontal') return
   event.preventDefault()
+  mobileDetailTouch.prevX = mobileDetailTouch.lastX
+  mobileDetailTouch.prevTime = mobileDetailTouch.lastTime
+  mobileDetailTouch.lastX = touch.clientX
+  mobileDetailTouch.lastTime = event.timeStamp
   mobileDetailSwipeClickBlocked = Math.abs(deltaX) > 7
   const limit = Math.max(90, window.innerWidth * .82)
   mobileDetailDragX.value = Math.max(-limit, Math.min(limit, deltaX))
@@ -1665,30 +1822,92 @@ function finishMobileDetailSwipe(event) {
   if (!touch || !mobileDetailTouch) return
   const deltaX = touch.clientX - mobileDetailTouch.x
   const deltaY = touch.clientY - mobileDetailTouch.y
+  const duration = event.timeStamp - mobileDetailTouch.time
+  const velocityDuration = Math.max(1, mobileDetailTouch.lastTime - mobileDetailTouch.prevTime)
+  const velocityX = (mobileDetailTouch.lastX - mobileDetailTouch.prevX) / velocityDuration
   const horizontal = mobileDetailTouch.axis === 'horizontal'
   mobileDetailTouch = null
   mobileDetailDragging.value = false
-  if (horizontal && Math.abs(deltaX) >= Math.min(72, window.innerWidth * .17) && Math.abs(deltaX) > Math.abs(deltaY)) {
+  if (horizontal && duration < 900 && (Math.abs(deltaX) >= Math.min(54, window.innerWidth * .13) || Math.abs(velocityX) > .4) && Math.abs(deltaX) > Math.abs(deltaY) * 1.05) {
     moveMobileDetailMedia(deltaX < 0 ? 1 : -1)
     return
   }
+  clearMobileDetailAnimation()
   mobileDetailAnimating.value = true
   mobileDetailDragX.value = 0
-  scheduleTransient(() => {
+  mobileDetailAnimationTimer = window.setTimeout(() => {
+    mobileDetailAnimationTimer = 0
     mobileDetailAnimating.value = false
     mobileDetailSwipeClickBlocked = false
-  }, 380)
+  }, 205)
 }
 function cancelMobileDetailSwipe() {
   if (!mobileDetailTouch) return
   mobileDetailTouch = null
   mobileDetailDragging.value = false
+  clearMobileDetailAnimation()
   mobileDetailAnimating.value = true
   mobileDetailDragX.value = 0
-  scheduleTransient(() => {
+  mobileDetailAnimationTimer = window.setTimeout(() => {
+    mobileDetailAnimationTimer = 0
     mobileDetailAnimating.value = false
     mobileDetailSwipeClickBlocked = false
-  }, 380)
+  }, 205)
+}
+function resetMobileDetailPageSwipe() {
+  if (mobileDetailPageTimer) window.clearTimeout(mobileDetailPageTimer)
+  mobileDetailPageTimer = 0
+  mobileDetailPageTouch = null
+  mobileDetailPageDragX.value = 0
+  mobileDetailPageDragging.value = false
+  mobileDetailPageAnimating.value = false
+}
+function beginMobileDetailPageSwipe(event) {
+  const touch = event.touches?.[0]
+  const target = event.target
+  if (!touch || !masonryDetailPost.value || target?.closest?.('.mobile-post-media-stage, button, a, input, textarea, select, label')) return
+  if (mobileDetailPageTimer) window.clearTimeout(mobileDetailPageTimer)
+  mobileDetailPageTimer = 0
+  mobileDetailPageTouch = { x: touch.clientX, y: touch.clientY, axis: '' }
+  mobileDetailPageDragging.value = true
+  mobileDetailPageAnimating.value = false
+}
+function updateMobileDetailPageSwipe(event) {
+  const touch = event.touches?.[0]
+  if (!touch || !mobileDetailPageTouch) return
+  const dx = touch.clientX - mobileDetailPageTouch.x
+  const dy = touch.clientY - mobileDetailPageTouch.y
+  if (!mobileDetailPageTouch.axis && Math.max(Math.abs(dx), Math.abs(dy)) > 7) {
+    mobileDetailPageTouch.axis = Math.abs(dx) > Math.abs(dy) * 1.12 ? 'horizontal' : 'vertical'
+  }
+  if (mobileDetailPageTouch.axis !== 'horizontal' || dx >= 0) return
+  event.preventDefault()
+  mobileDetailPageDragX.value = Math.max(-window.innerWidth * .48, dx)
+}
+function finishMobileDetailPageSwipe(event) {
+  if (!mobileDetailPageTouch) return
+  const touch = event.changedTouches?.[0]
+  const dx = touch ? touch.clientX - mobileDetailPageTouch.x : 0
+  const horizontal = mobileDetailPageTouch.axis === 'horizontal'
+  mobileDetailPageTouch = null
+  mobileDetailPageDragging.value = false
+  mobileDetailPageAnimating.value = true
+  if (horizontal && dx < -Math.min(78, window.innerWidth * .2)) {
+    const post = masonryDetailPost.value
+    mobileDetailPageDragX.value = -window.innerWidth
+    mobileDetailPageTimer = window.setTimeout(() => {
+      mobileDetailPageTimer = 0
+      if (post) {
+        mobilePageSwitching.value = true
+        openAuthor(post)
+        scheduleTransient(() => { mobilePageSwitching.value = false }, 360)
+      }
+      resetMobileDetailPageSwipe()
+    }, 235)
+    return
+  }
+  mobileDetailPageDragX.value = 0
+  mobileDetailPageTimer = window.setTimeout(resetMobileDetailPageSwipe, 205)
 }
 function masonryItemStyle(item) {
   return {
@@ -1751,6 +1970,7 @@ async function updatePostFavorite(post, liked) {
 function togglePostLike(post) { return updatePostFavorite(post, !post.liked) }
 function navigateTo(nav, source = activeSource.value) {
   clearPhoneOverlayHistoryForNavigation()
+  resetMobileDetailPageSwipe()
   stopSelection()
   masonryDetailPost.value = null
   showBrandMenu.value = false
@@ -1926,6 +2146,7 @@ function handlePopState() {
   applyRoute()
 }
 function applyRoute() {
+  resetMobileDetailPageSwipe()
   const segments = window.location.pathname.split('/').filter(Boolean).map(segment => decodeURIComponent(segment))
   showSettings.value = false
   masonryDetailPost.value = null
@@ -2030,7 +2251,7 @@ watch(platformCards, cards => {
   selectedPlatform.value = cards.find(platform => platform.key === selectedPlatform.value.key) || null
 })
 onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; timelineView.value = localStorage.getItem('lumic-timeline-view') === 'masonry' ? 'masonry' : 'list'; loadRememberedLogin(); document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#080a0e' : '#fbf7ea'); phonePortraitQuery = window.matchMedia('(max-width: 760px)'); phonePortrait.value = isPhonePortraitScreen(); phonePortraitQuery.addEventListener('change', updatePhonePortrait); window.addEventListener('orientationchange', updatePhonePortrait); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); if (phonePortrait.value && window.location.pathname === '/') openPhoneDefaultTimeline(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', handlePopState); window.addEventListener('scroll', scheduleTimelineWindow, { passive: true }); window.addEventListener('resize', handleWindowResize) })
-onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLoop(); if (sessionPollTimer) window.clearInterval(sessionPollTimer); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); window.removeEventListener('orientationchange', updatePhonePortrait); postResizeObserver?.disconnect(); observedPostElements.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); lightboxHistoryActive = false; resetLightboxState(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', handlePopState); window.removeEventListener('scroll', scheduleTimelineWindow); window.removeEventListener('resize', handleWindowResize); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
+onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLoop(); if (sessionPollTimer) window.clearInterval(sessionPollTimer); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); window.removeEventListener('orientationchange', updatePhonePortrait); postResizeObserver?.disconnect(); observedPostElements.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); clearMobileDetailAnimation(); resetMobileDetailPageSwipe(); lightboxHistoryActive = false; resetLightboxState(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', handlePopState); window.removeEventListener('scroll', scheduleTimelineWindow); window.removeEventListener('resize', handleWindowResize); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
 </script>
 
 <template>
@@ -2057,15 +2278,15 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
     </div>
   </div>
   <div v-else class="app-shell" :class="{ dark: isDark, 'lightbox-active': lightbox.open, 'phone-ui': phonePortrait, 'timeline-search-focused': timelineSearchFocused, 'mobile-page-switching': mobilePageSwitching }" @click="showBrandMenu = false">
-    <button v-if="phonePortrait && !lightbox.open" class="mobile-timeline-toggle" type="button" :class="{ open: mobileSourcesOpen, active: mobileAtAllTimeline }" :aria-expanded="mobileSourcesOpen" :title="mobileSourcesOpen ? `收起${mobileTimelineTitle}栏目` : `展开${mobileTimelineTitle}栏目`" :aria-label="mobileSourcesOpen ? `收起${mobileTimelineTitle}栏目` : `展开${mobileTimelineTitle}栏目`" @pointerdown.stop @click.stop="toggleMobileTimelineShortcut">
+    <button v-if="phonePortrait && !lightbox.open && !masonryDetailPost" class="mobile-timeline-toggle" type="button" :class="{ open: mobileSourcesOpen, active: mobileAtAllTimeline }" :aria-expanded="mobileSourcesOpen" :title="mobileSourcesOpen ? `收起${mobileTimelineTitle}栏目` : `展开${mobileTimelineTitle}栏目`" :aria-label="mobileSourcesOpen ? `收起${mobileTimelineTitle}栏目` : `展开${mobileTimelineTitle}栏目`" @pointerdown.stop @click.stop="toggleMobileTimelineShortcut">
       <img v-if="mobileTimelineMeta" :class="['sidebar-source-icon', `sidebar-${activeSource}-icon`]" :src="mobileTimelineMeta.lineImage" alt="">
       <span v-else class="nav-line-symbol nav-mask-symbol" :style="{ '--nav-mask': `url(${timelineNavIcon})` }" aria-hidden="true"></span>
     </button>
-    <nav v-if="phonePortrait && mobileSourcesOpen && !lightbox.open" class="mobile-source-shortcuts" aria-label="平台动态">
+    <nav v-if="phonePortrait && mobileSourcesOpen && !lightbox.open && !masonryDetailPost" class="mobile-source-shortcuts" aria-label="平台动态">
       <button type="button" :class="{ active: mobileAtAllTimeline }" title="查看全部动态" aria-label="查看全部动态" @click.stop="navigateToMobileAll"><span class="nav-line-symbol nav-mask-symbol" :style="{ '--nav-mask': `url(${timelineNavIcon})` }" aria-hidden="true"></span></button>
       <button v-for="(meta, key) in sourceMeta" :key="`mobile-source-${key}`" type="button" :class="{ active: activeNav === 'source' && activeSource === key }" :title="`查看${meta.label}动态`" :aria-label="`查看${meta.label}动态`" @click.stop="navigateToMobileSource(key)"><img :class="['sidebar-source-icon', `sidebar-${key}-icon`]" :src="meta.lineImage" alt=""></button>
     </nav>
-    <button v-if="phonePortrait && !lightbox.open" class="mobile-menu-toggle" type="button" :class="{ open: mobileMenuOpen }" :aria-expanded="mobileMenuOpen" :title="mobileMenuOpen ? '关闭导航' : '打开导航'" :aria-label="mobileMenuOpen ? '关闭导航' : '打开导航'" @pointerdown.stop @click.stop="mobileSourcesOpen = false; mobileMenuOpen = !mobileMenuOpen">
+    <button v-if="phonePortrait && !lightbox.open && !masonryDetailPost" class="mobile-menu-toggle" type="button" :class="{ open: mobileMenuOpen }" :aria-expanded="mobileMenuOpen" :title="mobileMenuOpen ? '关闭导航' : '打开导航'" :aria-label="mobileMenuOpen ? '关闭导航' : '打开导航'" @pointerdown.stop @click.stop="mobileSourcesOpen = false; mobileMenuOpen = !mobileMenuOpen">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path class="menu-line menu-line-top" d="M5 7h14"/><path class="menu-line menu-line-middle" d="M5 12h14"/><path class="menu-line menu-line-bottom" d="M5 17h14"/></svg>
     </button>
     <button v-if="mobileMenuOpen || mobileSourcesOpen" class="mobile-menu-scrim" type="button" aria-label="关闭导航" @click="mobileMenuOpen = false; mobileSourcesOpen = false"></button>
@@ -2251,7 +2472,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
         <div v-if="!feeds.length" class="empty">还没有订阅作者，请先添加 UP 主或微博博主。</div>
       </section>
     </main>
-    <main v-if="phonePortrait && masonryDetailPost" class="content mobile-post-detail-page">
+    <main v-if="phonePortrait && masonryDetailPost" :class="['content', 'mobile-post-detail-page', { 'page-dragging': mobileDetailPageDragging }]" :style="mobileDetailPageStyle" @touchstart.passive="beginMobileDetailPageSwipe" @touchmove="updateMobileDetailPageSwipe" @touchend.passive="finishMobileDetailPageSwipe" @touchcancel.passive="finishMobileDetailPageSwipe">
       <header class="mobile-post-detail-head">
         <button class="mobile-post-back" type="button" title="返回动态页" aria-label="返回动态页" @click="closePostDetail"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg></button>
         <button class="mobile-post-author" type="button" @click="openAuthor(masonryDetailPost)"><img :src="postAvatar(masonryDetailPost)" data-fallback-index="0" :alt="masonryDetailPost.author" referrerpolicy="no-referrer" @error="handlePostAvatarError($event, masonryDetailPost)"><strong>{{ masonryDetailPost.author }}</strong></button>
@@ -2307,11 +2528,19 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
     </div>
     <div v-if="lightbox.open" :class="['lightbox-layer', { closing: lightboxClosing }]" role="dialog" aria-modal="true" :aria-label="`${lightbox.author} 的动态媒体`" @click.self="closeLightbox" @wheel.prevent="zoomLightbox">
       <button v-if="!phonePortrait" class="lightbox-close" type="button" title="关闭大图" aria-label="关闭大图" @click="closeLightbox">×</button>
-      <figure @click.self="closeLightbox">
-        <div :key="`${lightbox.media[lightbox.index]}:${lightbox.motion}`" :class="['lightbox-image-stage', `motion-${lightbox.motion}`, { 'mobile-original-size': phonePortrait && lightboxAtOriginalSize }]" @click.self="closeLightbox" @contextmenu.prevent>
+      <div :class="['lightbox-image-stage', `motion-${lightbox.motion}`, { 'mobile-original-size': phonePortrait && lightboxAtOriginalSize }]" @click.self="closeLightbox" @contextmenu.prevent>
+        <figure v-if="phonePortrait" class="mobile-lightbox-carousel" @click.stop @pointerdown.prevent="startLightboxGesture" @pointermove.prevent="moveLightboxGesture" @pointerup.prevent="stopLightboxGesture" @pointercancel.prevent="stopLightboxGesture">
+          <div class="mobile-lightbox-track" :style="mobileLightboxTrackStyle">
+            <div v-for="slide in mobileLightboxSlides" :key="`${slide.position}:${slide.media}`" :class="['mobile-lightbox-slide', { current: slide.position === 0 }]">
+              <img v-if="slide.position === 0" ref="lightboxImageElement" :src="slide.source" :alt="`${lightbox.author} 的动态图片 ${slide.index + 1}`" :class="{ dragging: lightbox.dragging, 'original-size': !lightbox.fit, 'original-loaded': lightboxOriginalLoaded }" :style="{ transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) rotate(${lightbox.rotation}deg) scale(${lightbox.scale})` }" draggable="false" @load="handleLightboxImageLoad">
+              <img v-else :src="slide.source" alt="" draggable="false">
+            </div>
+          </div>
+        </figure>
+        <figure v-else :key="`${lightbox.media[lightbox.index]}:${lightbox.motion}`" @click.self="closeLightbox">
           <img ref="lightboxImageElement" :src="lightboxDisplaySource" :alt="`${lightbox.author} 的动态图片 ${lightbox.index + 1}`" :class="{ dragging: lightbox.dragging, 'original-size': !lightbox.fit, 'original-loaded': lightboxOriginalLoaded }" :style="{ transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) rotate(${lightbox.rotation}deg) scale(${lightbox.scale})` }" draggable="false" @click.stop @pointerdown.prevent.stop="startLightboxGesture" @pointermove.prevent.stop="moveLightboxGesture" @pointerup.prevent.stop="stopLightboxGesture" @pointercancel.prevent.stop="stopLightboxGesture" @load="handleLightboxImageLoad">
-        </div>
-      </figure>
+        </figure>
+      </div>
       <div v-if="!phonePortrait" class="lightbox-dock-zone" @pointerenter="showLightboxDock(false)" @pointermove="showLightboxDock(false)" @pointerleave="scheduleLightboxDockHide(650)">
       <div :class="['lightbox-dock', { hidden: !lightboxDockVisible }]" role="toolbar" aria-label="图片查看工具">
         <button type="button" title="上一张" aria-label="上一张" :disabled="lightbox.media.length < 2" @click="moveLightbox(-1)"><svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg></button>
