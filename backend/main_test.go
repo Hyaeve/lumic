@@ -147,6 +147,30 @@ func TestMediaPreviewHandlerCompressesAndCleansCache(t *testing.T) {
 	if _, err := os.Stat(mobilePreviewPath); err != nil {
 		t.Fatalf("mobile preview cache missing: %v", err)
 	}
+	qualityRequest := httptest.NewRequest(http.MethodGet, "/preview/weibo/author/post.png?level=4&device=mobile", nil)
+	qualityResponse := httptest.NewRecorder()
+	mediaPreviewHandler(qualityResponse, qualityRequest)
+	qualityConfig, _, err := image.DecodeConfig(bytes.NewReader(qualityResponse.Body.Bytes()))
+	if err != nil {
+		t.Fatalf("decode level 4 preview: %v", err)
+	}
+	if qualityConfig.Width != 480 || qualityConfig.Height != 320 {
+		t.Fatalf("unexpected level 4 preview dimensions: %dx%d", qualityConfig.Width, qualityConfig.Height)
+	}
+	qualityPreviewPath, ok := mediaPreviewCachePathWithSuffix(root, sourcePath, ".q2.mobile.4.jpg")
+	if !ok {
+		t.Fatal("level 4 preview path was rejected")
+	}
+	originalRequest := httptest.NewRequest(http.MethodGet, "/preview/weibo/author/post.png?level=0&device=mobile", nil)
+	originalResponse := httptest.NewRecorder()
+	mediaPreviewHandler(originalResponse, originalRequest)
+	originalConfig, format, err := image.DecodeConfig(bytes.NewReader(originalResponse.Body.Bytes()))
+	if err != nil {
+		t.Fatalf("decode original preview: %v", err)
+	}
+	if format != "png" || originalConfig.Width != 1200 || originalConfig.Height != 800 {
+		t.Fatalf("level 0 did not return the original: format=%s size=%dx%d", format, originalConfig.Width, originalConfig.Height)
+	}
 
 	if err := deletePostMedia([]string{"/flow/weibo/author/post.png"}); err != nil {
 		t.Fatalf("delete media: %v", err)
@@ -159,6 +183,21 @@ func TestMediaPreviewHandlerCompressesAndCleansCache(t *testing.T) {
 	}
 	if _, err := os.Stat(mobilePreviewPath); !os.IsNotExist(err) {
 		t.Fatalf("mobile preview cache still exists: %v", err)
+	}
+	if _, err := os.Stat(qualityPreviewPath); !os.IsNotExist(err) {
+		t.Fatalf("level 4 preview cache still exists: %v", err)
+	}
+}
+
+func TestProjectSettingsViewUsesPreviewDefaultsAndConfiguredLevels(t *testing.T) {
+	view := projectSettingsView(BilibiliConfig{})
+	if view.PreviewDesktopLevel != 2 || view.PreviewMobileLevel != 3 {
+		t.Fatalf("unexpected preview defaults: desktop=%d mobile=%d", view.PreviewDesktopLevel, view.PreviewMobileLevel)
+	}
+	desktop, mobile := 4, 5
+	view = projectSettingsView(BilibiliConfig{PreviewDesktopLevel: &desktop, PreviewMobileLevel: &mobile})
+	if view.PreviewDesktopLevel != 4 || view.PreviewMobileLevel != 5 {
+		t.Fatalf("configured preview levels were not preserved: desktop=%d mobile=%d", view.PreviewDesktopLevel, view.PreviewMobileLevel)
 	}
 }
 

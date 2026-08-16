@@ -56,6 +56,56 @@ const (
 	pixivBookmarksName         = "P站收藏"
 )
 
+type mediaPreviewProfile struct {
+	Level        int
+	MaxDimension int
+	JPEGQuality  int
+	Suffix       string
+}
+
+func mediaPreviewProfileFor(level int, device, network string) mediaPreviewProfile {
+	if level < 0 || level > 5 {
+		if device == "mobile" {
+			level = 3
+		} else {
+			level = 2
+		}
+	}
+	if level == 5 {
+		switch network {
+		case "slow":
+			level = 4
+		case "medium":
+			level = 3
+		default:
+			if device == "mobile" {
+				level = 2
+			} else {
+				level = 1
+			}
+		}
+	}
+	profiles := map[int]struct{ dimension, quality int }{
+		1: {1600, 93},
+		2: {1100, 89},
+		3: {720, 80},
+		4: {480, 72},
+	}
+	selected, ok := profiles[level]
+	if !ok {
+		return mediaPreviewProfile{Level: 0}
+	}
+	if device != "mobile" {
+		device = "desktop"
+	}
+	return mediaPreviewProfile{
+		Level:        level,
+		MaxDimension: selected.dimension,
+		JPEGQuality:  selected.quality,
+		Suffix:       fmt.Sprintf(".q2.%s.%d.jpg", device, level),
+	}
+}
+
 type Post struct {
 	ID               string      `json:"id"`
 	Source           Source      `json:"source"`
@@ -410,18 +460,38 @@ type WeiboQRSession struct {
 }
 
 type BilibiliConfig struct {
-	Credentials        BilibiliCredentials `json:"credentials"`
-	Pixiv              PixivCredentials    `json:"pixiv"`
-	Weibo              WeiboCredentials    `json:"weibo"`
-	Subscriptions      []SourceConfig      `json:"subscriptions"`
-	WeiboSubscriptions []SourceConfig      `json:"weiboSubscriptions"`
-	PixivSubscriptions []SourceConfig      `json:"pixivSubscriptions"`
-	ProxyURL           string              `json:"proxyUrl,omitempty"`
+	Credentials         BilibiliCredentials `json:"credentials"`
+	Pixiv               PixivCredentials    `json:"pixiv"`
+	Weibo               WeiboCredentials    `json:"weibo"`
+	Subscriptions       []SourceConfig      `json:"subscriptions"`
+	WeiboSubscriptions  []SourceConfig      `json:"weiboSubscriptions"`
+	PixivSubscriptions  []SourceConfig      `json:"pixivSubscriptions"`
+	ProxyURL            string              `json:"proxyUrl,omitempty"`
+	PreviewDesktopLevel *int                `json:"previewDesktopLevel,omitempty"`
+	PreviewMobileLevel  *int                `json:"previewMobileLevel,omitempty"`
 }
 
 type ProjectSettingsView struct {
-	ProxyEnabled bool   `json:"proxyEnabled"`
-	ProxyURL     string `json:"proxyUrl,omitempty"`
+	ProxyEnabled        bool   `json:"proxyEnabled"`
+	ProxyURL            string `json:"proxyUrl,omitempty"`
+	PreviewDesktopLevel int    `json:"previewDesktopLevel"`
+	PreviewMobileLevel  int    `json:"previewMobileLevel"`
+}
+
+func normalizedPreviewLevel(value *int, fallback int) int {
+	if value == nil || *value < 0 || *value > 5 {
+		return fallback
+	}
+	return *value
+}
+
+func projectSettingsView(config BilibiliConfig) ProjectSettingsView {
+	return ProjectSettingsView{
+		ProxyEnabled:        config.ProxyURL != "",
+		ProxyURL:            maskedProxyURL(config.ProxyURL),
+		PreviewDesktopLevel: normalizedPreviewLevel(config.PreviewDesktopLevel, 2),
+		PreviewMobileLevel:  normalizedPreviewLevel(config.PreviewMobileLevel, 3),
+	}
 }
 
 type BilibiliStore struct {
@@ -1849,9 +1919,7 @@ func deletePostMedia(media []string) error {
 		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 			continue
 		}
-		preview, hasPreview := mediaPreviewCachePath(root, absolute)
-		mobilePreview, hasMobilePreview := mediaPreviewMobileCachePath(root, absolute)
-		obsoletePreviews := obsoleteMediaPreviewCachePaths(root, absolute)
+		previewPaths := mediaPreviewCachePaths(root, absolute)
 		if info, err := os.Stat(absolute); err == nil {
 			if info.IsDir() {
 				continue
@@ -1862,18 +1930,8 @@ func deletePostMedia(media []string) error {
 		} else if !os.IsNotExist(err) {
 			return err
 		}
-		if hasPreview {
-			if _, _, err := removeMediaPreviewCacheFile(preview); err != nil {
-				return err
-			}
-		}
-		if hasMobilePreview {
-			if _, _, err := removeMediaPreviewCacheFile(mobilePreview); err != nil {
-				return err
-			}
-		}
-		for _, obsoletePreview := range obsoletePreviews {
-			if err := os.Remove(obsoletePreview); err != nil && !os.IsNotExist(err) {
+		for _, previewPath := range previewPaths {
+			if _, _, err := removeMediaPreviewCacheFile(previewPath); err != nil {
 				return err
 			}
 		}
@@ -1904,6 +1962,7 @@ var mediaPreviewLocks = struct {
 	entries map[string]*mediaPreviewLock
 }{entries: make(map[string]*mediaPreviewLock)}
 var mediaPreviewGenerationSlots = make(chan struct{}, 2)
+var mediaPreviewQualitySuffixPattern = regexp.MustCompile(`\.q2\.(?:desktop|mobile)\.[1-4]\.jpg$`)
 
 func acquireMediaPreviewLock(previewPath string) func() {
 	mediaPreviewLocks.Lock()
@@ -1958,6 +2017,23 @@ func obsoleteMediaPreviewCachePaths(root, source string) []string {
 	}
 	base := filepath.Join(previewBase, relative)
 	return []string{base + ".v3.jpg", base + ".v2.jpg", base + ".jpg"}
+}
+
+func mediaPreviewCachePaths(root, source string) []string {
+	paths := obsoleteMediaPreviewCachePaths(root, source)
+	for _, suffix := range []string{mediaPreviewCacheSuffix, mediaPreviewMobileCacheSuffix} {
+		if path, ok := mediaPreviewCachePathWithSuffix(root, source, suffix); ok {
+			paths = append(paths, path)
+		}
+	}
+	for _, device := range []string{"desktop", "mobile"} {
+		for level := 1; level <= 4; level++ {
+			if path, ok := mediaPreviewCachePathWithSuffix(root, source, fmt.Sprintf(".q2.%s.%d.jpg", device, level)); ok {
+				paths = append(paths, path)
+			}
+		}
+	}
+	return paths
 }
 
 func resizeMediaPreview(source image.Image, width, height int) *image.RGBA {
@@ -2035,6 +2111,9 @@ func mediaPreviewSourceRelative(relative string) (string, bool) {
 		if strings.HasSuffix(relative, suffix) {
 			return strings.TrimSuffix(relative, suffix), true
 		}
+	}
+	if match := mediaPreviewQualitySuffixPattern.FindString(relative); match != "" {
+		return strings.TrimSuffix(relative, match), true
 	}
 	return "", false
 }
@@ -2165,13 +2244,26 @@ func mediaPreviewHandler(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	mobile := r.URL.Query().Get("mobile") == "1"
-	maxDimension, jpegQuality := mediaPreviewMaxDimension, mediaPreviewJPEGQuality
-	previewPath, ok := mediaPreviewCachePath(root, sourcePath)
-	if mobile {
-		maxDimension, jpegQuality = mediaPreviewMobileMaxDimension, mediaPreviewMobileJPEGQuality
-		previewPath, ok = mediaPreviewMobileCachePath(root, sourcePath)
+	device := strings.TrimSpace(r.URL.Query().Get("device"))
+	legacyMobile := device == "" && r.URL.Query().Get("mobile") == "1"
+	rawLevel := strings.TrimSpace(r.URL.Query().Get("level"))
+	profile := mediaPreviewProfile{}
+	if rawLevel == "" {
+		if legacyMobile {
+			profile = mediaPreviewProfile{Level: 3, MaxDimension: mediaPreviewMobileMaxDimension, JPEGQuality: mediaPreviewMobileJPEGQuality, Suffix: mediaPreviewMobileCacheSuffix}
+		} else {
+			profile = mediaPreviewProfile{Level: 2, MaxDimension: mediaPreviewMaxDimension, JPEGQuality: mediaPreviewJPEGQuality, Suffix: mediaPreviewCacheSuffix}
+		}
+	} else {
+		level, _ := strconv.Atoi(rawLevel)
+		profile = mediaPreviewProfileFor(level, device, strings.TrimSpace(r.URL.Query().Get("network")))
 	}
+	if profile.Level == 0 {
+		w.Header().Set("Cache-Control", "public, max-age=3600")
+		http.ServeFile(w, r, sourcePath)
+		return
+	}
+	previewPath, ok := mediaPreviewCachePathWithSuffix(root, sourcePath, profile.Suffix)
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -2188,7 +2280,7 @@ func mediaPreviewHandler(w http.ResponseWriter, r *http.Request) {
 		mediaPreviewGenerationSlots <- struct{}{}
 		generationErr := func() error {
 			defer func() { <-mediaPreviewGenerationSlots }()
-			return generateMediaPreview(sourcePath, previewPath, maxDimension, jpegQuality)
+			return generateMediaPreview(sourcePath, previewPath, profile.MaxDimension, profile.JPEGQuality)
 		}()
 		if generationErr != nil {
 			w.Header().Set("Cache-Control", "public, max-age=3600")
@@ -2862,27 +2954,42 @@ func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Requ
 func (b *BilibiliStore) projectSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		b.RLock()
-		proxyURL := b.config.ProxyURL
+		view := projectSettingsView(b.config)
 		b.RUnlock()
-		writeJSON(w, ProjectSettingsView{ProxyEnabled: proxyURL != "", ProxyURL: maskedProxyURL(proxyURL)})
+		writeJSON(w, view)
 		return
 	}
 	var input struct {
-		ProxyURL string `json:"proxyUrl"`
+		ProxyURL            *string `json:"proxyUrl"`
+		PreviewDesktopLevel *int    `json:"previewDesktopLevel"`
+		PreviewMobileLevel  *int    `json:"previewMobileLevel"`
 	}
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&input) != nil {
 		writeAPIError(w, http.StatusBadRequest, "代理设置格式无效")
 		return
 	}
-	input.ProxyURL = strings.TrimSpace(input.ProxyURL)
-	if input.ProxyURL != "" {
-		if _, err := validateProxyURL(input.ProxyURL); err != nil {
-			writeAPIError(w, http.StatusBadRequest, err.Error())
+	proxyURL := ""
+	if input.ProxyURL != nil {
+		proxyURL = strings.TrimSpace(*input.ProxyURL)
+		if proxyURL != "" {
+			if _, err := validateProxyURL(proxyURL); err != nil {
+				writeAPIError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+	}
+	for _, level := range []*int{input.PreviewDesktopLevel, input.PreviewMobileLevel} {
+		if level != nil && (*level < 0 || *level > 5) {
+			writeAPIError(w, http.StatusBadRequest, "预览画质档位必须在 0 到 5 之间")
 			return
 		}
 	}
 	if r.Method == http.MethodPost {
-		client, err := externalHTTPClient(input.ProxyURL)
+		if input.ProxyURL == nil {
+			writeAPIError(w, http.StatusBadRequest, "请提供代理地址")
+			return
+		}
+		client, err := externalHTTPClient(proxyURL)
 		if err == nil {
 			request, requestErr := http.NewRequest(http.MethodGet, "https://www.pixiv.net/robots.txt", nil)
 			if requestErr == nil {
@@ -2905,13 +3012,24 @@ func (b *BilibiliStore) projectSettingsHandler(w http.ResponseWriter, r *http.Re
 		return
 	}
 	b.Lock()
-	b.config.ProxyURL = input.ProxyURL
+	if input.ProxyURL != nil {
+		b.config.ProxyURL = proxyURL
+	}
+	if input.PreviewDesktopLevel != nil {
+		value := *input.PreviewDesktopLevel
+		b.config.PreviewDesktopLevel = &value
+	}
+	if input.PreviewMobileLevel != nil {
+		value := *input.PreviewMobileLevel
+		b.config.PreviewMobileLevel = &value
+	}
+	view := projectSettingsView(b.config)
 	b.Unlock()
 	if err := b.save(); err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "无法保存项目代理")
+		writeAPIError(w, http.StatusInternalServerError, "无法保存项目设置")
 		return
 	}
-	writeJSON(w, ProjectSettingsView{ProxyEnabled: input.ProxyURL != "", ProxyURL: maskedProxyURL(input.ProxyURL)})
+	writeJSON(w, view)
 }
 
 // Bilibili sync accepts text, image-text, opus and article cards. Video cards are opt-in; forwarded cards remain excluded.
