@@ -46,11 +46,14 @@ const confirmDialog = ref({ open: false, title: '', message: '', confirmText: '�
 let confirmResolver = null
 const loginBusy = ref(false)
 const credentials = ref({ username: '', password: '' })
+const rememberPassword = ref(false)
+const passwordVisible = ref(false)
 const activeNav = ref('all')
 const activeSource = ref('all')
 const sourcesExpanded = ref(true)
 const mobileMenuOpen = ref(false)
 const mobileSourcesOpen = ref(false)
+const mobilePageSwitching = ref(false)
 const showBrandMenu = ref(false)
 const phonePortrait = ref(false)
 const selectedAuthor = ref(null)
@@ -138,6 +141,10 @@ const lightboxImageElement = ref(null)
 const lightboxScalePercent = ref(100)
 const lightboxAtOriginalSize = ref(false)
 const lightboxDockVisible = ref(true)
+const lightboxClosing = ref(false)
+const lightboxTransitioning = ref(false)
+const lightboxDisplaySource = ref('')
+const lightboxOriginalLoaded = ref(false)
 const mobileLightboxMenu = ref({ open: false, x: 0, y: 0 })
 const meteorBurst = ref([])
 const lightboxPointers = new Map()
@@ -147,7 +154,13 @@ let lightboxScaleFrame = 0
 let lightboxLastTap = { time: 0, x: 0, y: 0 }
 let lightboxDockTimer = 0
 let lightboxLongPressTimer = 0
+let lightboxSingleTapTimer = 0
+let lightboxLoadSequence = 0
 let lightboxHistoryActive = false
+let lightboxHistoryPopPending = false
+let phoneOverlayHistoryActive = ''
+let phoneOverlayHistoryClosing = false
+let phoneOverlayDismissInProgress = false
 let meteorBurstTimer = 0
 let meteorCleanupTimer = 0
 let meteorBurstSequence = 0
@@ -194,7 +207,7 @@ const mobileDetailTrackStyle = computed(() => {
   const baseShift = mobileDetailMedia.value.length > 1 ? -100 : 0
   return {
     transform: `translate3d(calc(${baseShift + mobileDetailTrackShift.value}% + ${mobileDetailDragX.value}px), 0, 0)`,
-    transition: mobileDetailDragging.value ? 'none' : mobileDetailAnimating.value ? 'transform .3s cubic-bezier(.22, .72, .2, 1)' : 'none'
+    transition: mobileDetailDragging.value ? 'none' : mobileDetailAnimating.value ? 'transform .38s cubic-bezier(.18, .78, .18, 1)' : 'none'
   }
 })
 const filteredPosts = computed(() => {
@@ -218,6 +231,25 @@ const filteredPosts = computed(() => {
 const effectiveTimelineView = computed(() => timelineView.value)
 const isMasonryView = computed(() => effectiveTimelineView.value === 'masonry')
 const mobileAtAllTimeline = computed(() => activeNav.value === 'all' && activeSource.value === 'all' && !showSettings.value && !masonryDetailPost.value)
+const mobileTimelineMeta = computed(() => activeNav.value === 'source' && sourceMeta[activeSource.value] ? sourceMeta[activeSource.value] : null)
+const mobileTimelineTitle = computed(() => mobileTimelineMeta.value ? `${mobileTimelineMeta.value.label}动态` : '全部动态')
+const phoneOverlayKey = computed(() => {
+  if (!phonePortrait.value) return ''
+  if (mobileLightboxMenu.value.open) return 'lightbox-menu'
+  if (lightbox.value.open) return ''
+  if (confirmDialog.value.open) return 'confirm'
+  if (showFeedSettings.value) return 'feed-settings'
+  if (credentialPlatform.value) return 'credential-platform'
+  if (selectedPlatform.value) return 'platform'
+  if (showBilibili.value) return 'bilibili'
+  if (showWeibo.value) return 'weibo'
+  if (showPixiv.value) return 'pixiv'
+  if (showAdd.value) return 'add-source'
+  if (contextMenu.value.open) return 'context-menu'
+  if (mobileMenuOpen.value) return 'mobile-menu'
+  if (mobileSourcesOpen.value) return 'mobile-sources'
+  return ''
+})
 const visiblePosts = computed(() => filteredPosts.value.slice(timelineStart.value, timelineEnd.value))
 function estimateMasonryPostHeight(post) {
   const width = masonryColumnWidth.value
@@ -363,6 +395,8 @@ async function login() {
   try {
     const response = await fetch('/api/login', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(credentials.value) })
     if (!response.ok) throw new Error('账号或密码不正确')
+    if (rememberPassword.value) localStorage.setItem('lumic-remembered-login', JSON.stringify(credentials.value))
+    else localStorage.removeItem('lumic-remembered-login')
     authenticated.value = true
     await loadData()
     await loadPlatformAccounts()
@@ -370,9 +404,11 @@ async function login() {
   finally { loginBusy.value = false }
 }
 async function logout() {
+  clearPhoneOverlayHistoryForNavigation()
   try {
     await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' })
   } finally {
+    passwordVisible.value = false
     showBrandMenu.value = false
     mobileMenuOpen.value = false
     mobileSourcesOpen.value = false
@@ -382,6 +418,16 @@ async function logout() {
     selectedPlatform.value = null
     credentialPlatform.value = null
     stopSelection()
+  }
+}
+function loadRememberedLogin() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('lumic-remembered-login') || 'null')
+    if (!saved?.username || !saved?.password) return
+    credentials.value = { username: String(saved.username), password: String(saved.password) }
+    rememberPassword.value = true
+  } catch {
+    localStorage.removeItem('lumic-remembered-login')
   }
 }
 async function loadData() {
@@ -491,6 +537,7 @@ async function syncNow() {
   scheduleTransient(() => { syncing.value = false }, 900)
 }
 async function openSettings(_section = 'settings', updateHistory = true) {
+  clearPhoneOverlayHistoryForNavigation()
   mobileMenuOpen.value = false
   mobileSourcesOpen.value = false
   showBrandMenu.value = false
@@ -879,6 +926,7 @@ function resetLightboxView() {
   lightboxGestureHadPinch = false
   lightboxLastTap = { time: 0, x: 0, y: 0 }
   mobileLightboxMenu.value = { open: false, x: 0, y: 0 }
+  clearLightboxSingleTap()
   clearLightboxLongPress()
   scheduleLightboxScaleUpdate()
 }
@@ -888,10 +936,13 @@ function openLightbox(post, index) {
     lightboxHistoryActive = true
   }
   lightbox.value = { open: true, media: post.media || [], index, author: post.author, scale: 1, rotation: 0, fit: true, x: 0, y: 0, dragging: false, motion: 'enter' }
+  lightboxClosing.value = false
+  lightboxTransitioning.value = false
   lightboxScalePercent.value = 100
   lightboxAtOriginalSize.value = false
   mobileLightboxMenu.value = { open: false, x: 0, y: 0 }
   showLightboxDock(true)
+  prepareLightboxSource()
   scheduleLightboxScaleUpdate()
 }
 function resetLightboxState() {
@@ -901,27 +952,74 @@ function resetLightboxState() {
   lightboxGestureHadPinch = false
   lightboxAtOriginalSize.value = false
   lightboxLastTap = { time: 0, x: 0, y: 0 }
+  lightboxDisplaySource.value = ''
+  lightboxOriginalLoaded.value = false
+  lightboxClosing.value = false
+  lightboxTransitioning.value = false
+  lightboxLoadSequence++
   mobileLightboxMenu.value = { open: false, x: 0, y: 0 }
   clearLightboxLongPress()
+  clearLightboxSingleTap()
   clearLightboxDockTimer()
   if (lightboxScaleFrame) window.cancelAnimationFrame(lightboxScaleFrame)
   lightboxScaleFrame = 0
 }
 function closeLightbox(fromHistory = false) {
-  if (!fromHistory && lightboxHistoryActive) {
-    window.history.back()
-    return
-  }
-  lightboxHistoryActive = false
-  resetLightboxState()
+  if (lightboxClosing.value) return
+  lightboxClosing.value = true
+  clearLightboxSingleTap()
+  const hadHistory = lightboxHistoryActive
+  scheduleTransient(() => {
+    lightboxHistoryActive = false
+    resetLightboxState()
+    if (!fromHistory && hadHistory) {
+      lightboxHistoryPopPending = true
+      window.history.back()
+    }
+  }, 190)
 }
 function moveLightbox(step) {
   const total = lightbox.value.media.length
-  if (total > 1) {
+  if (total < 2 || lightboxTransitioning.value) return
+  lightboxTransitioning.value = true
+  lightbox.value.motion = step > 0 ? 'leave-next' : 'leave-previous'
+  scheduleTransient(() => {
     lightbox.value.index = (lightbox.value.index + step + total) % total
     resetLightboxView()
-    lightbox.value.motion = step > 0 ? 'next' : 'previous'
+    lightbox.value.motion = step > 0 ? 'enter-next' : 'enter-previous'
+    prepareLightboxSource()
+    scheduleTransient(() => {
+      lightbox.value.motion = 'idle'
+      lightboxTransitioning.value = false
+    }, 290)
+  }, 150)
+}
+function prepareLightboxSource() {
+  const source = lightbox.value.media[lightbox.value.index] || ''
+  const preview = phonePortrait.value ? previewMedia(source) : source
+  const sequence = ++lightboxLoadSequence
+  lightboxDisplaySource.value = preview
+  lightboxOriginalLoaded.value = preview === source
+  if (phonePortrait.value && lightbox.value.media.length > 1) {
+    for (const offset of [-1, 1]) {
+      const index = (lightbox.value.index + offset + lightbox.value.media.length) % lightbox.value.media.length
+      const preload = new Image()
+      preload.src = previewMedia(lightbox.value.media[index])
+    }
   }
+  if (!source || preview === source) return
+  const original = new Image()
+  original.decoding = 'async'
+  original.onload = () => {
+    if (sequence !== lightboxLoadSequence || !lightbox.value.open) return
+    lightboxOriginalLoaded.value = false
+    lightboxDisplaySource.value = source
+  }
+  original.src = source
+}
+function handleLightboxImageLoad() {
+  lightboxOriginalLoaded.value = lightboxDisplaySource.value === lightbox.value.media[lightbox.value.index]
+  scheduleLightboxScaleUpdate()
 }
 function zoomLightbox(event) {
   zoomLightboxBy(event.deltaY < 0 ? 0.15 : -0.15)
@@ -983,6 +1081,17 @@ function showLightboxDock(autoHide = false) {
 function clearLightboxLongPress() {
   if (lightboxLongPressTimer) window.clearTimeout(lightboxLongPressTimer)
   lightboxLongPressTimer = 0
+}
+function clearLightboxSingleTap() {
+  if (lightboxSingleTapTimer) window.clearTimeout(lightboxSingleTapTimer)
+  lightboxSingleTapTimer = 0
+}
+function scheduleLightboxSingleTapClose() {
+  clearLightboxSingleTap()
+  lightboxSingleTapTimer = window.setTimeout(() => {
+    lightboxSingleTapTimer = 0
+    closeLightbox()
+  }, 310)
 }
 function scheduleLightboxLongPress(event) {
   clearLightboxLongPress()
@@ -1065,6 +1174,7 @@ function beginLightboxPinch() {
 function startLightboxGesture(event) {
   if (event.pointerType === 'mouse' && event.button !== 0) return
   if (mobileLightboxMenu.value.open) mobileLightboxMenu.value = { open: false, x: 0, y: 0 }
+  clearLightboxSingleTap()
   event.currentTarget.setPointerCapture(event.pointerId)
   lightboxPointers.set(event.pointerId, { id: event.pointerId, x: event.clientX, y: event.clientY, time: event.timeStamp, startedOnImage: event.target === lightboxImageElement.value })
   lightbox.value.dragging = !(phonePortrait.value && isMobileLightboxSwipeView())
@@ -1097,19 +1207,32 @@ function moveLightboxGesture(event) {
   lightbox.value.x = lightboxGesture.imageX + event.clientX - lightboxGesture.startX
   lightbox.value.y = lightboxGesture.imageY + event.clientY - lightboxGesture.startY
 }
-function toggleLightboxDoubleTap() {
+function toggleLightboxDoubleTap(event) {
   if (phonePortrait.value) {
     const atDefaultFit = lightbox.value.fit && Math.abs(lightbox.value.scale - 1) < 0.02 && Math.abs(lightbox.value.x) < 2 && Math.abs(lightbox.value.y) < 2
     lightbox.value.fit = true
-    lightbox.value.scale = atDefaultFit
-      ? Math.min(lightboxMaximumScale(), Math.max(1, Number((1 / lightboxBaseScale()).toFixed(3))))
-      : 1
+    if (atDefaultFit) {
+      const previousScale = lightbox.value.scale
+      const targetScale = Math.min(lightboxMaximumScale(), lightboxBaseScale() > .82 ? 1.55 : 1.82)
+      const scaleRatio = targetScale / previousScale
+      const focusX = event.clientX - window.innerWidth / 2
+      const focusY = event.clientY - window.innerHeight / 2
+      lightbox.value.scale = targetScale
+      lightbox.value.x -= focusX * (scaleRatio - 1)
+      lightbox.value.y -= focusY * (scaleRatio - 1)
+    } else {
+      lightbox.value.scale = 1
+      lightbox.value.x = 0
+      lightbox.value.y = 0
+    }
   } else {
     lightbox.value.fit = !lightbox.value.fit || Math.abs(lightbox.value.scale - 1) > 0.02 || Math.abs(lightbox.value.x) > 2 || Math.abs(lightbox.value.y) > 2
     lightbox.value.scale = 1
   }
-  lightbox.value.x = 0
-  lightbox.value.y = 0
+  if (!phonePortrait.value) {
+    lightbox.value.x = 0
+    lightbox.value.y = 0
+  }
   scheduleLightboxScaleUpdate()
 }
 function stopLightboxGesture(event) {
@@ -1134,10 +1257,12 @@ function stopLightboxGesture(event) {
     const sinceLastTap = event.timeStamp - lightboxLastTap.time
     const nearLastTap = Math.hypot(event.clientX - lightboxLastTap.x, event.clientY - lightboxLastTap.y) < 34
     if (sinceLastTap > 0 && sinceLastTap < 340 && nearLastTap) {
-      toggleLightboxDoubleTap()
+      clearLightboxSingleTap()
+      toggleLightboxDoubleTap(event)
       lightboxLastTap = { time: 0, x: 0, y: 0 }
     } else {
       lightboxLastTap = { time: event.timeStamp, x: event.clientX, y: event.clientY }
+      scheduleLightboxSingleTapClose()
     }
   }
 
@@ -1162,16 +1287,19 @@ function closeMobileNavigationOnInputFocus() {
 }
 function toggleMobileTimelineShortcut() {
   mobileMenuOpen.value = false
-  if (!mobileAtAllTimeline.value) {
-    mobileSourcesOpen.value = false
-    navigateTo('all', 'all')
-    return
-  }
   mobileSourcesOpen.value = !mobileSourcesOpen.value
 }
 function navigateToMobileSource(source) {
+  mobilePageSwitching.value = true
   mobileSourcesOpen.value = false
   navigateTo('source', source)
+  scheduleTransient(() => { mobilePageSwitching.value = false }, 360)
+}
+function navigateToMobileAll() {
+  mobilePageSwitching.value = true
+  mobileSourcesOpen.value = false
+  navigateTo('all', 'all')
+  scheduleTransient(() => { mobilePageSwitching.value = false }, 360)
 }
 function releaseTimelineSearchFocus() {
   timelineSearchFocused.value = false
@@ -1243,6 +1371,30 @@ async function deletePost(post) {
     timelineMessage.value = '动态已从时间线删除'
     scheduleTransient(() => { if (timelineMessage.value === '动态已从时间线删除') timelineMessage.value = '' }, 2500)
   } catch (error) { timelineMessage.value = error.message } finally { postActionBusy.value = '' }
+}
+function clearPhoneOverlayHistoryForNavigation() {
+  if (!phonePortrait.value || !phoneOverlayHistoryActive) return
+  const state = { ...(window.history.state || {}) }
+  delete state.lumicOverlay
+  window.history.replaceState(state, '', window.location.href)
+  phoneOverlayHistoryActive = ''
+  phoneOverlayHistoryClosing = false
+}
+function dismissPhoneOverlay(kind = phoneOverlayKey.value) {
+  phoneOverlayDismissInProgress = true
+  if (kind === 'lightbox-menu') mobileLightboxMenu.value = { open: false, x: 0, y: 0 }
+  else if (kind === 'confirm') closeConfirmDialog(false)
+  else if (kind === 'feed-settings') showFeedSettings.value = false
+  else if (kind === 'credential-platform') credentialPlatform.value = null
+  else if (kind === 'platform') selectedPlatform.value = null
+  else if (kind === 'bilibili') showBilibili.value = false
+  else if (kind === 'weibo') showWeibo.value = false
+  else if (kind === 'pixiv') showPixiv.value = false
+  else if (kind === 'add-source') showAdd.value = false
+  else if (kind === 'context-menu') closeContextMenu()
+  else if (kind === 'mobile-menu') mobileMenuOpen.value = false
+  else if (kind === 'mobile-sources') mobileSourcesOpen.value = false
+  nextTick(() => { phoneOverlayDismissInProgress = false })
 }
 function togglePostSelection(post) {
   selectedPostIds.value = selectedPostIds.value.includes(post.id) ? selectedPostIds.value.filter(id => id !== post.id) : [...selectedPostIds.value, post.id]
@@ -1462,7 +1614,7 @@ function moveMobileDetailMedia(direction, targetIndex = null) {
     mobileDetailTrackShift.value = 0
     mobileDetailDragX.value = 0
     scheduleTransient(() => { mobileDetailSwipeClickBlocked = false }, 80)
-  }, 300)
+  }, 380)
 }
 function selectMobileDetailMedia(index) {
   if (index === mobileDetailIndex.value || mobileDetailAnimating.value) return
@@ -1518,7 +1670,7 @@ function finishMobileDetailSwipe(event) {
   scheduleTransient(() => {
     mobileDetailAnimating.value = false
     mobileDetailSwipeClickBlocked = false
-  }, 300)
+  }, 380)
 }
 function cancelMobileDetailSwipe() {
   if (!mobileDetailTouch) return
@@ -1529,7 +1681,7 @@ function cancelMobileDetailSwipe() {
   scheduleTransient(() => {
     mobileDetailAnimating.value = false
     mobileDetailSwipeClickBlocked = false
-  }, 300)
+  }, 380)
 }
 function masonryItemStyle(item) {
   return {
@@ -1591,6 +1743,7 @@ async function updatePostFavorite(post, liked) {
 }
 function togglePostLike(post) { return updatePostFavorite(post, !post.liked) }
 function navigateTo(nav, source = activeSource.value) {
+  clearPhoneOverlayHistoryForNavigation()
   stopSelection()
   masonryDetailPost.value = null
   showBrandMenu.value = false
@@ -1608,6 +1761,7 @@ function navigateTo(nav, source = activeSource.value) {
   if (nav === 'pulls') void Promise.all([loadFeeds(), loadPlatformAccounts()])
 }
 function openTag(tag) {
+  clearPhoneOverlayHistoryForNavigation()
   stopSelection(); masonryDetailPost.value = null; showSettings.value = false; selectedAuthor.value = null; selectedTag.value = tag; activeNav.value = 'tag'; activeSource.value = 'all'; mobileSourcesOpen.value = false
   updateRoute(`/tag/${encodeURIComponent(tag)}`)
 }
@@ -1720,6 +1874,7 @@ function openPhoneDefaultTimeline() {
   updateRoute('/', true)
 }
 function openAuthor(post) {
+  clearPhoneOverlayHistoryForNavigation()
   mobileSourcesOpen.value = false
   masonryDetailPost.value = null
   authorReturnState.value = { nav: activeNav.value, source: activeSource.value }
@@ -1738,6 +1893,20 @@ function updateRoute(path, replace = false) {
   window.history[replace ? 'replaceState' : 'pushState']({}, '', path)
 }
 function handlePopState() {
+  if (phoneOverlayHistoryClosing) {
+    phoneOverlayHistoryClosing = false
+    return
+  }
+  if (phoneOverlayHistoryActive) {
+    const kind = phoneOverlayHistoryActive
+    phoneOverlayHistoryActive = ''
+    dismissPhoneOverlay(kind)
+    return
+  }
+  if (lightboxHistoryPopPending) {
+    lightboxHistoryPopPending = false
+    return
+  }
   if (lightboxHistoryActive) {
     closeLightbox(true)
     return
@@ -1823,6 +1992,20 @@ async function checkSession(refreshData = true) {
 }
 watch(filteredPosts, resetTimelineWindow)
 watch(posts, prunePostCaches)
+watch(phoneOverlayKey, next => {
+  if (!phonePortrait.value || phoneOverlayDismissInProgress) return
+  if (next) {
+    const state = { ...(window.history.state || {}), lumicOverlay: next }
+    if (phoneOverlayHistoryActive) window.history.replaceState(state, '', window.location.href)
+    else window.history.pushState(state, '', window.location.href)
+    phoneOverlayHistoryActive = next
+    return
+  }
+  if (!phoneOverlayHistoryActive) return
+  phoneOverlayHistoryActive = ''
+  phoneOverlayHistoryClosing = true
+  window.history.back()
+})
 watch(timelineView, value => localStorage.setItem('lumic-timeline-view', value))
 watch(effectiveTimelineView, resetTimelineWindow)
 watch(isDark, value => { if (value) startNightMeteorLoop(); else stopNightMeteorLoop() })
@@ -1834,7 +2017,7 @@ watch(platformCards, cards => {
   if (!selectedPlatform.value) return
   selectedPlatform.value = cards.find(platform => platform.key === selectedPlatform.value.key) || null
 })
-onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; timelineView.value = localStorage.getItem('lumic-timeline-view') === 'masonry' ? 'masonry' : 'list'; document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#080a0e' : '#fbf7ea'); phonePortraitQuery = window.matchMedia('(max-width: 760px)'); phonePortrait.value = isPhonePortraitScreen(); phonePortraitQuery.addEventListener('change', updatePhonePortrait); window.addEventListener('orientationchange', updatePhonePortrait); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); if (phonePortrait.value && window.location.pathname === '/') openPhoneDefaultTimeline(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', handlePopState); window.addEventListener('scroll', scheduleTimelineWindow, { passive: true }); window.addEventListener('resize', handleWindowResize) })
+onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; timelineView.value = localStorage.getItem('lumic-timeline-view') === 'masonry' ? 'masonry' : 'list'; loadRememberedLogin(); document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#080a0e' : '#fbf7ea'); phonePortraitQuery = window.matchMedia('(max-width: 760px)'); phonePortrait.value = isPhonePortraitScreen(); phonePortraitQuery.addEventListener('change', updatePhonePortrait); window.addEventListener('orientationchange', updatePhonePortrait); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); if (phonePortrait.value && window.location.pathname === '/') openPhoneDefaultTimeline(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', handlePopState); window.addEventListener('scroll', scheduleTimelineWindow, { passive: true }); window.addEventListener('resize', handleWindowResize) })
 onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLoop(); if (sessionPollTimer) window.clearInterval(sessionPollTimer); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); window.removeEventListener('orientationchange', updatePhonePortrait); postResizeObserver?.disconnect(); observedPostElements.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); lightboxHistoryActive = false; resetLightboxState(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', handlePopState); window.removeEventListener('scroll', scheduleTimelineWindow); window.removeEventListener('resize', handleWindowResize); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
 </script>
 
@@ -1850,21 +2033,24 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
 <small>拾光</small>
 </div>
       <p class="login-project-note">拾起散落在时光里的片刻，珍藏每一次心动。</p>
-      <form class="login-form" @submit.prevent="login" autocomplete="off">
+      <form class="login-form" @submit.prevent="login" autocomplete="on">
         <label for="username">账号</label>
         <input id="username" v-model="credentials.username" type="text" name="username" autocomplete="username" required autofocus>
         <label for="password">密码</label>
-        <input id="password" v-model="credentials.password" type="password" name="password" autocomplete="current-password" required>
+        <div class="login-password-field"><input id="password" v-model="credentials.password" :type="passwordVisible ? 'text' : 'password'" name="password" autocomplete="current-password" required><button type="button" :title="passwordVisible ? '隐藏密码' : '显示密码'" :aria-label="passwordVisible ? '隐藏密码' : '显示密码'" @click="passwordVisible = !passwordVisible"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.8 12s3.2-5.2 9.2-5.2S21.2 12 21.2 12s-3.2 5.2-9.2 5.2S2.8 12 2.8 12Z"/><circle cx="12" cy="12" r="2.5"/><path v-if="!passwordVisible" d="m4 4 16 16"/></svg></button></div>
+        <label class="remember-password"><input v-model="rememberPassword" type="checkbox"><span>记住密码</span></label>
         <p v-if="loginError" class="login-error" role="alert">{{ loginError }}</p>
         <button class="login-button" type="submit" :disabled="loginBusy">{{ loginBusy ? '验证中…' : '登录拾光' }}</button>
       </form>
     </div>
   </div>
-  <div v-else class="app-shell" :class="{ dark: isDark, 'lightbox-active': lightbox.open, 'phone-ui': phonePortrait, 'timeline-search-focused': timelineSearchFocused }" @click="showBrandMenu = false">
-    <button v-if="phonePortrait && !lightbox.open" class="mobile-timeline-toggle" type="button" :class="{ open: mobileSourcesOpen, active: mobileAtAllTimeline }" :aria-expanded="mobileSourcesOpen" :title="mobileAtAllTimeline ? (mobileSourcesOpen ? '收起平台动态' : '展开平台动态') : '返回全部动态'" :aria-label="mobileAtAllTimeline ? (mobileSourcesOpen ? '收起平台动态' : '展开平台动态') : '返回全部动态'" @pointerdown.stop @click.stop="toggleMobileTimelineShortcut">
-      <span class="nav-line-symbol nav-mask-symbol" :style="{ '--nav-mask': `url(${timelineNavIcon})` }" aria-hidden="true"></span>
+  <div v-else class="app-shell" :class="{ dark: isDark, 'lightbox-active': lightbox.open, 'phone-ui': phonePortrait, 'timeline-search-focused': timelineSearchFocused, 'mobile-page-switching': mobilePageSwitching }" @click="showBrandMenu = false">
+    <button v-if="phonePortrait && !lightbox.open" class="mobile-timeline-toggle" type="button" :class="{ open: mobileSourcesOpen, active: mobileAtAllTimeline }" :aria-expanded="mobileSourcesOpen" :title="mobileSourcesOpen ? `收起${mobileTimelineTitle}栏目` : `展开${mobileTimelineTitle}栏目`" :aria-label="mobileSourcesOpen ? `收起${mobileTimelineTitle}栏目` : `展开${mobileTimelineTitle}栏目`" @pointerdown.stop @click.stop="toggleMobileTimelineShortcut">
+      <img v-if="mobileTimelineMeta" :class="['sidebar-source-icon', `sidebar-${activeSource}-icon`]" :src="mobileTimelineMeta.lineImage" alt="">
+      <span v-else class="nav-line-symbol nav-mask-symbol" :style="{ '--nav-mask': `url(${timelineNavIcon})` }" aria-hidden="true"></span>
     </button>
     <nav v-if="phonePortrait && mobileSourcesOpen && !lightbox.open" class="mobile-source-shortcuts" aria-label="平台动态">
+      <button type="button" :class="{ active: mobileAtAllTimeline }" title="查看全部动态" aria-label="查看全部动态" @click.stop="navigateToMobileAll"><span class="nav-line-symbol nav-mask-symbol" :style="{ '--nav-mask': `url(${timelineNavIcon})` }" aria-hidden="true"></span></button>
       <button v-for="(meta, key) in sourceMeta" :key="`mobile-source-${key}`" type="button" :class="{ active: activeNav === 'source' && activeSource === key }" :title="`查看${meta.label}动态`" :aria-label="`查看${meta.label}动态`" @click.stop="navigateToMobileSource(key)"><img :class="['sidebar-source-icon', `sidebar-${key}-icon`]" :src="meta.lineImage" alt=""></button>
     </nav>
     <button v-if="phonePortrait && !lightbox.open" class="mobile-menu-toggle" type="button" :class="{ open: mobileMenuOpen }" :aria-expanded="mobileMenuOpen" :title="mobileMenuOpen ? '关闭导航' : '打开导航'" :aria-label="mobileMenuOpen ? '关闭导航' : '打开导航'" @pointerdown.stop @click.stop="mobileSourcesOpen = false; mobileMenuOpen = !mobileMenuOpen">
@@ -1895,15 +2081,15 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
             </div>
           </Transition>
         </div>
-        <button :class="{ active: activeNav === 'liked' }" @click="navigateTo('liked', 'all')">
+        <button class="mobile-order-favorite" :class="{ active: activeNav === 'liked' }" @click="navigateTo('liked', 'all')">
 <span class="nav-line-symbol nav-mask-symbol" :style="{ '--nav-mask': `url(${favoriteNavIcon})` }" aria-hidden="true"></span> 收藏
 </button>
-        <button :class="{ active: activeNav === 'pulls' }" @click="navigateTo('pulls')">
+        <button class="mobile-order-pulls" :class="{ active: activeNav === 'pulls' }" @click="navigateTo('pulls')">
 <span class="nav-line-symbol nav-mask-symbol" :style="{ '--nav-mask': `url(${subscriptionsNavIcon})` }" aria-hidden="true"></span> 订阅平台
 </button>
       </nav>
       <div class="sidebar-bottom">
-        <button :class="{ active: activeNav === 'settings' }" @click="openSettings()"><span class="nav-line-symbol nav-mask-symbol" :style="{ '--nav-mask': `url(${settingsNavIcon})` }" aria-hidden="true"></span> 设置</button>
+        <button class="mobile-order-settings" :class="{ active: activeNav === 'settings' }" @click="openSettings()"><span class="nav-line-symbol nav-mask-symbol" :style="{ '--nav-mask': `url(${settingsNavIcon})` }" aria-hidden="true"></span> 设置</button>
         <button class="sidebar-theme-button" type="button" @click="setDarkMode(!isDark); mobileMenuOpen = false" :title="isDark ? '当前为夜间主题' : '当前为日间主题'" :aria-label="isDark ? '当前为夜间主题，点击切换日间主题' : '当前为日间主题，点击切换夜间主题'"><span class="theme-mask-symbol" :style="{ '--nav-mask': `url(${isDark ? nightThemeIcon : dayThemeIcon})` }" aria-hidden="true"></span></button>
         <button v-if="phonePortrait" class="mobile-logout-button" type="button" title="退出登录" aria-label="退出登录" @click="logout"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H6.5A2.5 2.5 0 0 0 4 7.5v9A2.5 2.5 0 0 0 6.5 19H10M14 8l4 4-4 4M18 12H9"/></svg></button>
       </div>
@@ -2108,11 +2294,11 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
       <button v-if="selectionAction === 'unfavorite'" type="button" class="selection-delete-button selection-unfavorite-button" :disabled="!selectedPostCount || postActionBusy === 'batch-unfavorite'" title="取消收藏所选动态" aria-label="取消收藏所选动态" @click="unfavoriteSelectedPosts"><svg viewBox="0 0 24 24"><path d="M12 20.5S4.5 16.2 4.5 10.2A4.2 4.2 0 0 1 12 7.6a4.2 4.2 0 0 1 7.5 2.6c0 6-7.5 10.3-7.5 10.3Z"/><path d="M8.5 11.5h7"/></svg><b>取消收藏</b></button>
       <button v-else type="button" class="selection-delete-button" :disabled="!selectedPostCount || postActionBusy === 'batch-delete'" title="删除所选动态" aria-label="删除所选动态" @click="deleteSelectedPosts"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg><b>删除</b></button>
     </div>
-    <div v-if="lightbox.open" class="lightbox-layer" role="dialog" aria-modal="true" :aria-label="`${lightbox.author} 的动态媒体`" @click.self="closeLightbox" @wheel.prevent="zoomLightbox">
-      <button class="lightbox-close" type="button" title="关闭大图" aria-label="关闭大图" @click="closeLightbox">×</button>
+    <div v-if="lightbox.open" :class="['lightbox-layer', { closing: lightboxClosing }]" role="dialog" aria-modal="true" :aria-label="`${lightbox.author} 的动态媒体`" @click.self="closeLightbox" @wheel.prevent="zoomLightbox">
+      <button v-if="!phonePortrait" class="lightbox-close" type="button" title="关闭大图" aria-label="关闭大图" @click="closeLightbox">×</button>
       <figure @click.self="closeLightbox">
         <div :key="`${lightbox.media[lightbox.index]}:${lightbox.motion}`" :class="['lightbox-image-stage', `motion-${lightbox.motion}`, { 'mobile-original-size': phonePortrait && lightboxAtOriginalSize }]" @click.self="closeLightbox" @contextmenu.prevent>
-          <img ref="lightboxImageElement" :src="lightbox.media[lightbox.index]" :alt="`${lightbox.author} 的动态图片 ${lightbox.index + 1}`" :class="{ dragging: lightbox.dragging, 'original-size': !lightbox.fit }" :style="{ transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) rotate(${lightbox.rotation}deg) scale(${lightbox.scale})` }" draggable="false" @click.stop @pointerdown.prevent.stop="startLightboxGesture" @pointermove.prevent.stop="moveLightboxGesture" @pointerup.prevent.stop="stopLightboxGesture" @pointercancel.prevent.stop="stopLightboxGesture" @load="scheduleLightboxScaleUpdate">
+          <img ref="lightboxImageElement" :src="lightboxDisplaySource" :alt="`${lightbox.author} 的动态图片 ${lightbox.index + 1}`" :class="{ dragging: lightbox.dragging, 'original-size': !lightbox.fit, 'original-loaded': lightboxOriginalLoaded }" :style="{ transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) rotate(${lightbox.rotation}deg) scale(${lightbox.scale})` }" draggable="false" @click.stop @pointerdown.prevent.stop="startLightboxGesture" @pointermove.prevent.stop="moveLightboxGesture" @pointerup.prevent.stop="stopLightboxGesture" @pointercancel.prevent.stop="stopLightboxGesture" @load="handleLightboxImageLoad">
         </div>
       </figure>
       <div v-if="!phonePortrait" class="lightbox-dock-zone" @pointerenter="showLightboxDock(false)" @pointermove="showLightboxDock(false)" @pointerleave="scheduleLightboxDockHide(650)">
