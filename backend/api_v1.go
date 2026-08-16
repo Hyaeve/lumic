@@ -44,6 +44,7 @@ type apiV1Feed struct {
 	Avatar          string    `json:"avatar,omitempty"`
 	Enabled         bool      `json:"enabled"`
 	Schedule        string    `json:"schedule"`
+	StartDate       string    `json:"startDate,omitempty"`
 	ContentTypes    []string  `json:"contentTypes,omitempty"`
 	Tags            []string  `json:"tags,omitempty"`
 	OnlyWithImages  bool      `json:"onlyWithImages,omitempty"`
@@ -521,6 +522,7 @@ func toAPIV1Feed(feed SourceConfig) apiV1Feed {
 		Avatar:          feed.Avatar,
 		Enabled:         feed.Enabled,
 		Schedule:        feed.Schedule,
+		StartDate:       feed.StartDate,
 		ContentTypes:    append([]string(nil), feed.ContentTypes...),
 		Tags:            append([]string(nil), feed.Tags...),
 		OnlyWithImages:  feed.OnlyWithImages,

@@ -370,8 +370,11 @@ body, button, input, textarea, select { font-size: 14px; }
 .feed-settings-modal { width: min(720px, calc(100vw - 48px)); padding: 28px 30px; }
 .feed-settings-form { display: grid; gap: 14px; margin-top: 18px; }
 .feed-field-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.feed-primary-fields { grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr) minmax(160px, .85fr); }
 .feed-field-row label { display: grid; min-width: 0; gap: 7px; color: var(--ink); font-size: 12px; font-weight: 600; }
 .feed-field-row input { width: 100%; min-width: 0; margin: 0; }
+.source-start-date-input { color-scheme: light; font-variant-numeric: tabular-nums; }
+.dark .source-start-date-input { color-scheme: dark; }
 .feed-field-row .cron-input { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; cursor: default; }
 .feed-field-row .cron-input:not([readonly]) { cursor: text; border-color: #79a189; box-shadow: 0 0 0 3px #79a1891c; }
 .feed-toggle-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 14px; padding: 4px 0; }
@@ -405,7 +408,7 @@ body, button, input, textarea, select { font-size: 14px; }
 .feed-settings-form .login-button { margin-top: 5px; }
 @media (max-width: 620px) {
   .feed-settings-modal { width: min(470px, calc(100vw - 32px)); padding: 24px 20px; }
-  .feed-field-row, .feed-toggle-row { grid-template-columns: 1fr; }
+  .feed-field-row, .feed-primary-fields, .feed-toggle-row { grid-template-columns: 1fr; }
 }
 .selection-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
 .timeline-context-menu { position: fixed; z-index: 120; display: grid; width: 218px; padding: 6px; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 9px; box-shadow: 0 16px 40px #26342d35; backdrop-filter: blur(16px); animation: context-menu-in .12s ease-out; }
@@ -938,7 +941,7 @@ body, button, input, textarea, select { font-size: 14px; }
   .content > .seasonal-decor { top: 0; right: 0; left: 0; width: 100%; height: 260px; opacity: .48; transform: none; }
   .dark .content > .night-sky-decor { inset: 0; width: 100%; min-height: 100vh; opacity: .66; }
   .dark .content > .night-meteor-layer { left: 0; opacity: .72; }
-  .dark .night-moon { top: 21px; right: 3%; width: 28px; height: 28px; }
+  .dark .night-moon { top: 27px; right: 8%; width: 28px; height: 28px; }
   .dark .night-haze { top: -28px; right: -24px; width: 190px; height: 142px; }
   .dark .night-star.star-four, .dark .night-star.star-six, .dark .night-star.star-eight, .spring-blossom.blossom-four, .autumn-leaf.leaf-four, .autumn-leaf.leaf-five, .winter-snowflake.flake-four, .winter-snowflake.flake-five, .summer-fish.fish-two { display: none; }
   .season-summer::before { inset: -20px -28% auto 5%; height: 280px; }
@@ -1163,8 +1166,9 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
     box-shadow: 0 10px 30px #11182724;
     backdrop-filter: blur(14px);
   }
-  .phone-ui .mobile-timeline-toggle .nav-mask-symbol { width: 22px!important; height: 22px; }
-  .phone-ui .mobile-timeline-toggle > .sidebar-source-icon { width: 23px; height: 23px; opacity: .9; }
+  .phone-ui .mobile-menu-toggle svg { width: 24px; height: 24px; }
+  .phone-ui .mobile-timeline-toggle .nav-mask-symbol { width: 24px!important; height: 24px; }
+  .phone-ui .mobile-timeline-toggle > .sidebar-source-icon { width: 24px; height: 24px; opacity: .9; }
   .phone-ui .mobile-timeline-toggle.active { color: #80611c; }
   .phone-ui .mobile-timeline-toggle.open { color: #f8f3df; background: #786536; border-color: #b8a365; box-shadow: 0 0 16px #d5bd7152, 0 12px 30px #1118272e; }
   .phone-ui.dark .mobile-timeline-toggle {
@@ -1292,8 +1296,10 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
   .phone-ui * { -webkit-tap-highlight-color: transparent; }
   .phone-ui button:focus:not(:focus-visible) { outline: none; }
   .phone-ui button:focus-visible { outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, #c7a954 62%, transparent); }
-  .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .mobile-source-shortcuts button, .sidebar button, .filters button, .mobile-post-back, .mobile-post-author, .mobile-post-detail-actions button, .mobile-post-media-dots button) { overflow: hidden; border-radius: inherit; isolation: isolate; transform: translateZ(0); }
-  .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .mobile-source-shortcuts button, .sidebar button, .filters button, .mobile-post-back, .mobile-post-author, .mobile-post-detail-actions button, .mobile-post-media-dots button):active { border-radius: inherit; background-clip: padding-box; box-shadow: inset 0 0 0 999px color-mix(in srgb, currentColor 9%, transparent); }
+  .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .mobile-source-shortcuts button, .sidebar button, .filters button, .mobile-post-back, .mobile-post-author, .mobile-post-detail-actions button, .mobile-post-media-dots button) { overflow: hidden; border-radius: 9px; isolation: isolate; transform: translateZ(0); background-clip: padding-box; }
+  .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle) { border-radius: 10px; }
+  .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .mobile-source-shortcuts button, .sidebar button, .filters button, .mobile-post-back, .mobile-post-author, .mobile-post-detail-actions button, .mobile-post-media-dots button):active { border-radius: 9px; background-clip: padding-box; box-shadow: inset 0 0 0 999px color-mix(in srgb, currentColor 9%, transparent); }
+  .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle):active { border-radius: 10px; }
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .mobile-source-shortcuts button, .sidebar button, .mobile-post-back, .mobile-post-detail-actions button) { touch-action: manipulation; }
   .phone-ui.mobile-page-switching > .content { animation: mobile-page-switch .36s cubic-bezier(.16,.84,.22,1) both; }
   .phone-ui .content,
@@ -1343,12 +1349,12 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
   }
   .phone-ui .filters { flex: none; max-width: 100%; overflow: visible; padding-bottom: 0; }
   .phone-ui .filters button { min-height: 38px; padding: 8px 10px; }
-  .phone-ui .filters :is(.timeline-sort-button, .timeline-view-button) { width: 38px; padding: 0; }
-  .phone-ui .filters :is(.timeline-sort-symbol, .timeline-view-symbol) { width: 20px; height: 20px; }
-  .phone-ui .filters .timeline-view-symbol.list-view-symbol { width: 18px; height: 18px; }
-  .phone-ui .timeline-tools { justify-self: end; width: clamp(112px, 36vw, 150px); min-width: 0; margin-left: 0; }
+  .phone-ui .filters :is(.timeline-sort-button, .timeline-view-button) { width: 40px; height: 40px; padding: 0; }
+  .phone-ui .filters :is(.timeline-sort-symbol, .timeline-view-symbol) { width: 22px; height: 22px; }
+  .phone-ui .filters .timeline-view-symbol.list-view-symbol { width: 21px; height: 21px; }
+  .phone-ui .timeline-tools { justify-self: end; width: clamp(96px, 31vw, 132px); min-width: 0; margin-left: 0; }
   .phone-ui .timeline-search { width: 100%; height: 40px; }
-  .phone-ui .timeline-search input { font-size: 16px; }
+  .phone-ui .timeline-search input { font-size: 12px; }
   .phone-ui.timeline-search-focused .sidebar,
   .phone-ui.timeline-search-focused .mobile-menu-scrim { display: none!important; }
   .phone-ui .feed-list { gap: 11px; }
@@ -1385,8 +1391,10 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
   .phone-ui .settings-window-grid,
   .phone-ui .settings-page .platform-auth-grid { grid-template-columns: 1fr; }
   .phone-ui .add-fab { right: 12px; bottom: max(14px, env(safe-area-inset-bottom)); }
-  .phone-ui .scroll-top-button { right: 12px; bottom: max(14px, env(safe-area-inset-bottom)); width: 42px; height: 42px; border-radius: 9px; }
-  .phone-ui .scroll-top-button > span { width: 21px; height: 21px; }
+  .phone-ui .scroll-top-button { right: 12px; bottom: max(14px, env(safe-area-inset-bottom)); width: 44px; height: 44px; border-radius: 10px; transition: opacity .22s ease, transform .22s cubic-bezier(.16,.84,.22,1); }
+  .phone-ui .scroll-top-button > span { width: 22px; height: 22px; }
+  .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-control-hidden { opacity: 0; pointer-events: none; transform: translateY(-8px) scale(.9); }
+  .phone-ui .scroll-top-button.mobile-control-hidden { transform: translateY(9px) scale(.9); }
 }
 
 @keyframes mobile-menu-enter {

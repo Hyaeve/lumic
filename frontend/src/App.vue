@@ -131,6 +131,8 @@ const mobileDetailPageDragX = ref(0)
 const mobileDetailPageDragging = ref(false)
 const mobileDetailPageAnimating = ref(false)
 const showScrollTop = ref(false)
+const mobileControlsVisible = ref(true)
+const mobileAtTimelineTop = ref(true)
 const mobilePostReturnPath = ref('/')
 const pendingPostId = ref('')
 const feedListElement = ref(null)
@@ -193,6 +195,7 @@ let mobileLightboxAnimationFrame = 0
 let mobileLightboxTransitionStep = 0
 let mobileLightboxDotsTimer = 0
 let lightboxZoomTimer = 0
+let mobileControlsTimer = 0
 
 const sourceMeta = {
   bilibili: { label: '哔哩哔哩', icon: 'bl', image: bilibiliIcon, lineImage: bilibiliLineIcon, color: 'blue' },
@@ -256,8 +259,8 @@ const mobileLightboxTrackStyle = computed(() => {
 })
 const mobileDetailPageStyle = computed(() => ({
   transform: `translate3d(${mobileDetailPageDragX.value}px, 0, 0)`,
-  opacity: String(Math.max(.08, 1 - Math.abs(mobileDetailPageDragX.value) / Math.max(1, window.innerWidth) * .92)),
-  transition: mobileDetailPageDragging.value ? 'none' : mobileDetailPageAnimating.value ? 'transform .25s cubic-bezier(.18, .86, .22, 1), opacity .22s ease' : 'none'
+  opacity: String(Math.max(.7, 1 - Math.abs(mobileDetailPageDragX.value) / Math.max(1, window.innerWidth) * .3)),
+  transition: mobileDetailPageDragging.value ? 'none' : mobileDetailPageAnimating.value ? 'transform .29s cubic-bezier(.16, .86, .2, 1), opacity .25s ease' : 'none'
 }))
 const mobileAuthorPreviewPosts = computed(() => {
   const post = masonryDetailPost.value
@@ -268,8 +271,8 @@ const mobileAuthorPreviewStyle = computed(() => {
   const width = typeof window === 'undefined' ? 390 : Math.max(1, window.innerWidth)
   const progress = Math.min(1, Math.abs(mobileDetailPageDragX.value) / width)
   return {
-    opacity: String(progress),
-    transform: `translate3d(${Math.max(0, 28 - progress * 28)}%, 0, 0)`
+    opacity: String(Math.min(1, .62 + progress * .38)),
+    transform: `translate3d(${100 - progress * 100}%, 0, 0)`
   }
 })
 const mobileLightboxLayerStyle = computed(() => ({
@@ -383,7 +386,7 @@ const authorProfile = computed(() => {
   return { ...selectedAuthor.value, avatar: selectedAuthor.value.feedId ? selectedAuthor.value.avatar : (latest?.avatar || selectedAuthor.value.avatar), count: authorPosts.length }
 })
 const isTimelinePage = computed(() => !showSettings.value && activeNav.value !== 'pulls' && !masonryDetailPost.value)
-const mobilePullRefreshEnabled = computed(() => phonePortrait.value && mobileAtAllTimeline.value && !phoneOverlayKey.value && !lightbox.value.open)
+const mobilePullRefreshEnabled = computed(() => phonePortrait.value && mobileAtAllTimeline.value && mobileAtTimelineTop.value && !phoneOverlayKey.value && !lightbox.value.open)
 const platformCards = computed(() => [
   { key: 'bilibili', label: '哔哩哔哩', short: '哔', ...sourceMeta.bilibili, configured: biliAccount.value.configured, account: biliAccount.value.configured ? (biliAccount.value.userName || `UID ${biliAccount.value.userId}`) : '尚未连接', avatar: biliAccount.value.avatar, path: '/flow/bilibili', description: 'UP 主动态、专栏与账号收藏', feeds: feeds.value.filter(feed => feed.source === 'bilibili') },
   { key: 'weibo', label: '微博', short: '微', ...sourceMeta.weibo, configured: weiboAccount.value.configured, account: weiboAccount.value.configured ? (weiboAccount.value.userName || `UID ${weiboAccount.value.userId}`) : '尚未连接', avatar: weiboAccount.value.avatar, path: '/flow/weibo', description: '博主动态与图文媒体', feeds: feeds.value.filter(feed => feed.source === 'weibo') },
@@ -965,7 +968,7 @@ function managePlatformCredentials(platformKey) {
 function openFeedSettings(feed) {
   cronEditing.value = false
   const contentTypes = feed.source === 'bilibili' && (!feed.contentTypes || feed.contentTypes.length === 0) ? ['DRAW', 'ARTICLE'] : [...(feed.contentTypes || [])]
-  selectedFeed.value = { ...feed, includeVideos: Boolean(feed.includeVideos), contentTypes, tags: [...(feed.tags || [])], tagInput: formatTagInput(feed.tags), includeKeywordInput: formatKeywordInput(feed.includeKeywords), excludeKeywordInput: formatKeywordInput(feed.excludeKeywords) }
+  selectedFeed.value = { ...feed, startDate: feed.startDate || '', includeVideos: Boolean(feed.includeVideos), contentTypes, tags: [...(feed.tags || [])], tagInput: formatTagInput(feed.tags), includeKeywordInput: formatKeywordInput(feed.includeKeywords), excludeKeywordInput: formatKeywordInput(feed.excludeKeywords) }
   showFeedSettings.value = true
 }
 async function saveFeedSettings() {
@@ -1143,7 +1146,7 @@ function closeLightbox(fromHistory = false, delay = 185) {
     }
   }, delay)
 }
-function showMobileLightboxDots(duration = 760) {
+function showMobileLightboxDots(duration = 1500) {
   if (!phonePortrait.value || lightbox.value.media.length < 2) return
   mobileLightboxDotsVisible.value = true
   if (mobileLightboxDotsTimer) window.clearTimeout(mobileLightboxDotsTimer)
@@ -1187,7 +1190,7 @@ function animateMobileLightbox(step) {
   if (total < 2) return
   if (mobileLightboxAnimating.value) finishMobileLightboxTransition(true)
   mobileLightboxTransitionStep = step > 0 ? 1 : -1
-  showMobileLightboxDots(900)
+  showMobileLightboxDots(1500)
   mobileLightboxDragging.value = false
   mobileLightboxAnimating.value = true
   mobileLightboxAnimationFrame = window.requestAnimationFrame(() => {
@@ -1387,6 +1390,9 @@ function isMobileLightboxSwipeView() {
   const defaultFit = lightbox.value.fit && Math.abs(lightbox.value.scale - 1) < 0.02
   return centered && (defaultFit || isLightboxOriginalSize())
 }
+function isMobileLightboxDefaultView() {
+  return lightbox.value.fit && Math.abs(lightbox.value.scale - 1) < 0.02 && Math.abs(lightbox.value.x) < 3 && Math.abs(lightbox.value.y) < 3
+}
 function lightboxPointerDistance(points) {
   return Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y)
 }
@@ -1398,7 +1404,7 @@ function beginLightboxPan(pointer) {
     type: 'pan', pointerId: pointer.id, startX: pointer.x, startY: pointer.y,
     startTime: pointer.time, imageX: lightbox.value.x, imageY: lightbox.value.y,
     startScale: lightbox.value.scale, startFit: lightbox.value.fit,
-    startSwipeView: isMobileLightboxSwipeView(), startedOnImage: pointer.startedOnImage, longPressed: false,
+    startSwipeView: isMobileLightboxSwipeView(), startDefaultView: isMobileLightboxDefaultView(), startedOnImage: pointer.startedOnImage, longPressed: false,
     axis: '', prevX: pointer.x, prevY: pointer.y, prevTime: pointer.time, lastX: pointer.x, lastY: pointer.y, lastTime: pointer.time
   }
 }
@@ -1466,6 +1472,7 @@ function moveLightboxGesture(event) {
     if (lightboxGesture.axis === 'vertical') {
       clearLightboxLongPress()
       lightbox.value.dragging = false
+      if (!lightboxGesture.startDefaultView) return
       mobileLightboxExitDragging.value = true
       mobileLightboxExitAnimating.value = false
       mobileLightboxExitY.value = Math.max(-window.innerHeight * .72, Math.min(window.innerHeight * .72, dy))
@@ -1475,7 +1482,7 @@ function moveLightboxGesture(event) {
     clearLightboxLongPress()
     lightbox.value.dragging = false
     mobileLightboxDragging.value = true
-    showMobileLightboxDots(900)
+    showMobileLightboxDots(1500)
     const limit = Math.max(120, window.innerWidth * .96)
     mobileLightboxDragX.value = Math.max(-limit, Math.min(limit, dx))
     return
@@ -1532,10 +1539,10 @@ function stopLightboxGesture(event) {
   const canSwipe = phonePortrait.value ? gesture?.startSwipeView : gesture?.startFit && gesture?.startScale <= 1.02 && Math.abs(gesture?.imageX || 0) < 3 && Math.abs(gesture?.imageY || 0) < 3
   const swipeDistance = Math.min(52, window.innerWidth * .13)
   const isSwipe = !wasCancelled && !lightboxGestureHadPinch && wasSinglePan && !gesture.longPressed && canSwipe && duration < 850 && (Math.abs(dx) > swipeDistance || Math.abs(velocityX) > .42) && Math.abs(dx) > Math.abs(dy) * 1.12
-  const verticalExitThresholdMet = gesture?.startSwipeView
+  const verticalExitThresholdMet = gesture?.startDefaultView
     ? (Math.abs(dy) > Math.min(88, window.innerHeight * .12) || Math.abs(velocityY) > .62)
     : (Math.abs(dy) > 96 && Math.abs(velocityY) > .86)
-  const isVerticalExit = phonePortrait.value && !wasCancelled && !lightboxGestureHadPinch && wasSinglePan && !gesture.longPressed && duration < 780 && verticalExitThresholdMet && Math.abs(dy) > Math.abs(dx) * 1.08
+  const isVerticalExit = phonePortrait.value && !wasCancelled && !lightboxGestureHadPinch && wasSinglePan && !gesture.longPressed && gesture?.startDefaultView && duration < 780 && verticalExitThresholdMet && Math.abs(dy) > Math.abs(dx) * 1.08
   const isTap = !wasCancelled && !lightboxGestureHadPinch && wasSinglePan && !gesture.longPressed && duration < 280 && Math.hypot(dx, dy) < 10
 
   clearLightboxLongPress()
@@ -2083,7 +2090,7 @@ function finishMobileDetailPageSwipe(event) {
         scheduleTransient(() => { mobilePageSwitching.value = false }, 360)
       }
       resetMobileDetailPageSwipe()
-    }, 245)
+    }, 295)
     return
   }
   mobileDetailPageDragX.value = 0
@@ -2223,6 +2230,7 @@ function updateMasonryMetrics() {
 }
 function updateTimelineWindow() {
   timelineFrame = 0
+  mobileAtTimelineTop.value = window.scrollY <= 1
   showScrollTop.value = isTimelinePage.value && window.scrollY > Math.min(360, Math.max(150, window.innerHeight * .32))
   if (!filteredPosts.value.length || showSettings.value || activeNav.value === 'pulls') return
   if (isMasonryView.value) {
@@ -2255,6 +2263,19 @@ function updateTimelineWindow() {
 function scheduleTimelineWindow() {
   if (!timelineFrame) timelineFrame = window.requestAnimationFrame(updateTimelineWindow)
 }
+function showMobileControls() {
+  if (!phonePortrait.value || lightbox.value.open || masonryDetailPost.value) return
+  mobileControlsVisible.value = true
+  if (mobileControlsTimer) window.clearTimeout(mobileControlsTimer)
+  mobileControlsTimer = window.setTimeout(() => {
+    mobileControlsTimer = 0
+    if (!mobileMenuOpen.value && !mobileSourcesOpen.value) mobileControlsVisible.value = false
+  }, 1150)
+}
+function handleWindowScroll() {
+  showMobileControls()
+  scheduleTimelineWindow()
+}
 function scrollTimelineToTop() {
   window.scrollTo({ top: 0, behavior: 'smooth' })
 }
@@ -2280,6 +2301,7 @@ function updatePhonePortrait() {
   const nextPhonePortrait = isPhonePortraitScreen()
   if (phonePortrait.value === nextPhonePortrait) return
   phonePortrait.value = nextPhonePortrait
+  mobileControlsVisible.value = true
   mobileMenuOpen.value = false
   mobileSourcesOpen.value = false
   if (lightbox.value.open && !nextPhonePortrait) showLightboxDock(true)
@@ -2451,8 +2473,8 @@ watch(platformCards, cards => {
   if (!selectedPlatform.value) return
   selectedPlatform.value = cards.find(platform => platform.key === selectedPlatform.value.key) || null
 })
-onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; timelineView.value = localStorage.getItem('lumic-timeline-view') === 'masonry' ? 'masonry' : 'list'; loadRememberedLogin(); document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#080a0e' : '#fbf7ea'); phonePortraitQuery = window.matchMedia('(max-width: 760px)'); phonePortrait.value = isPhonePortraitScreen(); updateMobilePullRefreshPolicy(); phonePortraitQuery.addEventListener('change', updatePhonePortrait); window.addEventListener('orientationchange', updatePhonePortrait); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); if (phonePortrait.value && window.location.pathname === '/') openPhoneDefaultTimeline(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', handlePopState); window.addEventListener('scroll', scheduleTimelineWindow, { passive: true }); window.addEventListener('resize', handleWindowResize); scheduleTimelineWindow() })
-onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLoop(); if (sessionPollTimer) window.clearInterval(sessionPollTimer); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); window.removeEventListener('orientationchange', updatePhonePortrait); postResizeObserver?.disconnect(); observedPostElements.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); clearMobileDetailAnimation(); resetMobileDetailPageSwipe(); lightboxHistoryActive = false; resetLightboxState(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', handlePopState); window.removeEventListener('scroll', scheduleTimelineWindow); window.removeEventListener('resize', handleWindowResize); document.documentElement.style.overscrollBehaviorY = ''; document.body.style.overscrollBehaviorY = ''; if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
+onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; timelineView.value = localStorage.getItem('lumic-timeline-view') === 'masonry' ? 'masonry' : 'list'; loadRememberedLogin(); document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#080a0e' : '#fbf7ea'); phonePortraitQuery = window.matchMedia('(max-width: 760px)'); phonePortrait.value = isPhonePortraitScreen(); updateMobilePullRefreshPolicy(); phonePortraitQuery.addEventListener('change', updatePhonePortrait); window.addEventListener('orientationchange', updatePhonePortrait); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); if (phonePortrait.value && window.location.pathname === '/') openPhoneDefaultTimeline(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', handlePopState); window.addEventListener('scroll', handleWindowScroll, { passive: true }); window.addEventListener('resize', handleWindowResize); scheduleTimelineWindow(); if (phonePortrait.value) showMobileControls() })
+onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLoop(); if (sessionPollTimer) window.clearInterval(sessionPollTimer); if (mobileControlsTimer) window.clearTimeout(mobileControlsTimer); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); window.removeEventListener('orientationchange', updatePhonePortrait); postResizeObserver?.disconnect(); observedPostElements.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); clearMobileDetailAnimation(); resetMobileDetailPageSwipe(); lightboxHistoryActive = false; resetLightboxState(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', handlePopState); window.removeEventListener('scroll', handleWindowScroll); window.removeEventListener('resize', handleWindowResize); document.documentElement.style.overscrollBehaviorY = ''; document.body.style.overscrollBehaviorY = ''; if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
 </script>
 
 <template>
@@ -2479,7 +2501,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
     </div>
   </div>
   <div v-else class="app-shell" :class="{ dark: isDark, 'lightbox-active': lightbox.open, 'phone-ui': phonePortrait, 'mobile-pull-refresh-enabled': mobilePullRefreshEnabled, 'timeline-search-focused': timelineSearchFocused, 'mobile-page-switching': mobilePageSwitching }" @click="showBrandMenu = false">
-    <button v-if="phonePortrait && !lightbox.open && !masonryDetailPost" class="mobile-timeline-toggle" type="button" :class="{ open: mobileSourcesOpen, active: mobileAtAllTimeline }" :aria-expanded="mobileSourcesOpen" :title="mobileSourcesOpen ? `收起${mobileTimelineTitle}栏目` : `展开${mobileTimelineTitle}栏目`" :aria-label="mobileSourcesOpen ? `收起${mobileTimelineTitle}栏目` : `展开${mobileTimelineTitle}栏目`" @pointerdown.stop @click.stop="toggleMobileTimelineShortcut">
+    <button v-if="phonePortrait && !lightbox.open && !masonryDetailPost" class="mobile-timeline-toggle" type="button" :class="{ open: mobileSourcesOpen, active: mobileAtAllTimeline, 'mobile-control-hidden': !mobileControlsVisible && !mobileSourcesOpen }" :aria-expanded="mobileSourcesOpen" :title="mobileSourcesOpen ? `收起${mobileTimelineTitle}栏目` : `展开${mobileTimelineTitle}栏目`" :aria-label="mobileSourcesOpen ? `收起${mobileTimelineTitle}栏目` : `展开${mobileTimelineTitle}栏目`" @pointerdown.stop @click.stop="showMobileControls(); toggleMobileTimelineShortcut()">
       <img v-if="mobileTimelineMeta" :class="['sidebar-source-icon', `sidebar-${activeSource}-icon`]" :src="mobileTimelineMeta.lineImage" alt="">
       <span v-else class="nav-line-symbol nav-mask-symbol" :style="{ '--nav-mask': `url(${timelineNavIcon})` }" aria-hidden="true"></span>
     </button>
@@ -2487,7 +2509,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
       <button type="button" :class="{ active: mobileAtAllTimeline }" title="查看全部动态" aria-label="查看全部动态" @click.stop="navigateToMobileAll"><span class="nav-line-symbol nav-mask-symbol" :style="{ '--nav-mask': `url(${timelineNavIcon})` }" aria-hidden="true"></span></button>
       <button v-for="(meta, key) in sourceMeta" :key="`mobile-source-${key}`" type="button" :class="{ active: activeNav === 'source' && activeSource === key }" :title="`查看${meta.label}动态`" :aria-label="`查看${meta.label}动态`" @click.stop="navigateToMobileSource(key)"><img :class="['sidebar-source-icon', `sidebar-${key}-icon`]" :src="meta.lineImage" alt=""></button>
     </nav>
-    <button v-if="phonePortrait && !lightbox.open && !masonryDetailPost" class="mobile-menu-toggle" type="button" :class="{ open: mobileMenuOpen }" :aria-expanded="mobileMenuOpen" :title="mobileMenuOpen ? '关闭导航' : '打开导航'" :aria-label="mobileMenuOpen ? '关闭导航' : '打开导航'" @pointerdown.stop @click.stop="mobileSourcesOpen = false; mobileMenuOpen = !mobileMenuOpen">
+    <button v-if="phonePortrait && !lightbox.open && !masonryDetailPost" class="mobile-menu-toggle" type="button" :class="{ open: mobileMenuOpen, 'mobile-control-hidden': !mobileControlsVisible && !mobileMenuOpen }" :aria-expanded="mobileMenuOpen" :title="mobileMenuOpen ? '关闭导航' : '打开导航'" :aria-label="mobileMenuOpen ? '关闭导航' : '打开导航'" @pointerdown.stop @click.stop="showMobileControls(); mobileSourcesOpen = false; mobileMenuOpen = !mobileMenuOpen">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path class="menu-line menu-line-top" d="M5 7h14"/><path class="menu-line menu-line-middle" d="M5 12h14"/><path class="menu-line menu-line-bottom" d="M5 17h14"/></svg>
     </button>
     <button v-if="mobileMenuOpen || mobileSourcesOpen" class="mobile-menu-scrim" type="button" aria-label="关闭导航" @click="mobileMenuOpen = false; mobileSourcesOpen = false"></button>
@@ -2588,7 +2610,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
 </button>
 </div>
 <div class="timeline-tools">
-  <label class="timeline-search" @pointerdown.stop="closeMobileNavigationOnInputFocus" @click.stop><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><input v-model="timelineSearch" type="search" placeholder="搜索内容、作者或标签" aria-label="搜索动态内容、作者或标签" @focus="closeMobileNavigationOnInputFocus" @input="closeMobileNavigationOnInputFocus" @blur="releaseTimelineSearchFocus"></label>
+  <label class="timeline-search" @pointerdown.stop="closeMobileNavigationOnInputFocus" @click.stop><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><input v-model="timelineSearch" type="search" :placeholder="phonePortrait ? '搜索' : '搜索内容、作者或标签'" aria-label="搜索动态内容、作者或标签" @focus="closeMobileNavigationOnInputFocus" @input="closeMobileNavigationOnInputFocus" @blur="releaseTimelineSearchFocus"></label>
 </div>
 </div>
       <p v-if="timelineMessage" class="timeline-message">{{ timelineMessage }}</p>
@@ -2768,7 +2790,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
         <button type="button" role="menuitem" @click="saveMobileLightboxImage"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7.5 10.5 12 15l4.5-4.5M5 19v2h14v-2"/></svg><span>保存图片</span></button>
       </div>
     </div>
-    <button v-if="isTimelinePage && showScrollTop && !selectionMode && !lightbox.open" class="scroll-top-button" type="button" title="回到顶部" aria-label="回到顶部" @click="scrollTimelineToTop"><span :style="{ '--scroll-top-mask': `url(${scrollTopIcon})` }" aria-hidden="true"></span></button>
+    <button v-if="isTimelinePage && showScrollTop && !selectionMode && !lightbox.open" class="scroll-top-button" :class="{ 'mobile-control-hidden': phonePortrait && !mobileControlsVisible }" type="button" title="回到顶部" aria-label="回到顶部" @click="scrollTimelineToTop"><span :style="{ '--scroll-top-mask': `url(${scrollTopIcon})` }" aria-hidden="true"></span></button>
     <button v-if="!showSettings && activeNav === 'pulls'" class="add-fab" @click="showAdd = true">＋ <span>添加订阅</span>
 </button>
     <div v-if="showAdd" class="modal-backdrop" @click.self="showAdd = false">
@@ -2942,9 +2964,10 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
         <button class="modal-close" @click="showFeedSettings = false">×</button>
         <p class="eyebrow">SOURCE DETAILS</p><h2>{{ selectedFeed.name }}</h2><p>{{ sourceMeta[selectedFeed.source]?.label }} · {{ selectedFeed.handle }}</p>
         <form class="settings-form feed-settings-form" @submit.prevent="saveFeedSettings">
-          <div class="feed-field-row">
+          <div class="feed-field-row feed-primary-fields">
             <label><span>Cron</span><input v-model="selectedFeed.schedule" class="cron-input" :readonly="!cronEditing" :title="nextCronExecution(selectedFeed.schedule)" required placeholder="0 6 * * *" maxlength="80" @dblclick="cronEditing = true" @blur="cronEditing = false"></label>
             <label><span>作者标签</span><input v-model="selectedFeed.tagInput" placeholder="#绘画 #日常" maxlength="120"></label>
+            <label><span>订阅起始日期</span><input v-model="selectedFeed.startDate" class="source-start-date-input" type="date" title="留空表示不限制起始日期" autocomplete="off"></label>
           </div>
           <div class="feed-field-row">
             <label><span>包含关键词</span><input v-model="selectedFeed.includeKeywordInput" placeholder="插画 绘画" maxlength="240"></label>

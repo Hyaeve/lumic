@@ -142,6 +142,7 @@ type SourceConfig struct {
 	Avatar          string    `json:"avatar,omitempty"`
 	Enabled         bool      `json:"enabled"`
 	Schedule        string    `json:"schedule"`
+	StartDate       string    `json:"startDate,omitempty"`
 	ContentTypes    []string  `json:"contentTypes,omitempty"`
 	Tags            []string  `json:"tags,omitempty"`
 	OnlyWithImages  bool      `json:"onlyWithImages,omitempty"`
@@ -153,6 +154,29 @@ type SourceConfig struct {
 	LastSyncMessage string    `json:"lastSyncMessage,omitempty"`
 	LastSyncCount   int       `json:"lastSyncCount,omitempty"`
 	StoragePath     string    `json:"storagePath,omitempty"`
+}
+
+const sourceStartDateLayout = "2006-01-02"
+
+func normalizeSourceStartDate(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+	parsed, err := time.Parse(sourceStartDateLayout, value)
+	if err != nil {
+		return "", errors.New("订阅起始日期格式无效，请使用 YYYY-MM-DD")
+	}
+	return parsed.Format(sourceStartDateLayout), nil
+}
+
+func sourceStartBoundary(feed SourceConfig) (time.Time, bool) {
+	value, err := normalizeSourceStartDate(feed.StartDate)
+	if err != nil || value == "" {
+		return time.Time{}, false
+	}
+	boundary, err := time.ParseInLocation(sourceStartDateLayout, value, time.Local)
+	return boundary, err == nil
 }
 
 func normalizeTags(tags []string) []string {
@@ -270,8 +294,12 @@ func isCollectionFeed(feed SourceConfig) bool {
 
 func filterSourcePosts(posts []Post, feed SourceConfig) []Post {
 	include, exclude := normalizeKeywords(feed.IncludeKeywords), normalizeKeywords(feed.ExcludeKeywords)
+	startBoundary, hasStartBoundary := sourceStartBoundary(feed)
 	filtered := make([]Post, 0, len(posts))
 	for _, post := range posts {
+		if hasStartBoundary && post.Published.Before(startBoundary) {
+			continue
+		}
 		if len(post.Videos) > 0 && !feed.IncludeVideos {
 			continue
 		}
@@ -829,13 +857,14 @@ func prepareSourceStorage(feed SourceConfig) (SourceConfig, error) {
 		Name            string   `json:"name"`
 		Handle          string   `json:"handle"`
 		Avatar          string   `json:"avatar,omitempty"`
+		StartDate       string   `json:"startDate,omitempty"`
 		ContentTypes    []string `json:"contentTypes,omitempty"`
 		Tags            []string `json:"tags,omitempty"`
 		OnlyWithImages  bool     `json:"onlyWithImages,omitempty"`
 		IncludeVideos   bool     `json:"includeVideos,omitempty"`
 		IncludeKeywords []string `json:"includeKeywords,omitempty"`
 		ExcludeKeywords []string `json:"excludeKeywords,omitempty"`
-	}{feed.Source, feed.ID, feed.Name, feed.Handle, feed.Avatar, feed.ContentTypes, feed.Tags, feed.OnlyWithImages, feed.IncludeVideos, feed.IncludeKeywords, feed.ExcludeKeywords}, "", "  ")
+	}{feed.Source, feed.ID, feed.Name, feed.Handle, feed.Avatar, feed.StartDate, feed.ContentTypes, feed.Tags, feed.OnlyWithImages, feed.IncludeVideos, feed.IncludeKeywords, feed.ExcludeKeywords}, "", "  ")
 	if err != nil {
 		return feed, err
 	}
@@ -2822,12 +2851,19 @@ func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Requ
 			writeAPIError(w, http.StatusBadRequest, "Cron 表达式无效，请使用五段式格式")
 			return
 		}
+		startDate, startDateErr := normalizeSourceStartDate(input.StartDate)
+		if startDateErr != nil {
+			writeAPIError(w, http.StatusBadRequest, startDateErr.Error())
+			return
+		}
+		input.StartDate = startDate
 		b.Lock()
 		found := false
 		for index := range b.config.Subscriptions {
 			if b.config.Subscriptions[index].ID == input.ID {
 				b.config.Subscriptions[index].Enabled = input.Enabled
 				b.config.Subscriptions[index].Schedule = input.Schedule
+				b.config.Subscriptions[index].StartDate = input.StartDate
 				if isBilibiliFavoriteOpusFeed(b.config.Subscriptions[index]) {
 					b.config.Subscriptions[index].ContentTypes = []string{"ARTICLE"}
 				} else {
@@ -5389,12 +5425,19 @@ func (b *BilibiliStore) pixivSubscriptionsHandler(w http.ResponseWriter, r *http
 			writeAPIError(w, http.StatusBadRequest, "Cron 表达式无效")
 			return
 		}
+		startDate, startDateErr := normalizeSourceStartDate(input.StartDate)
+		if startDateErr != nil {
+			writeAPIError(w, http.StatusBadRequest, startDateErr.Error())
+			return
+		}
+		input.StartDate = startDate
 		b.Lock()
 		found := false
 		for index := range b.config.PixivSubscriptions {
 			if b.config.PixivSubscriptions[index].ID == input.ID {
 				b.config.PixivSubscriptions[index].Enabled = input.Enabled
 				b.config.PixivSubscriptions[index].Schedule = input.Schedule
+				b.config.PixivSubscriptions[index].StartDate = input.StartDate
 				b.config.PixivSubscriptions[index].Tags = normalizeTags(input.Tags)
 				b.config.PixivSubscriptions[index].OnlyWithImages = input.OnlyWithImages
 				b.config.PixivSubscriptions[index].IncludeVideos = input.IncludeVideos
@@ -6221,12 +6264,19 @@ func (b *BilibiliStore) weiboSubscriptionsHandler(w http.ResponseWriter, r *http
 			writeAPIError(w, http.StatusBadRequest, "Cron 表达式无效，请使用五段式格式")
 			return
 		}
+		startDate, startDateErr := normalizeSourceStartDate(input.StartDate)
+		if startDateErr != nil {
+			writeAPIError(w, http.StatusBadRequest, startDateErr.Error())
+			return
+		}
+		input.StartDate = startDate
 		b.Lock()
 		found := false
 		for index := range b.config.WeiboSubscriptions {
 			if b.config.WeiboSubscriptions[index].ID == input.ID {
 				b.config.WeiboSubscriptions[index].Enabled = input.Enabled
 				b.config.WeiboSubscriptions[index].Schedule = input.Schedule
+				b.config.WeiboSubscriptions[index].StartDate = input.StartDate
 				b.config.WeiboSubscriptions[index].Tags = normalizeTags(input.Tags)
 				b.config.WeiboSubscriptions[index].OnlyWithImages = input.OnlyWithImages
 				b.config.WeiboSubscriptions[index].IncludeVideos = input.IncludeVideos

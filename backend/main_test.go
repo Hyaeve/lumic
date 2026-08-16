@@ -748,6 +748,39 @@ func TestFilterSourcePostsSupportsImagesAndOptInVideos(t *testing.T) {
 	}
 }
 
+func TestFilterSourcePostsHonorsInclusiveStartDate(t *testing.T) {
+	boundary := time.Date(2026, 8, 1, 0, 0, 0, 0, time.Local)
+	posts := []Post{
+		{ID: "older", Published: boundary.Add(-time.Second)},
+		{ID: "boundary", Published: boundary},
+		{ID: "newer", Published: boundary.Add(12 * time.Hour)},
+	}
+	filtered := filterSourcePosts(posts, SourceConfig{StartDate: "2026-08-01"})
+	if len(filtered) != 2 || filtered[0].ID != "boundary" || filtered[1].ID != "newer" {
+		t.Fatalf("start-date filtering returned %#v", filtered)
+	}
+	if unbounded := filterSourcePosts(posts, SourceConfig{}); len(unbounded) != len(posts) {
+		t.Fatalf("empty start date unexpectedly filtered posts: %#v", unbounded)
+	}
+}
+
+func TestNormalizeSourceStartDate(t *testing.T) {
+	for _, value := range []string{"", "2026-08-01", " 2026-08-01 "} {
+		normalized, err := normalizeSourceStartDate(value)
+		if err != nil {
+			t.Fatalf("normalize %q: %v", value, err)
+		}
+		if value != "" && normalized != "2026-08-01" {
+			t.Fatalf("unexpected normalized date for %q: %q", value, normalized)
+		}
+	}
+	for _, value := range []string{"2026/08/01", "2026-02-30", "08-01-2026"} {
+		if _, err := normalizeSourceStartDate(value); err == nil {
+			t.Fatalf("invalid date was accepted: %q", value)
+		}
+	}
+}
+
 func TestCronScheduleMatchingAndMigration(t *testing.T) {
 	at := time.Date(2026, 8, 13, 6, 0, 0, 0, time.Local)
 	for _, expression := range []string{"0 6 * * *", "0 */6 * * *", "0 6 * * 4"} {
@@ -1788,6 +1821,36 @@ func TestBilibiliSubscriptionKeepsLargeUserIDAsString(t *testing.T) {
 	}
 	if len(store.config.Subscriptions) != 1 || store.config.Subscriptions[0].ID != "bili-3546637624412244" || store.config.Subscriptions[0].Avatar != "https://example.com/up.jpg" {
 		t.Fatalf("large UID lost precision: %#v", store.config.Subscriptions)
+	}
+}
+
+func TestBilibiliSubscriptionSettingsPersistStartDate(t *testing.T) {
+	oldFile := bilibiliFile
+	bilibiliFile = filepath.Join(t.TempDir(), "platform.enc")
+	t.Cleanup(func() { bilibiliFile = oldFile })
+	store := &BilibiliStore{
+		key:    make([]byte, 32),
+		config: BilibiliConfig{Subscriptions: []SourceConfig{{ID: "bili-123", Source: SourceBilibili, Name: "author", Enabled: true, Schedule: "0 6 * * *"}}},
+	}
+
+	request := httptest.NewRequest(http.MethodPut, "/api/bilibili/subscriptions", strings.NewReader(`{"id":"bili-123","enabled":true,"schedule":"0 6 * * *","startDate":"2026-08-01","contentTypes":["DRAW"]}`))
+	response := httptest.NewRecorder()
+	store.subscriptionsHandler(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("save start date: status=%d body=%s", response.Code, response.Body.String())
+	}
+	if got := store.config.Subscriptions[0].StartDate; got != "2026-08-01" {
+		t.Fatalf("start date was not persisted: %q", got)
+	}
+
+	invalidRequest := httptest.NewRequest(http.MethodPut, "/api/bilibili/subscriptions", strings.NewReader(`{"id":"bili-123","enabled":true,"schedule":"0 6 * * *","startDate":"2026-02-30"}`))
+	invalidResponse := httptest.NewRecorder()
+	store.subscriptionsHandler(invalidResponse, invalidRequest)
+	if invalidResponse.Code != http.StatusBadRequest {
+		t.Fatalf("invalid start date status=%d body=%s", invalidResponse.Code, invalidResponse.Body.String())
+	}
+	if got := store.config.Subscriptions[0].StartDate; got != "2026-08-01" {
+		t.Fatalf("invalid update changed the stored start date: %q", got)
 	}
 }
 
