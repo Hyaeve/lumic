@@ -1269,7 +1269,7 @@ function openLightbox(post, index) {
   showLightboxDock(true)
   prepareLightboxSource()
   scheduleLightboxScaleUpdate()
-  if (phonePortrait.value) scheduleTransient(() => { mobileLightboxEntering.value = false }, 420)
+  if (phonePortrait.value) scheduleTransient(() => { mobileLightboxEntering.value = false }, 520)
 }
 function resetLightboxState() {
   resetMobileLightboxTrack()
@@ -1301,7 +1301,7 @@ function resetLightboxState() {
   if (lightboxScaleFrame) window.cancelAnimationFrame(lightboxScaleFrame)
   lightboxScaleFrame = 0
 }
-function closeLightbox(fromHistory = false, delay = 380) {
+function closeLightbox(fromHistory = false, delay = 460) {
   if (lightboxClosing.value) return
   lightboxClosing.value = true
   clearLightboxSingleTap()
@@ -1338,7 +1338,7 @@ function animateMobileLightboxExit(direction) {
       lightboxHistoryPopPending = true
       window.history.back()
     }
-  }, 360)
+  }, 440)
 }
 function finishMobileLightboxTransition(commit = true) {
   const step = mobileLightboxTransitionStep
@@ -1759,7 +1759,7 @@ function toggleLightboxDoubleTap(event) {
   lightboxZoomTimer = window.setTimeout(() => {
     lightboxZoomAnimating.value = false
     lightboxZoomTimer = 0
-  }, 420)
+  }, 500)
   if (phonePortrait.value) {
     const atDefaultFit = lightbox.value.fit && Math.abs(lightbox.value.scale - 1) < 0.02 && Math.abs(lightbox.value.x) < 2 && Math.abs(lightbox.value.y) < 2
     lightbox.value.fit = true
