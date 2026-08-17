@@ -330,10 +330,21 @@ const mobileAuthorPreviewPosts = computed(() => {
 })
 const mobileAuthorPreviewStyle = computed(() => {
   const width = typeof window === 'undefined' ? 390 : Math.max(1, window.innerWidth)
-  const progress = Math.min(1, Math.abs(mobileDetailPageDragX.value) / width)
+  const progress = Math.min(1, Math.max(0, -mobileDetailPageDragX.value) / width)
   return {
     opacity: '1',
-    transform: `translate3d(${100 - progress * 100}%, 0, 0)`
+    transform: `translate3d(${100 - progress * 100}%, 0, 0)`,
+    transition: mobileDetailPageDragging.value ? 'none' : mobileDetailPageAnimating.value ? 'transform .32s cubic-bezier(.16,.88,.22,1)' : 'none'
+  }
+})
+const mobileReturnPreviewPosts = computed(() => filteredPosts.value.slice(0, 6))
+const mobileReturnPreviewStyle = computed(() => {
+  const width = typeof window === 'undefined' ? 390 : Math.max(1, window.innerWidth)
+  const progress = Math.min(1, Math.max(0, mobileDetailPageDragX.value) / width)
+  return {
+    opacity: '1',
+    transform: `translate3d(${-100 + progress * 100}%, 0, 0)`,
+    transition: mobileDetailPageDragging.value ? 'none' : mobileDetailPageAnimating.value ? 'transform .32s cubic-bezier(.16,.88,.22,1)' : 'none'
   }
 })
 const mobileLightboxLayerStyle = computed(() => ({
@@ -2144,7 +2155,7 @@ function resetMobileDetailPageSwipe() {
 }
 function beginMobileDetailPageSwipe(event) {
   const target = event.target
-  if (event.pointerType !== 'touch' || event.button !== 0 || !masonryDetailPost.value || target?.closest?.('.mobile-post-media-stage, button, a, input, textarea, select, label')) return
+  if (event.pointerType !== 'touch' || event.button !== 0 || !masonryDetailPost.value || target?.closest?.('.mobile-post-media-stage, input, textarea, select, label')) return
   if (mobileDetailPageTimer) window.clearTimeout(mobileDetailPageTimer)
   mobileDetailPageTimer = 0
   mobileDetailPageTouch = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, time: event.timeStamp, axis: '', prevX: event.clientX, prevTime: event.timeStamp, lastX: event.clientX, lastTime: event.timeStamp }
@@ -2158,7 +2169,7 @@ function updateMobileDetailPageSwipe(event) {
   if (!mobileDetailPageTouch.axis && Math.max(Math.abs(dx), Math.abs(dy)) > 7) {
     mobileDetailPageTouch.axis = Math.abs(dx) > Math.abs(dy) * 1.12 ? 'horizontal' : 'vertical'
   }
-  if (mobileDetailPageTouch.axis !== 'horizontal' || dx >= 0) return
+  if (mobileDetailPageTouch.axis !== 'horizontal') return
   if (!event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.setPointerCapture?.(event.pointerId)
   event.preventDefault()
   mobileDetailPageDragging.value = true
@@ -2166,7 +2177,7 @@ function updateMobileDetailPageSwipe(event) {
   mobileDetailPageTouch.prevTime = mobileDetailPageTouch.lastTime
   mobileDetailPageTouch.lastX = event.clientX
   mobileDetailPageTouch.lastTime = event.timeStamp
-  mobileDetailPageDragX.value = Math.max(-window.innerWidth, dx)
+  mobileDetailPageDragX.value = Math.max(-window.innerWidth, Math.min(window.innerWidth, dx))
 }
 function finishMobileDetailPageSwipe(event) {
   if (!mobileDetailPageTouch || event.pointerId !== mobileDetailPageTouch.pointerId) return
@@ -2186,16 +2197,22 @@ function finishMobileDetailPageSwipe(event) {
     mobileDetailPageTimer = window.setTimeout(() => {
       mobileDetailPageTimer = 0
       if (post) {
-        mobilePageSwitching.value = true
         openAuthor(post)
-        scheduleTransient(() => { mobilePageSwitching.value = false }, 360)
       }
       resetMobileDetailPageSwipe()
-    }, 295)
+    }, 320)
+    return
+  }
+  if (!cancelled && horizontal && (dx > Math.min(78, window.innerWidth * .2) || velocityX > .48)) {
+    mobileDetailPageDragX.value = window.innerWidth
+    mobileDetailPageTimer = window.setTimeout(() => {
+      mobileDetailPageTimer = 0
+      closePostDetail()
+    }, 320)
     return
   }
   mobileDetailPageDragX.value = 0
-  mobileDetailPageTimer = window.setTimeout(resetMobileDetailPageSwipe, 205)
+  mobileDetailPageTimer = window.setTimeout(resetMobileDetailPageSwipe, 320)
 }
 function masonryItemStyle(item) {
   return {
@@ -2801,6 +2818,11 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
       <header><img :src="postAvatar(masonryDetailPost)" alt=""><div><strong>{{ masonryDetailPost.author }}</strong><small>{{ sourceMeta[masonryDetailPost.source].label }} · {{ authorProfile?.count || mobileAuthorPreviewPosts.length }} 条已拉取动态</small></div><span :class="['source-pill', sourceMeta[masonryDetailPost.source].color]"><img class="source-icon" :src="sourceIconFor(masonryDetailPost.source)" alt="">{{ sourceMeta[masonryDetailPost.source].label }}</span></header>
       <div class="mobile-author-preview-toolbar"><span>全部</span><i></i><i></i><label><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><b>搜索</b></label></div>
       <div class="mobile-author-preview-grid"><article v-for="post in mobileAuthorPreviewPosts" :key="post.id"><img v-if="masonryCover(post)" :src="previewMedia(masonryCover(post))" alt=""><p v-else>{{ post.caption || '动态内容' }}</p></article></div>
+    </aside>
+    <aside v-if="phonePortrait && masonryDetailPost" class="mobile-return-swipe-preview" :style="mobileReturnPreviewStyle" aria-hidden="true">
+      <header><div><small>SAVED MOMENTS</small><strong>{{ mobileTimelineTitle }}</strong></div><span :class="['source-pill', sourceMeta[masonryDetailPost.source].color]"><img class="source-icon" :src="sourceIconFor(masonryDetailPost.source)" alt="">{{ sourceMeta[masonryDetailPost.source].label }}</span></header>
+      <div class="mobile-author-preview-toolbar"><span>全部</span><i></i><i></i><label><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><b>搜索</b></label></div>
+      <div class="mobile-author-preview-grid"><article v-for="post in mobileReturnPreviewPosts" :key="post.id"><img v-if="masonryCover(post)" :src="previewMedia(masonryCover(post))" alt=""><p v-else>{{ post.caption || '动态内容' }}</p></article></div>
     </aside>
     <main v-if="phonePortrait && masonryDetailPost" :class="['content', 'mobile-post-detail-page', { 'page-dragging': mobileDetailPageDragging }]" :style="mobileDetailPageStyle" @pointerdown="beginMobileDetailPageSwipe" @pointermove="updateMobileDetailPageSwipe" @pointerup="finishMobileDetailPageSwipe" @pointercancel="finishMobileDetailPageSwipe">
       <header class="mobile-post-detail-head">
