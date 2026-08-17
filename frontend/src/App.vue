@@ -1418,6 +1418,9 @@ function prepareLightboxSource() {
       preload.src = previewMedia(lightbox.value.media[index])
     }
   }
+  // Mobile keeps the preview mounted while the full image is fetched by its
+  // overlay layer. Replacing the display source here would rebuild the slide.
+  if (phonePortrait.value) return
   if (!source || preview === source) return
   const original = new Image()
   original.decoding = 'async'
@@ -1429,6 +1432,10 @@ function prepareLightboxSource() {
   original.src = source
 }
 function handleLightboxImageLoad() {
+  if (phonePortrait.value) {
+    lightboxOriginalLoaded.value = true
+    return
+  }
   lightboxOriginalLoaded.value = lightboxDisplaySource.value === lightbox.value.media[lightbox.value.index]
   scheduleLightboxScaleUpdate()
 }
@@ -3191,7 +3198,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
           <img ref="lightboxImageElement" :src="lightboxDisplaySource" :alt="`${lightbox.author} 的动态图片 ${lightbox.index + 1}`" :class="{ dragging: lightbox.dragging, 'original-size': !lightbox.fit, 'original-loaded': lightboxOriginalLoaded }" :style="{ transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) rotate(${lightbox.rotation}deg) scale(${lightbox.scale})` }" draggable="false" @click.stop @pointerdown.prevent.stop="startLightboxGesture" @pointermove.prevent.stop="moveLightboxGesture" @pointerup.prevent.stop="stopLightboxGesture" @pointercancel.prevent.stop="stopLightboxGesture" @load="handleLightboxImageLoad">
         </figure>
       </div>
-      <div v-if="!phonePortrait" class="lightbox-dock-zone" @pointerenter="showLightboxDock(false)" @pointermove="showLightboxDock(false)" @pointerleave="scheduleLightboxDockHide(650)">
+      <div v-if="!phonePortrait" class="lightbox-dock-zone" @pointerenter="showLightboxDock(false)" @pointermove="showLightboxDock(false)" @pointerleave="scheduleLightboxDockHide(1650)">
       <div :class="['lightbox-dock', { hidden: !lightboxDockVisible }]" role="toolbar" aria-label="图片查看工具">
         <button type="button" title="上一张" aria-label="上一张" :disabled="lightbox.media.length < 2" @click="moveLightbox(-1)"><svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg></button>
         <span class="lightbox-counter">{{ lightbox.index + 1 }}/{{ lightbox.media.length }}</span>
