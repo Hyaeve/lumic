@@ -901,6 +901,28 @@ func flowPublicPath(source Source, author, name string) string {
 	return "/flow/" + url.PathEscape(string(source)) + "/" + url.PathEscape(safeFlowDirectoryName(author)) + "/" + url.PathEscape(name)
 }
 
+// Cache account avatars locally so mobile WebViews do not depend on third-party
+// avatar hosts, which may reject hotlinking or fail under their network policy.
+func cacheAccountAvatar(source Source, storageName, avatar, proxyURL, referer, cookie string) string {
+	avatar = normalizeRemoteImage(avatar)
+	if avatar == "" || strings.HasPrefix(avatar, "/flow/") {
+		return avatar
+	}
+	client, err := externalHTTPClient(proxyURL)
+	if err != nil {
+		return avatar
+	}
+	directory := sourceStoragePath(source, storageName)
+	if err := os.MkdirAll(directory, 0755); err != nil {
+		return avatar
+	}
+	path, err := downloadRemoteImage(client, avatar, filepath.Join(directory, "account-avatar"), referer, cookie)
+	if err != nil {
+		return avatar
+	}
+	return flowPublicPath(source, storageName, filepath.Base(path))
+}
+
 func prepareSourceStorage(feed SourceConfig) (SourceConfig, error) {
 	feed.Name = canonicalSourceName(feed)
 	feed.StoragePath = sourceStoragePath(feed.Source, feed.Name)
@@ -2772,6 +2794,17 @@ func (b *BilibiliStore) accountHandler(w http.ResponseWriter, r *http.Request) {
 				b.Unlock()
 				_ = b.save()
 				account = enriched
+			}
+		}
+		if account.Configured && account.Avatar != "" {
+			cachedAvatar := cacheAccountAvatar(SourceBilibili, bilibiliFavoriteOpusName, account.Avatar, proxyURL, "https://www.bilibili.com/", bilibiliCookie(credentials))
+			if cachedAvatar != account.Avatar {
+				account.Avatar = cachedAvatar
+				credentials.Avatar = cachedAvatar
+				b.Lock()
+				b.config.Credentials = credentials
+				b.Unlock()
+				_ = b.save()
 			}
 		}
 		writeJSON(w, account)
@@ -5237,6 +5270,18 @@ func (b *BilibiliStore) pixivHandler(w http.ResponseWriter, r *http.Request) {
 				_ = b.save()
 			}(current, proxyURL)
 		}
+		if current.Avatar != "" {
+			cachedAvatar := cacheAccountAvatar(SourcePixiv, pixivBookmarksName, current.Avatar, proxyURL, "https://www.pixiv.net/", current.Cookie)
+			if cachedAvatar != current.Avatar {
+				current.Avatar = cachedAvatar
+				b.Lock()
+				if b.config.Pixiv.Cookie == current.Cookie && b.config.Pixiv.UserID == current.UserID {
+					b.config.Pixiv.Avatar = cachedAvatar
+				}
+				b.Unlock()
+				_ = b.save()
+			}
+		}
 		writeJSON(w, map[string]any{"configured": current.Cookie != "" && current.UserID != "", "userId": current.UserID, "userName": current.UserName, "avatar": current.Avatar})
 		return
 	}
@@ -6630,6 +6675,18 @@ func (b *BilibiliStore) weiboAccountHandler(w http.ResponseWriter, r *http.Reque
 				b.Lock()
 				if b.config.Weibo.Cookie == current.Cookie && b.config.Weibo.UserID == current.UserID {
 					b.config.Weibo = current
+				}
+				b.Unlock()
+				_ = b.save()
+			}
+		}
+		if current.Avatar != "" {
+			cachedAvatar := cacheAccountAvatar(SourceWeibo, weiboLikesName, current.Avatar, proxyURL, "https://weibo.com/", current.Cookie)
+			if cachedAvatar != current.Avatar {
+				current.Avatar = cachedAvatar
+				b.Lock()
+				if b.config.Weibo.Cookie == current.Cookie && b.config.Weibo.UserID == current.UserID {
+					b.config.Weibo.Avatar = cachedAvatar
 				}
 				b.Unlock()
 				_ = b.save()

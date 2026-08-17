@@ -61,6 +61,7 @@ const sourcesExpanded = ref(true)
 const mobileMenuOpen = ref(false)
 const mobileSourcesOpen = ref(false)
 const mobilePageSwitching = ref(false)
+const mobileTimelineIconSwitching = ref(false)
 const showBrandMenu = ref(false)
 const phonePortrait = ref(false)
 const selectedAuthor = ref(null)
@@ -111,6 +112,7 @@ const timelineSort = ref('newest')
 const timelineView = ref('list')
 const timelineSearch = ref('')
 const timelineSearchFocused = ref(false)
+const subscriptionPage = ref(1)
 const mediaShapes = ref({})
 const mediaRatios = ref({})
 const videoRatios = ref({})
@@ -451,6 +453,13 @@ const platformCards = computed(() => [
   { key: 'pixiv', label: 'Pixiv', short: 'P', ...sourceMeta.pixiv, configured: pixivAccount.value.configured, account: pixivAccount.value.configured ? (pixivAccount.value.userName || `UID ${pixivAccount.value.userId}`) : '尚未连接', avatar: pixivAccount.value.avatar, path: '/flow/pixiv', description: '画师作品与插画媒体', feeds: feeds.value.filter(feed => feed.source === 'pixiv') },
   { key: 'twitter', label: '推特', short: '推', ...sourceMeta.twitter, image: sourceIconFor('twitter'), configured: false, account: '暂未开放', avatar: '', path: '/flow/twitter', description: '推文、图片与媒体动态', feeds: feeds.value.filter(feed => feed.source === 'twitter') }
 ])
+const subscriptionPageSize = 10
+const subscriptionPageCount = computed(() => Math.max(1, Math.ceil(feeds.value.length / subscriptionPageSize)))
+const pagedFeeds = computed(() => {
+  const page = Math.min(Math.max(1, subscriptionPage.value), subscriptionPageCount.value)
+  const start = (page - 1) * subscriptionPageSize
+  return feeds.value.slice(start, start + subscriptionPageSize)
+})
 const hasWeiboLikesSource = computed(() => feeds.value.some(feed => feed.id?.startsWith('weibo-likes-')))
 const hasPixivBookmarksSource = computed(() => feeds.value.some(feed => feed.id?.startsWith('pixiv-bookmarks-')))
 const hasBilibiliFavoriteOpusSource = computed(() => feeds.value.some(feed => feed.id?.startsWith('bili-opus-favorites-')))
@@ -656,11 +665,11 @@ function triggerNightMeteorBurst() {
       const angle = 37 + Math.random() * 3
       const travelX = travelY / Math.tan(angle * Math.PI / 180)
       const delay = (count >= 3 ? index * 0.62 : index * 0.32) + Math.random() * 0.34
-      // 每束流星独立随机为稍慢、中速或更快三档，保留当前中速为主节奏。
+      // 保留原有中速和稍慢节奏，并加入更缓慢的一档，避免出现过快的流星。
       const speedProfile = [
+        [6.4, 1.6],
         [4.25, 1.15],
-        [2.8, 1.5],
-        [1.85, 0.8]
+        [2.8, 1.5]
       ][Math.floor(Math.random() * 3)]
       const duration = speedProfile[0] + Math.random() * speedProfile[1]
       maximumDuration = Math.max(maximumDuration, duration + delay)
@@ -984,14 +993,19 @@ async function searchWeibo() {
   } catch (error) { weiboError.value = error.message } finally { weiboBusy.value = false }
 }
 async function runFullSync() {
+  if (syncing.value) return
   syncing.value = true; timelineMessage.value = ''
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), 45_000)
   try {
-    const response = await fetch('/api/sync', { method: 'POST' })
-    const result = await response.json()
-    if (!response.ok && !result.message) throw new Error(await responseError(response, '同步失败'))
+    const response = await fetch('/api/sync', { method: 'POST', signal: controller.signal })
+    const payload = await response.text()
+    let result = {}
+    try { result = payload ? JSON.parse(payload) : {} } catch {}
+    if (!response.ok && !result.message) throw new Error(result.error || '同步失败')
     timelineMessage.value = result.message || '拉取任务已完成'
     await loadData()
-  } catch (error) { timelineMessage.value = error.message } finally { syncing.value = false }
+  } catch (error) { timelineMessage.value = error?.name === 'AbortError' ? '同步请求超时，后台任务仍可能继续执行。' : error.message } finally { window.clearTimeout(timeout); syncing.value = false }
 }
 async function subscribeWeibo(user) {
   weiboBusy.value = true; weiboError.value = ''
@@ -1679,15 +1693,17 @@ function toggleMobileTimelineShortcut() {
 }
 function navigateToMobileSource(source) {
   mobilePageSwitching.value = true
+  mobileTimelineIconSwitching.value = true
   mobileSourcesOpen.value = false
   navigateTo('source', source)
-  scheduleTransient(() => { mobilePageSwitching.value = false }, 360)
+  scheduleTransient(() => { mobilePageSwitching.value = false; mobileTimelineIconSwitching.value = false }, 360)
 }
 function navigateToMobileAll() {
   mobilePageSwitching.value = true
+  mobileTimelineIconSwitching.value = true
   mobileSourcesOpen.value = false
   navigateTo('all', 'all')
-  scheduleTransient(() => { mobilePageSwitching.value = false }, 360)
+  scheduleTransient(() => { mobilePageSwitching.value = false; mobileTimelineIconSwitching.value = false }, 360)
 }
 function releaseTimelineSearchFocus() {
   timelineSearchFocused.value = false
@@ -2170,9 +2186,7 @@ function finishMobileDetailPageSwipe(event) {
     mobileDetailPageTimer = window.setTimeout(() => {
       mobileDetailPageTimer = 0
       if (post) {
-        mobilePageSwitching.value = true
         openAuthor(post)
-        scheduleTransient(() => { mobilePageSwitching.value = false }, 360)
       }
       resetMobileDetailPageSwipe()
     }, 295)
@@ -2354,7 +2368,7 @@ function showMobileControls() {
   mobileControlsTimer = window.setTimeout(() => {
     mobileControlsTimer = 0
     if (!mobileMenuOpen.value && !mobileSourcesOpen.value) mobileControlsVisible.value = false
-  }, 1650)
+  }, 2400)
 }
 function handleWindowScroll() {
   showMobileControls()
@@ -2525,6 +2539,8 @@ async function checkSession(refreshData = true) {
 }
 watch(filteredPosts, resetTimelineWindow)
 watch(posts, prunePostCaches)
+watch(feeds, () => { subscriptionPage.value = Math.min(Math.max(1, subscriptionPage.value), subscriptionPageCount.value) })
+watch(subscriptionPageCount, count => { subscriptionPage.value = Math.min(Math.max(1, subscriptionPage.value), count) })
 watch(phoneOverlayKey, next => {
   if (!phonePortrait.value || phoneOverlayDismissInProgress) return
   if (next) {
@@ -2578,7 +2594,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
     </div>
   </div>
   <div v-else class="app-shell" :class="{ dark: isDark, 'lightbox-active': lightbox.open, 'phone-ui': phonePortrait, 'timeline-search-focused': timelineSearchFocused, 'mobile-page-switching': mobilePageSwitching }" @click="showBrandMenu = false">
-    <button v-if="phonePortrait && !lightbox.open && !masonryDetailPost" class="mobile-timeline-toggle" type="button" :class="{ open: mobileSourcesOpen, active: mobileAtAllTimeline, 'mobile-control-hidden': !mobileControlsVisible && !mobileSourcesOpen }" :aria-expanded="mobileSourcesOpen" :title="mobileSourcesOpen ? `收起${mobileTimelineTitle}栏目` : `展开${mobileTimelineTitle}栏目`" :aria-label="mobileSourcesOpen ? `收起${mobileTimelineTitle}栏目` : `展开${mobileTimelineTitle}栏目`" @pointerdown.stop @click.stop="showMobileControls(); toggleMobileTimelineShortcut()">
+    <button v-if="phonePortrait && !lightbox.open && !masonryDetailPost" class="mobile-timeline-toggle" type="button" :class="{ open: mobileSourcesOpen, active: mobileAtAllTimeline, 'icon-switching': mobileTimelineIconSwitching, 'mobile-control-hidden': !mobileControlsVisible && !mobileSourcesOpen }" :aria-expanded="mobileSourcesOpen" :title="mobileSourcesOpen ? `收起${mobileTimelineTitle}栏目` : `展开${mobileTimelineTitle}栏目`" :aria-label="mobileSourcesOpen ? `收起${mobileTimelineTitle}栏目` : `展开${mobileTimelineTitle}栏目`" @pointerdown.stop @click.stop="showMobileControls(); toggleMobileTimelineShortcut()">
       <img v-if="mobileTimelineMeta" :class="['sidebar-source-icon', `sidebar-${activeSource}-icon`]" :src="mobileTimelineMeta.lineImage" alt="">
       <span v-else class="nav-line-symbol nav-mask-symbol" :style="{ '--nav-mask': `url(${timelineNavIcon})` }" aria-hidden="true"></span>
     </button>
@@ -2765,7 +2781,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
       </section>
       <div class="section-heading subscription-list-heading"><div><h2>订阅列表</h2><p>查看同步状态并手动拉取内容。</p></div><span>{{ feeds.length }} 个来源</span></div>
       <section class="pull-list">
-        <article v-for="feed in feeds" :key="feed.id" class="pull-card">
+        <article v-for="feed in pagedFeeds" :key="feed.id" class="pull-card">
           <button class="pull-avatar-button" type="button" :title="`查看 ${feed.name} 的动态`" :aria-label="`查看 ${feed.name} 的动态`" @click="openFeedAuthor(feed)"><img :key="`${feed.id}:${sourceAvatar(feed, platformCardForSource(feed.source))}`" class="pull-avatar" :src="sourceAvatar(feed, platformCardForSource(feed.source))" data-fallback-index="0" :alt="feed.name" referrerpolicy="no-referrer" @error="handleSourceAvatarError($event, feed, platformCardForSource(feed.source))"></button>
           <div class="pull-info"><div class="pull-title"><strong>{{ feed.name }}</strong><span :class="['source-pill', sourceMeta[feed.source].color]"><img :class="['source-icon', { 'twitter-night-icon': feed.source === 'twitter' && isDark }]" :src="sourceIconFor(feed.source)" :alt="sourceMeta[feed.source].label">{{ sourceMeta[feed.source].label }}</span></div><span class="pull-handle">{{ feed.handle }}</span><small>{{ feedLastSyncText(feed) }}</small></div>
           <div class="pull-status"><i :class="['pull-dot', feed.lastSyncStatus]"></i><span>{{ feed.lastSyncStatus === 'success' ? `新增 ${feed.lastSyncCount || 0} 条` : feed.lastSyncStatus === 'failed' ? '拉取失败' : '待拉取' }}</span></div>
@@ -2773,6 +2789,11 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
         </article>
         <div v-if="!feeds.length" class="empty">还没有订阅内容，请先添加 UP 主、博主、画师或账号收藏来源。</div>
       </section>
+      <nav v-if="subscriptionPageCount > 1" class="subscription-pagination" aria-label="订阅列表分页">
+        <button type="button" :disabled="subscriptionPage <= 1" title="上一页" aria-label="上一页" @click="subscriptionPage--"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 5-7 7 7 7"/></svg></button>
+        <span>{{ subscriptionPage }} / {{ subscriptionPageCount }}</span>
+        <button type="button" :disabled="subscriptionPage >= subscriptionPageCount" title="下一页" aria-label="下一页" @click="subscriptionPage++"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 5 7 7-7 7"/></svg></button>
+      </nav>
     </main>
     <aside v-if="phonePortrait && masonryDetailPost" class="mobile-author-swipe-preview" :style="mobileAuthorPreviewStyle" aria-hidden="true">
       <header><img :src="postAvatar(masonryDetailPost)" alt=""><div><strong>{{ masonryDetailPost.author }}</strong><small>{{ sourceMeta[masonryDetailPost.source].label }} · {{ mobileAuthorPreviewPosts.length }} 条预览</small></div></header>
@@ -2955,6 +2976,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
               <button class="secondary-button" type="button" :disabled="settingsBusy" @click="downloadConfigurationBackup">备份</button>
               <label class="restore-file-button" :class="{ disabled: settingsBusy }"><input type="file" accept="application/json,.json" :disabled="settingsBusy" @change="restoreConfiguration"><span>还原</span></label>
             </div>
+            <p class="backup-settings-note">备份或还原账号、订阅、过滤与显示配置，不包含已拉取的动态文件。</p>
           </section>
           <section class="settings-pane compact-settings-pane"><div class="pane-heading"><div><h3>账号管理</h3></div></div><form class="settings-form account-settings-form" @submit.prevent="saveSettings" autocomplete="off"><label>账号</label><input v-model="settingsForm.username" required minlength="3" autocomplete="username"><label>密码</label><input v-model="settingsForm.newPassword" type="password" required minlength="8" autocomplete="new-password"><button class="login-button" type="submit" :disabled="settingsBusy">{{ settingsBusy ? '保存中…' : '保存' }}</button></form></section>
         </div>
