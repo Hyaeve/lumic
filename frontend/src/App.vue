@@ -384,8 +384,8 @@ const mobileDetailReturnPreviewStyle = computed(() => {
 })
 const mobileLightboxLayerStyle = computed(() => ({
   transform: `translate3d(0, ${mobileLightboxExitY.value}px, 0)`,
-  opacity: String(Math.max(.18, 1 - Math.abs(mobileLightboxExitY.value) / Math.max(1, typeof window === 'undefined' ? 844 : window.innerHeight) * .72)),
-  transition: mobileLightboxExitDragging.value ? 'none' : mobileLightboxExitAnimating.value ? 'transform .3s cubic-bezier(.18,.84,.22,1), opacity .26s ease' : undefined
+  opacity: '1',
+  transition: mobileLightboxExitDragging.value ? 'none' : mobileLightboxExitAnimating.value ? 'transform .34s cubic-bezier(.16,.88,.22,1)' : undefined
 }))
 const filteredPosts = computed(() => {
   const allPosts = Array.isArray(posts.value) ? posts.value : []
@@ -1301,7 +1301,7 @@ function resetLightboxState() {
   if (lightboxScaleFrame) window.cancelAnimationFrame(lightboxScaleFrame)
   lightboxScaleFrame = 0
 }
-function closeLightbox(fromHistory = false, delay = 460) {
+function closeLightbox(fromHistory = false, delay = 320) {
   if (lightboxClosing.value) return
   lightboxClosing.value = true
   clearLightboxSingleTap()
@@ -1329,7 +1329,7 @@ function animateMobileLightboxExit(direction) {
   mobileLightboxExitDragging.value = false
   mobileLightboxExitAnimating.value = true
   lightboxClosing.value = true
-  mobileLightboxExitY.value = (direction < 0 ? -1 : 1) * Math.max(window.innerHeight, 720)
+  mobileLightboxExitY.value = (direction < 0 ? -1 : 1) * Math.max(window.innerHeight + 48, 768)
   const hadHistory = lightboxHistoryActive
   scheduleTransient(() => {
     lightboxHistoryActive = false
@@ -1338,7 +1338,7 @@ function animateMobileLightboxExit(direction) {
       lightboxHistoryPopPending = true
       window.history.back()
     }
-  }, 440)
+  }, 340)
 }
 function finishMobileLightboxTransition(commit = true) {
   const step = mobileLightboxTransitionStep
@@ -1422,8 +1422,8 @@ function prepareLightboxSource() {
   original.decoding = 'async'
   original.onload = () => {
     if (sequence !== lightboxLoadSequence || !lightbox.value.open) return
-    lightboxOriginalLoaded.value = false
     lightboxDisplaySource.value = source
+    lightboxOriginalLoaded.value = true
   }
   original.src = source
 }
@@ -1736,8 +1736,8 @@ function moveLightboxGesture(event) {
       lightbox.value.dragging = false
       mobileLightboxExitDragging.value = true
       mobileLightboxExitAnimating.value = false
-      const threshold = Math.min(76, window.innerHeight * .1)
-      const capped = Math.min(threshold * .78, Math.abs(dy) * .48)
+      const threshold = Math.min(116, window.innerHeight * .15)
+      const capped = Math.min(threshold * .92, Math.abs(dy) * .62)
       mobileLightboxExitY.value = Math.sign(dy || 1) * capped
       return
     }
@@ -1809,7 +1809,7 @@ function stopLightboxGesture(event) {
   const isZoomEdgeSwipe = phonePortrait.value && !wasCancelled && !lightboxGestureHadPinch && wasSinglePan && !gesture.longPressed && !gesture?.startDefaultView && gesture?.axis === 'horizontal' && (Math.abs(gesture?.edgeOverscroll || 0) > edgeSwipeDistance || (Math.abs(gesture?.edgeOverscroll || 0) > 38 && Math.abs(velocityX) > .8))
   const isSwipe = isDefaultSwipe || isZoomEdgeSwipe
   const verticalExitThresholdMet = gesture?.startDefaultView
-    ? (Math.abs(dy) > Math.min(94, window.innerHeight * .13) || (Math.abs(dy) > 34 && Math.abs(velocityY) > .68))
+    ? (Math.abs(dy) > Math.min(116, window.innerHeight * .15) || (Math.abs(dy) > 42 && Math.abs(velocityY) > .72))
     : false
   const isVerticalExit = phonePortrait.value && !wasCancelled && !lightboxGestureHadPinch && wasSinglePan && !gesture.longPressed && gesture?.startDefaultView && duration < 780 && verticalExitThresholdMet && Math.abs(dy) > Math.abs(dx) * 1.08
   const isTap = !wasCancelled && !lightboxGestureHadPinch && wasSinglePan && !gesture.longPressed && duration < 280 && Math.hypot(dx, dy) < 10
@@ -3169,7 +3169,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
       <button v-if="selectionAction === 'unfavorite'" type="button" class="selection-delete-button selection-unfavorite-button" :disabled="!selectedPostCount || postActionBusy === 'batch-unfavorite'" title="取消收藏所选动态" aria-label="取消收藏所选动态" @click="unfavoriteSelectedPosts"><svg viewBox="0 0 24 24"><path d="M12 20.5S4.5 16.2 4.5 10.2A4.2 4.2 0 0 1 12 7.6a4.2 4.2 0 0 1 7.5 2.6c0 6-7.5 10.3-7.5 10.3Z"/><path d="M8.5 11.5h7"/></svg><b>取消收藏</b></button>
       <button v-else type="button" class="selection-delete-button" :disabled="!selectedPostCount || postActionBusy === 'batch-delete'" title="删除所选动态" aria-label="删除所选动态" @click="deleteSelectedPosts"><span class="action-icon-mask" :style="{ '--action-icon-mask': `url(${deleteIcon})` }" aria-hidden="true"></span><b>删除</b></button>
     </div>
-    <div v-if="lightbox.open" :class="['lightbox-layer', { closing: lightboxClosing, 'mobile-entering': mobileLightboxEntering, 'mobile-exit-dragging': mobileLightboxExitDragging }]" :style="phonePortrait ? mobileLightboxLayerStyle : undefined" role="dialog" aria-modal="true" :aria-label="`${lightbox.author} 的动态媒体`" @click.self="closeLightbox" @wheel.prevent="zoomLightbox">
+    <div v-if="lightbox.open" :class="['lightbox-layer', { closing: lightboxClosing, 'mobile-entering': mobileLightboxEntering, 'mobile-exit-dragging': mobileLightboxExitDragging, 'mobile-gesture-exiting': mobileLightboxExitAnimating }]" :style="phonePortrait ? mobileLightboxLayerStyle : undefined" role="dialog" aria-modal="true" :aria-label="`${lightbox.author} 的动态媒体`" @click.self="closeLightbox" @wheel.prevent="zoomLightbox">
       <button v-if="!phonePortrait" class="lightbox-close" type="button" title="关闭大图" aria-label="关闭大图" @click="closeLightbox">×</button>
       <button v-if="!phonePortrait" class="lightbox-edge-nav previous" type="button" :disabled="lightbox.media.length < 2" title="上一张" aria-label="上一张" @click.stop="moveLightbox(-1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 5-7 7 7 7"/></svg></button>
       <button v-if="!phonePortrait" class="lightbox-edge-nav next" type="button" :disabled="lightbox.media.length < 2" title="下一张" aria-label="下一张" @click.stop="moveLightbox(1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"/></svg></button>
@@ -3177,7 +3177,10 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
         <figure v-if="phonePortrait" class="mobile-lightbox-carousel" @click.stop @pointerdown.prevent="startLightboxGesture" @pointermove.prevent="moveLightboxGesture" @pointerup.prevent="stopLightboxGesture" @pointercancel.prevent="stopLightboxGesture">
           <div class="mobile-lightbox-track" :style="mobileLightboxTrackStyle">
             <div v-for="slide in mobileLightboxSlides" :key="`${slide.position}:${slide.media}`" :class="['mobile-lightbox-slide', { current: slide.position === 0 }]">
-              <img v-if="slide.position === 0" ref="lightboxImageElement" :src="slide.source" :alt="`${lightbox.author} 的动态图片 ${slide.index + 1}`" :class="{ dragging: lightbox.dragging, 'zoom-animating': lightboxZoomAnimating, 'original-size': !lightbox.fit, 'original-loaded': lightboxOriginalLoaded }" :style="{ transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) rotate(${lightbox.rotation}deg) scale(${lightbox.scale})` }" draggable="false" @load="handleLightboxImageLoad">
+              <template v-if="slide.position === 0">
+                <img class="mobile-lightbox-preview" :src="previewMedia(slide.media)" :alt="`${lightbox.author} 的动态图片 ${slide.index + 1}`" :class="{ dragging: lightbox.dragging, 'zoom-animating': lightboxZoomAnimating, 'original-size': !lightbox.fit }" :style="{ transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) rotate(${lightbox.rotation}deg) scale(${lightbox.scale})` }" draggable="false">
+                <img ref="lightboxImageElement" class="mobile-lightbox-original" :src="slide.media" :alt="`${lightbox.author} 的动态图片 ${slide.index + 1}`" :class="{ dragging: lightbox.dragging, 'zoom-animating': lightboxZoomAnimating, 'original-size': !lightbox.fit, 'original-loaded': lightboxOriginalLoaded }" :style="{ transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) rotate(${lightbox.rotation}deg) scale(${lightbox.scale})` }" draggable="false" @load="handleLightboxImageLoad">
+              </template>
               <img v-else :src="slide.source" alt="" draggable="false">
             </div>
           </div>
