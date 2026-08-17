@@ -33,7 +33,7 @@ const showSettings = ref(false)
 const settingsTab = ref('settings')
 const settingsError = ref('')
 const settingsBusy = ref(false)
-const settingsForm = ref({ username: '', currentPassword: '', newPassword: '' })
+const settingsForm = ref({ username: '', newPassword: '' })
 const proxyForm = ref({ proxyUrl: '' })
 const proxyStatus = ref({ proxyEnabled: false, proxyUrl: '' })
 const proxyMessage = ref('')
@@ -607,6 +607,7 @@ async function loadProjectSettings() {
     if (!response.ok) return
     const project = await response.json()
     proxyStatus.value = project
+    proxyForm.value = { proxyUrl: project.proxyUrl || '' }
     previewQuality.value = {
       desktop: normalizePreviewQualityLevel(project.previewDesktopLevel, 2),
       mobile: normalizePreviewQualityLevel(project.previewMobileLevel, 3)
@@ -677,7 +678,13 @@ function triggerNightMeteorBurst() {
       const angle = 37 + Math.random() * 3
       const travelX = travelY / Math.tan(angle * Math.PI / 180)
       const delay = (count >= 3 ? index * 0.62 : index * 0.32) + Math.random() * 0.34
-      const duration = 2.8 + Math.random() * 1.5
+      // 每束流星独立随机为稍慢、中速或更快三档，保留当前中速为主节奏。
+      const speedProfile = [
+        [4.25, 1.15],
+        [2.8, 1.5],
+        [1.85, 0.8]
+      ][Math.floor(Math.random() * 3)]
+      const duration = speedProfile[0] + Math.random() * speedProfile[1]
       maximumDuration = Math.max(maximumDuration, duration + delay)
       const right = count >= 3
         ? 3 + (index / (count - 1)) * 78 + (Math.random() - 0.5) * 7
@@ -718,15 +725,20 @@ async function openSettings(_section = 'settings', updateHistory = true) {
   settingsTab.value = 'settings'; showSettings.value = true; activeNav.value = 'settings'; settingsError.value = ''; proxyMessage.value = ''; pixivError.value = ''; weiboError.value = ''
   if (updateHistory) updateRoute('/settings')
   try {
-    const [projectResponse, biliResponse, pixivResponse, weiboResponse] = await Promise.all([fetch('/api/project/settings'), fetch('/api/bilibili/account'), fetch('/api/pixiv/account'), fetch('/api/weibo/account')])
+    const [projectResponse, settingsResponse, biliResponse, pixivResponse, weiboResponse] = await Promise.all([fetch('/api/project/settings'), fetch('/api/settings'), fetch('/api/bilibili/account'), fetch('/api/pixiv/account'), fetch('/api/weibo/account')])
     if (projectResponse.ok) {
       const project = await projectResponse.json()
       proxyStatus.value = project
+      proxyForm.value = { proxyUrl: project.proxyUrl || '' }
       previewQuality.value = {
         desktop: normalizePreviewQualityLevel(project.previewDesktopLevel, 2),
         mobile: normalizePreviewQualityLevel(project.previewMobileLevel, 3)
       }
       previewQualitySaved.value = { ...previewQuality.value }
+    }
+    if (settingsResponse.ok) {
+      const settings = await settingsResponse.json()
+      settingsForm.value = { username: settings.username || '', newPassword: '' }
     }
     if (biliResponse.ok) biliAccount.value = await biliResponse.json()
     if (pixivResponse.ok) pixivAccount.value = await pixivResponse.json()
@@ -779,7 +791,7 @@ async function saveProxy() {
   try {
     const response = await fetch('/api/project/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(proxyForm.value) })
     if (!response.ok) throw new Error(await responseError(response, '代理保存失败'))
-    proxyStatus.value = await response.json(); proxyForm.value.proxyUrl = ''; proxyMessage.value = proxyStatus.value.proxyEnabled ? '代理已保存' : '已关闭项目代理'
+    proxyStatus.value = await response.json(); proxyForm.value.proxyUrl = proxyStatus.value.proxyUrl || ''; proxyMessage.value = proxyStatus.value.proxyEnabled ? '代理已保存' : '已关闭项目代理'
   } catch (error) { settingsError.value = error.message } finally { settingsBusy.value = false }
 }
 async function testProxy() {
@@ -793,12 +805,13 @@ async function testProxy() {
 }
 async function saveSettings() {
   settingsError.value = ''
+  const confirmed = await askConfirm({ title: '保存账号设置', message: '将更新 Lumic 的登录账号和密码，确定继续吗？', confirmText: '保存' })
+  if (!confirmed) return
   settingsBusy.value = true
   try {
     const response = await fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(settingsForm.value) })
-    if (!response.ok) throw new Error(response.status === 401 ? '当前密码不正确' : '保存失败，请检查输入')
-    showSettings.value = false
-    settingsForm.value = { username: '', currentPassword: '', newPassword: '' }
+    if (!response.ok) throw new Error('保存失败，请检查输入')
+    settingsForm.value = { username: settingsForm.value.username, newPassword: '' }
   } catch (error) { settingsError.value = error.message }
   finally { settingsBusy.value = false }
 }
@@ -858,6 +871,14 @@ async function savePixivAccount() {
 }
 async function openPixiv() {
   showAdd.value = false; pixivError.value = ''
+  // 已有本地连接状态时先展示窗口，账号资料的网络补全不应阻塞页面进入。
+  if (pixivAccount.value.configured) {
+    selectedPlatform.value = null; showPixiv.value = true
+    fetch('/api/pixiv/account').then(async response => {
+      if (response.ok) pixivAccount.value = await response.json()
+    }).catch(() => {})
+    return
+  }
   try {
     const response = await fetch('/api/pixiv/account')
     if (response.ok) pixivAccount.value = await response.json()
@@ -2695,7 +2716,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
 </section>
       <div class="section-heading">
 <div class="filters">
-<button v-if="!authorProfile" :class="{ selected: activeSource === 'all' }" @click="activeSource = 'all'"><span>✦</span>全部</button>
+<button v-if="!authorProfile" class="timeline-all-button" :class="{ selected: activeSource === 'all' }" @click="activeSource = 'all'"><span>✦</span>全部</button>
 <button class="timeline-sort-button" type="button" :title="timelineSort === 'newest' ? '最新' : '最旧'" :aria-label="timelineSort === 'newest' ? '当前按最新排序，点击切换为最旧' : '当前按最旧排序，点击切换为最新'" @click="timelineSort = timelineSort === 'newest' ? 'oldest' : 'newest'">
   <span class="timeline-sort-symbol" :style="{ '--nav-mask': `url(${timelineSort === 'newest' ? newestSortIcon : oldestSortIcon})` }" aria-hidden="true"></span>
 </button>
@@ -2942,7 +2963,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
     <main v-if="showSettings" class="settings-page">
       <div class="settings-page-inner">
         <section class="settings-pane platform-credentials-pane">
-          <div class="pane-heading"><div><h3>平台凭证</h3><p>各平台凭证仅由服务端验证，并加密保存在本地数据目录。</p></div><span>4 个平台</span></div>
+          <div class="pane-heading"><div><h3>平台凭证</h3></div><span>4 个平台</span></div>
           <div class="platform-auth-grid">
             <article v-for="platform in platformCards" :key="platform.key" :class="['platform-auth-card', platform.key]" tabindex="0" @contextmenu.prevent="openCredentialSettings(platform.key)" @click="handleCredentialCardClick(platform.key)" @keydown.enter="openCredentialSettings(platform.key)">
               <header class="platform-auth-head"><img :class="['source-icon', { 'twitter-night-icon': platform.key === 'twitter' && isDark }]" :src="platform.image" :alt="`${platform.label}图标`"><div><h3>{{ platform.label }}</h3><span>{{ platform.key === 'twitter' ? '账号连接与作者采集' : '平台账号凭证' }}</span></div><em :class="['connection-dot', { online: platform.configured }]">{{ platform.key === 'twitter' ? '未开放' : platform.configured ? '已连接' : '未连接' }}</em></header>
@@ -2952,26 +2973,25 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
         </section>
         <div class="settings-window-grid">
           <section class="settings-pane compact-settings-pane">
-            <div class="pane-heading"><div><h3>网络代理</h3><p>配置后端访问外部平台时使用的代理。</p></div><span>{{ proxyStatus.proxyEnabled ? '已启用' : '未启用' }}</span></div>
-            <div v-if="proxyStatus.proxyEnabled" class="setting-status">当前代理：{{ proxyStatus.proxyUrl }}</div>
-            <form class="settings-form" @submit.prevent="saveProxy" autocomplete="off"><label>代理地址</label><input v-model="proxyForm.proxyUrl" placeholder="socks5://host.docker.internal:7890"><div class="form-actions"><button type="button" class="secondary-button" @click="testProxy" :disabled="settingsBusy">测试</button><button class="login-button" :disabled="settingsBusy">保存代理</button><button type="button" class="danger-link" @click="proxyForm.proxyUrl = ''; saveProxy()">关闭</button></div></form>
+            <div class="pane-heading"><div><h3>网络代理</h3></div><span>{{ proxyStatus.proxyEnabled ? '已启用' : '未启用' }}</span></div>
+            <form class="settings-form" @submit.prevent="saveProxy" autocomplete="off"><label>代理地址</label><input v-model="proxyForm.proxyUrl" placeholder="socks5://host.docker.internal:7890"><div class="form-actions"><button type="button" class="secondary-button" @click="testProxy" :disabled="settingsBusy">测试</button><button class="login-button" :disabled="settingsBusy">保存</button></div></form>
             <p v-if="proxyMessage" class="success-message">{{ proxyMessage }}</p>
           </section>
           <section class="settings-pane quality-settings-pane">
-            <div class="pane-heading"><div><h3>画质调节</h3><p>分别设置桌面端和移动端的动态预览画质。</p></div><span>0–5 档</span></div>
+            <div class="pane-heading"><div><h3>画质调节</h3></div><span>0–5 档</span></div>
             <div class="quality-slider-list">
               <label><span><b>桌面端</b><em>{{ previewQuality.desktop }} · {{ previewQualityLabel(previewQuality.desktop) }}</em></span><input v-model.number="previewQuality.desktop" type="range" min="0" max="5" step="1" :disabled="settingsBusy" @change="savePreviewQuality"><i><small v-for="level in 6" :key="level">{{ level - 1 }}</small></i></label>
               <label><span><b>移动端</b><em>{{ previewQuality.mobile }} · {{ previewQualityLabel(previewQuality.mobile) }}</em></span><input v-model.number="previewQuality.mobile" type="range" min="0" max="5" step="1" :disabled="settingsBusy" @change="savePreviewQuality"><i><small v-for="level in 6" :key="level">{{ level - 1 }}</small></i></label>
             </div>
           </section>
           <section class="settings-pane backup-settings-pane">
-            <div class="pane-heading"><div><h3>备份配置</h3><p>导出或恢复登录、平台、代理和订阅配置。</p></div><span>JSON</span></div>
+            <div class="pane-heading"><div><h3>备份配置</h3></div></div>
             <div class="backup-action-grid">
-              <article><h4>下载备份</h4><p>备份中包含账号凭证，请妥善保管。</p><button class="secondary-button" type="button" :disabled="settingsBusy" @click="downloadConfigurationBackup">下载备份</button></article>
-              <article><h4>恢复配置</h4><p>覆盖当前配置，不改变动态及图片文件。</p><label class="restore-file-button" :class="{ disabled: settingsBusy }"><input type="file" accept="application/json,.json" :disabled="settingsBusy" @change="restoreConfiguration"><span>选择备份文件</span></label></article>
+              <button class="secondary-button" type="button" :disabled="settingsBusy" @click="downloadConfigurationBackup">备份</button>
+              <label class="restore-file-button" :class="{ disabled: settingsBusy }"><input type="file" accept="application/json,.json" :disabled="settingsBusy" @change="restoreConfiguration"><span>还原</span></label>
             </div>
           </section>
-          <section class="settings-pane compact-settings-pane"><div class="pane-heading"><div><h3>账号管理</h3><p>更新 Lumic 本地管理账号和密码。</p></div><span>密码至少 8 位</span></div><form class="settings-form" @submit.prevent="saveSettings" autocomplete="off"><label>新账号</label><input v-model="settingsForm.username" required minlength="3" autocomplete="off"><label>当前密码</label><input v-model="settingsForm.currentPassword" type="password" required autocomplete="current-password"><label>新密码</label><input v-model="settingsForm.newPassword" type="password" required minlength="8" autocomplete="new-password"><button class="login-button" type="submit" :disabled="settingsBusy">{{ settingsBusy ? '保存中…' : '保存账号' }}</button></form></section>
+          <section class="settings-pane compact-settings-pane"><div class="pane-heading"><div><h3>账号管理</h3></div></div><form class="settings-form account-settings-form" @submit.prevent="saveSettings" autocomplete="off"><label>账号</label><input v-model="settingsForm.username" required minlength="3" autocomplete="username"><label>密码</label><input v-model="settingsForm.newPassword" type="password" required minlength="8" autocomplete="new-password"><button class="login-button" type="submit" :disabled="settingsBusy">{{ settingsBusy ? '保存中…' : '保存' }}</button></form></section>
         </div>
         <p v-if="settingsError" class="login-error settings-page-error">{{ settingsError }}</p>
       </div>

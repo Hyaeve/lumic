@@ -1245,19 +1245,11 @@ func settingsHandler(auth *AuthConfig) http.HandlerFunc {
 			return
 		}
 		var input struct {
-			Username        string `json:"username"`
-			CurrentPassword string `json:"currentPassword"`
-			NewPassword     string `json:"newPassword"`
+			Username    string `json:"username"`
+			NewPassword string `json:"newPassword"`
 		}
 		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&input) != nil || len(input.Username) < 3 || len(input.NewPassword) < 8 {
 			http.Error(w, "invalid settings", http.StatusBadRequest)
-			return
-		}
-		auth.RLock()
-		matches := passwordMatches(input.CurrentPassword, auth.PasswordHash)
-		auth.RUnlock()
-		if !matches {
-			http.Error(w, "invalid current password", http.StatusUnauthorized)
 			return
 		}
 		auth.Lock()
@@ -3780,6 +3772,9 @@ func imageDownloadDelay(source Source, sequence int) time.Duration {
 	if source == SourceBilibili {
 		delay = 1500*time.Millisecond + time.Duration(sequence%4)*150*time.Millisecond
 	}
+	if source == SourcePixiv {
+		delay = 520*time.Millisecond + time.Duration(sequence%3)*110*time.Millisecond
+	}
 	if raw := strings.TrimSpace(os.Getenv("LUMIC_IMAGE_DOWNLOAD_DELAY_MS")); raw != "" {
 		if milliseconds, err := strconv.Atoi(raw); err == nil && milliseconds >= 0 && milliseconds <= 5000 {
 			delay = time.Duration(milliseconds) * time.Millisecond
@@ -5228,13 +5223,19 @@ func (b *BilibiliStore) pixivHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		current.Avatar = normalizeRemoteImage(current.Avatar)
 		if current.Cookie != "" && current.UserID != "" && (current.UserName == "" || current.Avatar == "") {
-			if enriched, err := pixivBrowserCredentialsRequest(current, proxyURL, "https://www.pixiv.net"); err == nil {
-				current = enriched
+			// 账号资料补全可能受 Pixiv 网络或代理影响，不能阻塞打开订阅页面。
+			go func(credentials PixivCredentials, proxy string) {
+				enriched, err := pixivBrowserCredentialsRequest(credentials, proxy, "https://www.pixiv.net")
+				if err != nil {
+					return
+				}
 				b.Lock()
-				b.config.Pixiv = current
+				if b.config.Pixiv.Cookie == credentials.Cookie && b.config.Pixiv.UserID == credentials.UserID {
+					b.config.Pixiv = enriched
+				}
 				b.Unlock()
 				_ = b.save()
-			}
+			}(current, proxyURL)
 		}
 		writeJSON(w, map[string]any{"configured": current.Cookie != "" && current.UserID != "", "userId": current.UserID, "userName": current.UserName, "avatar": current.Avatar})
 		return
@@ -5351,12 +5352,18 @@ func parsePixivTime(value string) time.Time {
 
 func pixivOriginalURLs(client *http.Client, credentials PixivCredentials, id string, detail map[string]any) []string {
 	urls := make([]string, 0)
+	pageCount := 0
 	if body, ok := detail["body"].(map[string]any); ok {
 		if urlsMap, ok := body["urls"].(map[string]any); ok {
 			if original := normalizeRemoteImage(jsonValueString(urlsMap["original"])); original != "" {
 				urls = append(urls, original)
 			}
 		}
+		pageCount, _ = strconv.Atoi(jsonValueString(body["pageCount"]))
+	}
+	// 单图作品的详情已经包含原图地址，无需再请求 pages 接口。
+	if pageCount == 1 && len(urls) > 0 {
+		return urls
 	}
 	var pages map[string]any
 	endpoint := "https://www.pixiv.net/ajax/illust/" + url.PathEscape(id) + "/pages?lang=zh"
@@ -5374,6 +5381,10 @@ func pixivOriginalURLs(client *http.Client, credentials PixivCredentials, id str
 		}
 	}
 	return mergeUniqueStrings(urls)
+}
+
+func pixivRequestDelay(sequence int) time.Duration {
+	return 360*time.Millisecond + time.Duration(sequence%3)*90*time.Millisecond
 }
 
 func pixivPayloadFailed(payload map[string]any) bool {
@@ -5439,9 +5450,12 @@ func (b *BilibiliStore) fetchPixivPosts(feed SourceConfig, full bool) ([]Post, e
 		ids = ids[:24]
 	}
 	posts := make([]Post, 0, len(ids))
-	for _, id := range ids {
+	for index, id := range ids {
 		var detail map[string]any
 		if err := pixivRequestJSON(client, "https://www.pixiv.net/ajax/illust/"+url.PathEscape(id)+"?lang=zh", credentials, &detail); err != nil {
+			if index+1 < len(ids) {
+				time.Sleep(pixivRequestDelay(index))
+			}
 			continue
 		}
 		body, ok := detail["body"].(map[string]any)
@@ -5458,10 +5472,16 @@ func (b *BilibiliStore) fetchPixivPosts(feed SourceConfig, full bool) ([]Post, e
 		caption := combineRemoteText(jsonValueString(body["title"]), jsonValueString(body["description"]))
 		media := pixivOriginalURLs(client, credentials, id, detail)
 		if len(media) == 0 {
+			if index+1 < len(ids) {
+				time.Sleep(pixivRequestDelay(index))
+			}
 			continue
 		}
 		published := parsePixivTime(jsonValueString(body["createDate"]))
 		posts = append(posts, Post{ID: "pixiv-illust-" + id, Source: SourcePixiv, FeedIDs: []string{feed.ID}, Author: author, Avatar: avatar, Caption: caption, Tags: append([]string(nil), feed.Tags...), Media: media, OriginalURL: "https://www.pixiv.net/artworks/" + id, Published: published})
+		if index+1 < len(ids) {
+			time.Sleep(pixivRequestDelay(index))
+		}
 	}
 	return posts, nil
 }
