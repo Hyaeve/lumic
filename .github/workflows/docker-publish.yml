@@ -26,10 +26,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Keep multi-architecture builds without downloading setup-qemu-action from GitHub's codeload service.
-      - name: Set up ARM64 emulation
-        run: docker run --privileged --rm tonistiigi/binfmt:latest --install arm64
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -59,7 +55,7 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
