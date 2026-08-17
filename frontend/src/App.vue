@@ -174,6 +174,7 @@ const mobileLightboxAnimating = ref(false)
 const mobileLightboxExitY = ref(0)
 const mobileLightboxExitDragging = ref(false)
 const mobileLightboxExitAnimating = ref(false)
+const mobileLightboxEntering = ref(false)
 const mobileLightboxDotsVisible = ref(false)
 const lightboxZoomAnimating = ref(false)
 const mobileLightboxMenu = ref({ open: false, x: 0, y: 0 })
@@ -1260,6 +1261,7 @@ function openLightbox(post, index) {
   }
   lightbox.value = { open: true, media: post.media || [], index, author: post.author, scale: 1, rotation: 0, fit: true, x: 0, y: 0, dragging: false, motion: 'enter' }
   lightboxClosing.value = false
+  mobileLightboxEntering.value = phonePortrait.value
   lightboxTransitioning.value = false
   lightboxScalePercent.value = 100
   lightboxAtOriginalSize.value = false
@@ -1267,6 +1269,7 @@ function openLightbox(post, index) {
   showLightboxDock(true)
   prepareLightboxSource()
   scheduleLightboxScaleUpdate()
+  if (phonePortrait.value) scheduleTransient(() => { mobileLightboxEntering.value = false }, 420)
 }
 function resetLightboxState() {
   resetMobileLightboxTrack()
@@ -1283,6 +1286,7 @@ function resetLightboxState() {
   mobileLightboxExitY.value = 0
   mobileLightboxExitDragging.value = false
   mobileLightboxExitAnimating.value = false
+  mobileLightboxEntering.value = false
   mobileLightboxDotsVisible.value = false
   lightboxZoomAnimating.value = false
   lightboxLoadSequence++
@@ -3165,7 +3169,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
       <button v-if="selectionAction === 'unfavorite'" type="button" class="selection-delete-button selection-unfavorite-button" :disabled="!selectedPostCount || postActionBusy === 'batch-unfavorite'" title="取消收藏所选动态" aria-label="取消收藏所选动态" @click="unfavoriteSelectedPosts"><svg viewBox="0 0 24 24"><path d="M12 20.5S4.5 16.2 4.5 10.2A4.2 4.2 0 0 1 12 7.6a4.2 4.2 0 0 1 7.5 2.6c0 6-7.5 10.3-7.5 10.3Z"/><path d="M8.5 11.5h7"/></svg><b>取消收藏</b></button>
       <button v-else type="button" class="selection-delete-button" :disabled="!selectedPostCount || postActionBusy === 'batch-delete'" title="删除所选动态" aria-label="删除所选动态" @click="deleteSelectedPosts"><span class="action-icon-mask" :style="{ '--action-icon-mask': `url(${deleteIcon})` }" aria-hidden="true"></span><b>删除</b></button>
     </div>
-    <div v-if="lightbox.open" :class="['lightbox-layer', { closing: lightboxClosing, 'mobile-exit-dragging': mobileLightboxExitDragging }]" :style="phonePortrait ? mobileLightboxLayerStyle : undefined" role="dialog" aria-modal="true" :aria-label="`${lightbox.author} 的动态媒体`" @click.self="closeLightbox" @wheel.prevent="zoomLightbox">
+    <div v-if="lightbox.open" :class="['lightbox-layer', { closing: lightboxClosing, 'mobile-entering': mobileLightboxEntering, 'mobile-exit-dragging': mobileLightboxExitDragging }]" :style="phonePortrait ? mobileLightboxLayerStyle : undefined" role="dialog" aria-modal="true" :aria-label="`${lightbox.author} 的动态媒体`" @click.self="closeLightbox" @wheel.prevent="zoomLightbox">
       <button v-if="!phonePortrait" class="lightbox-close" type="button" title="关闭大图" aria-label="关闭大图" @click="closeLightbox">×</button>
       <button v-if="!phonePortrait" class="lightbox-edge-nav previous" type="button" :disabled="lightbox.media.length < 2" title="上一张" aria-label="上一张" @click.stop="moveLightbox(-1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 5-7 7 7 7"/></svg></button>
       <button v-if="!phonePortrait" class="lightbox-edge-nav next" type="button" :disabled="lightbox.media.length < 2" title="下一张" aria-label="下一张" @click.stop="moveLightbox(1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"/></svg></button>

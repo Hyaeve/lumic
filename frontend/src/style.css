@@ -113,9 +113,10 @@ a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color
 @keyframes mobile-lightbox-layer-out { to { opacity: 0; backdrop-filter: blur(3px) saturate(.82); } }
 @keyframes mobile-lightbox-content-in { from { opacity: 0; transform: translate3d(0, 15px, 0) scale(.935); filter: blur(1.2px); } 62% { opacity: 1; transform: translate3d(0, -1px, 0) scale(1.006); filter: blur(0); } to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); filter: blur(0); } }
 @keyframes mobile-lightbox-content-out { from { opacity: 1; transform: translate3d(0, 0, 0) scale(1); filter: blur(0); } to { opacity: 0; transform: translate3d(0, 12px, 0) scale(.94); filter: blur(.8px); } }
-.phone-ui .lightbox-layer { padding: 0; background: #090c1292; backdrop-filter: blur(14px) saturate(.92); -webkit-backdrop-filter: blur(14px) saturate(.92); animation: mobile-lightbox-layer-in .38s cubic-bezier(.16,.88,.22,1) both; }
+.phone-ui .lightbox-layer { padding: 0; background: #090c1292; backdrop-filter: blur(14px) saturate(.92); -webkit-backdrop-filter: blur(14px) saturate(.92); }
+.phone-ui .lightbox-layer.mobile-entering { animation: mobile-lightbox-layer-in .38s cubic-bezier(.16,.88,.22,1) both; }
 .phone-ui .lightbox-layer.closing { animation: mobile-lightbox-layer-out .36s cubic-bezier(.28,.76,.26,1) both; }
-.phone-ui .lightbox-layer:not(.mobile-exit-dragging) .mobile-lightbox-carousel { animation: mobile-lightbox-content-in .4s cubic-bezier(.16,.88,.22,1) both; }
+.phone-ui .lightbox-layer.mobile-entering:not(.mobile-exit-dragging) .mobile-lightbox-carousel { animation: mobile-lightbox-content-in .4s cubic-bezier(.16,.88,.22,1) both; }
 .phone-ui .lightbox-layer.closing .lightbox-image-stage { animation: none; }
 .phone-ui .lightbox-layer.closing:not(.mobile-exit-dragging) .mobile-lightbox-carousel { animation: mobile-lightbox-content-out .34s cubic-bezier(.28,.76,.26,1) both; }
 .phone-ui .lightbox-layer.mobile-exit-dragging .mobile-lightbox-carousel { animation: none; }
@@ -1534,6 +1535,10 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button)::after { position: absolute; inset: 1px; z-index: 1; display: block; background: linear-gradient(145deg, #ffffff58 0%, #ffffff1c 35%, transparent 62%); border-radius: calc(10px - 1px); content: ''; pointer-events: none; }
   .phone-ui.dark :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button)::after { background: linear-gradient(145deg, #e7edff2e 0%, #d7e0ff0c 36%, transparent 63%); }
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button) > * { position: relative; z-index: 2; }
+  .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button) { --mobile-glass-background: linear-gradient(142deg, rgba(255, 255, 255, .68) 0%, rgba(255, 248, 229, .43) 48%, rgba(232, 213, 181, .40) 100%); border-color: rgba(255, 255, 255, .78); box-shadow: 0 12px 30px #54452a22, inset 0 1px 0 #ffffffb8, inset 0 -1px 0 #8b70451c; }
+  .phone-ui.dark :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button) { --mobile-glass-background: linear-gradient(142deg, rgba(67, 76, 100, .62) 0%, rgba(18, 24, 38, .58) 50%, rgba(11, 15, 25, .66) 100%); border-color: rgba(225, 233, 255, .34); box-shadow: 0 12px 32px #0009, 0 0 16px #7189cd30, inset 0 1px 0 #eef3ff45, inset 0 -1px 0 #02050a45; }
+  .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle).open { --mobile-glass-background: linear-gradient(142deg, rgba(255, 244, 202, .72), rgba(227, 208, 151, .50) 58%, rgba(183, 155, 87, .40)); border-color: rgba(255, 248, 216, .80); box-shadow: 0 0 16px #d5bd7145, 0 12px 30px #54452a2b, inset 0 1px 0 #fff7d8a8; }
+  .phone-ui.dark :is(.mobile-menu-toggle, .mobile-timeline-toggle).open { --mobile-glass-background: linear-gradient(142deg, rgba(112, 124, 167, .63), rgba(52, 61, 91, .58) 55%, rgba(29, 35, 59, .64)); border-color: rgba(218, 228, 255, .56); box-shadow: 0 0 18px #758de34a, 0 12px 32px #0007, inset 0 1px 0 #edf1ff4a; }
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle) { transition: opacity .3s ease, transform .34s cubic-bezier(.16,.88,.22,1), color .22s ease, background .22s ease, border-color .22s ease, box-shadow .28s ease; }
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-control-hidden { opacity: 0; pointer-events: none; transform: translateY(-12px) scale(.86); filter: blur(.4px); }
   .phone-ui .scroll-top-button.mobile-control-hidden { transform: translateY(16px) scale(.86); }
