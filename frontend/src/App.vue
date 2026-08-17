@@ -1473,7 +1473,7 @@ function scheduleLightboxSingleTapClose() {
   lightboxSingleTapTimer = window.setTimeout(() => {
     lightboxSingleTapTimer = 0
     closeLightbox()
-  }, 225)
+  }, 390)
 }
 function scheduleLightboxLongPress(event) {
   clearLightboxLongPress()
