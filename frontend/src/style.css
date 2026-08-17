@@ -63,9 +63,9 @@ a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color
 .mobile-lightbox-track { position: absolute; inset: 0; display: flex; width: 100%; min-width: 0; max-width: 100%; height: 100%; align-items: stretch; will-change: transform; }
 .mobile-lightbox-slide { position: relative; display: grid; width: 100%; height: 100%; min-width: 100%; flex: 0 0 100%; place-items: center; overflow: hidden; }
 .mobile-lightbox-slide img { max-width: 96vw; max-height: 96dvh; }
-.mobile-lightbox-media-frame { position: relative; display: grid; place-items: center; max-width: 96vw; max-height: 96dvh; transform-origin: center; }
-.mobile-lightbox-media-frame .mobile-lightbox-preview { position: relative; z-index: 0; display: block; max-width: 96vw; max-height: 96dvh; }
-.mobile-lightbox-media-frame .mobile-lightbox-original { position: absolute; inset: 0; z-index: 1!important; display: block; width: 100%; height: 100%; max-width: 100%; max-height: 100%; object-fit: contain; opacity: 0; pointer-events: none; }
+.mobile-lightbox-media-frame { position: relative; width: 96vw; height: 96dvh; transform-origin: center; }
+.mobile-lightbox-media-frame :is(.mobile-lightbox-preview, .mobile-lightbox-original) { position: absolute; inset: 0; z-index: 0; display: block; width: auto; height: auto; max-width: 100%; max-height: 100%; margin: auto; }
+.mobile-lightbox-media-frame .mobile-lightbox-original { z-index: 1!important; opacity: 0; pointer-events: none; }
 .mobile-lightbox-original.original-loaded { opacity: 1; }
 .mobile-lightbox-slide:not(.current) img { opacity: .92; transform: scale(.985); }
 .mobile-lightbox-dots { position: absolute; bottom: max(22px, env(safe-area-inset-bottom)); left: 50%; z-index: 3; display: flex; align-items: center; gap: 5px; padding: 6px 8px; background: #10121770; border-radius: 999px; opacity: 0; pointer-events: none; transform: translate(-50%, 7px); backdrop-filter: blur(8px); transition: opacity .2s ease, transform .22s ease; }
@@ -91,8 +91,9 @@ a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color
 .lightbox-dock button:disabled { opacity: .3; cursor: default; }
 .lightbox-dock svg { width: 29px; height: 29px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .lightbox-tool-mask { display: block; width: 30px; height: 30px; background: currentColor; -webkit-mask: var(--lightbox-tool-mask) center / contain no-repeat; mask: var(--lightbox-tool-mask) center / contain no-repeat; }
-.lightbox-original-size-symbol, .lightbox-rotate-symbol { width: 30px; height: 30px; opacity: .96; }
-.lightbox-download-symbol { width: 25px; height: 25px; opacity: .94; }
+.lightbox-original-size-symbol { width: 30px; height: 30px; opacity: .96; }
+.lightbox-rotate-symbol { width: 27px; height: 27px; opacity: .9; transform: scale(.94); }
+.lightbox-download-symbol { width: 24px; height: 24px; opacity: .9; transform: scale(.94); }
 .lightbox-fit-symbol { width: 30px!important; height: 30px!important; }
 .lightbox-dock > i { width: 1px; height: 32px; margin: 0 7px; background: #ffffff24; }
 .lightbox-counter, .lightbox-scale { min-width: 47px; color: #edf2ee; font-size: 14px; text-align: center; white-space: nowrap; }
@@ -117,9 +118,9 @@ a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color
 @keyframes mobile-lightbox-content-in { from { opacity: .96; } to { opacity: 1; } }
 @keyframes mobile-lightbox-content-out { from { opacity: 1; transform: translate3d(0, 0, 0) scale(1); filter: blur(0); } 38% { opacity: .92; transform: translate3d(0, 5px, 0) scale(.97); filter: blur(0); } to { opacity: 0; transform: translate3d(0, 22px, 0) scale(.89); filter: blur(1.4px); } }
 .phone-ui .lightbox-layer { padding: 0; background: #090c1292; backdrop-filter: blur(14px) saturate(.92); -webkit-backdrop-filter: blur(14px) saturate(.92); }
-.phone-ui .lightbox-layer.mobile-entering { animation: mobile-lightbox-layer-in .44s cubic-bezier(.16,.88,.22,1) both; }
+.phone-ui .lightbox-layer.mobile-entering { animation: none; }
 .phone-ui .lightbox-layer.closing { animation: mobile-lightbox-layer-out .3s cubic-bezier(.28,.76,.26,1) both; }
-.phone-ui .lightbox-layer.mobile-entering:not(.mobile-exit-dragging) .mobile-lightbox-carousel { animation: mobile-lightbox-content-in .48s cubic-bezier(.16,.88,.22,1) both; }
+.phone-ui .lightbox-layer.mobile-entering:not(.mobile-exit-dragging) .mobile-lightbox-carousel { animation: none; }
 .phone-ui .lightbox-layer.closing .lightbox-image-stage { animation: none; }
 .phone-ui .lightbox-layer.closing:not(.mobile-exit-dragging) .mobile-lightbox-carousel { animation: mobile-lightbox-content-out .3s cubic-bezier(.28,.76,.26,1) both; }
 .phone-ui .lightbox-layer.mobile-exit-dragging .mobile-lightbox-carousel { animation: none; }
@@ -1553,10 +1554,10 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
   .phone-ui.dark .mobile-frosted-control::after { background: linear-gradient(145deg, #f2f5ff36 0%, #dfe7ff12 43%, transparent 68%)!important; border-color: #edf2ff24; }
   .phone-ui .mobile-frosted-control.open { box-shadow: 0 10px 28px #3e2e1d2b, inset 0 1px 0 #ffffffad, inset 0 -1px 0 #8060391f!important; }
   .phone-ui.dark .mobile-frosted-control.open { box-shadow: 0 12px 30px #0008, inset 0 1px 0 #eff3ff4d, inset 0 -1px 0 #0102074d!important; }
-  .phone-ui .mobile-timeline-toggle.mobile-frosted-control { --mobile-frosted-surface: linear-gradient(135deg, rgba(255, 255, 255, .28) 0%, rgba(255, 240, 218, .18) 54%, rgba(229, 198, 164, .22) 100%); backdrop-filter: blur(72px) saturate(190%) brightness(1.12); -webkit-backdrop-filter: blur(72px) saturate(190%) brightness(1.12); }
-  .phone-ui .mobile-timeline-toggle.mobile-frosted-control::before { background: linear-gradient(135deg, rgba(255, 255, 255, .32) 0%, rgba(255, 240, 218, .22) 54%, rgba(229, 198, 164, .26) 100%)!important; backdrop-filter: blur(72px) saturate(190%) brightness(1.12); -webkit-backdrop-filter: blur(72px) saturate(190%) brightness(1.12); }
-  .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control { --mobile-frosted-surface: linear-gradient(135deg, rgba(68, 77, 102, .38) 0%, rgba(28, 34, 49, .32) 52%, rgba(14, 18, 29, .38) 100%); backdrop-filter: blur(72px) saturate(180%) brightness(1.16); -webkit-backdrop-filter: blur(72px) saturate(180%) brightness(1.16); }
-  .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control::before { background: linear-gradient(135deg, rgba(68, 77, 102, .42) 0%, rgba(28, 34, 49, .36) 52%, rgba(14, 18, 29, .42) 100%)!important; backdrop-filter: blur(72px) saturate(180%) brightness(1.16); -webkit-backdrop-filter: blur(72px) saturate(180%) brightness(1.16); }
+  .phone-ui .mobile-timeline-toggle.mobile-frosted-control { --mobile-frosted-surface: linear-gradient(135deg, rgba(255, 255, 255, .18) 0%, rgba(255, 240, 218, .12) 54%, rgba(229, 198, 164, .16) 100%); background: rgba(255, 247, 232, .12)!important; backdrop-filter: blur(90px) saturate(195%) brightness(1.14); -webkit-backdrop-filter: blur(90px) saturate(195%) brightness(1.14); }
+  .phone-ui .mobile-timeline-toggle.mobile-frosted-control::before { background: linear-gradient(135deg, rgba(255, 255, 255, .22) 0%, rgba(255, 240, 218, .14) 54%, rgba(229, 198, 164, .18) 100%)!important; backdrop-filter: blur(90px) saturate(195%) brightness(1.14); -webkit-backdrop-filter: blur(90px) saturate(195%) brightness(1.14); }
+  .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control { --mobile-frosted-surface: linear-gradient(135deg, rgba(68, 77, 102, .24) 0%, rgba(28, 34, 49, .20) 52%, rgba(14, 18, 29, .24) 100%); background: rgba(13, 17, 28, .24)!important; backdrop-filter: blur(90px) saturate(185%) brightness(1.18); -webkit-backdrop-filter: blur(90px) saturate(185%) brightness(1.18); }
+  .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control::before { background: linear-gradient(135deg, rgba(68, 77, 102, .28) 0%, rgba(28, 34, 49, .24) 52%, rgba(14, 18, 29, .28) 100%)!important; backdrop-filter: blur(90px) saturate(185%) brightness(1.18); -webkit-backdrop-filter: blur(90px) saturate(185%) brightness(1.18); }
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle) { transition: opacity .3s ease, transform .34s cubic-bezier(.16,.88,.22,1), color .22s ease, background .22s ease, border-color .22s ease, box-shadow .28s ease; }
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-control-hidden { opacity: 0; pointer-events: none; transform: translateY(-12px) scale(.86); filter: blur(.4px); }
   .phone-ui .scroll-top-button.mobile-control-hidden { transform: translateY(16px) scale(.86); }
