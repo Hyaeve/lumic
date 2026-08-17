@@ -75,14 +75,14 @@ a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color
 .lightbox-close { position: fixed; top: 16px; right: 18px; z-index: 4; display: grid; place-items: center; width: 42px; height: 42px; padding: 0; color: #fff; background: transparent; border: 0; border-radius: 0; }
 .lightbox-close-symbol { width: 24px; height: 24px; filter: drop-shadow(0 2px 8px #000b); transition: transform .18s ease, opacity .18s ease; }
 .lightbox-close:hover .lightbox-close-symbol { opacity: .88; transform: scale(1.08); }
-.lightbox-edge-nav { position: fixed; top: 0; bottom: 0; z-index: 6; display: grid; width: clamp(54px, 7vw, 108px); place-items: center; padding: 0; color: #f6f8fb; background: transparent; border: 0; opacity: .3; transition: opacity .18s ease, background .18s ease; }
+.lightbox-edge-nav { position: fixed; top: 0; bottom: 0; z-index: 6; display: grid; width: clamp(54px, 7vw, 108px); place-items: center; padding: 0; color: #f6f8fb; background: transparent; border: 0; opacity: 0; transition: opacity .18s ease, background .18s ease; }
 .lightbox-edge-nav.previous { left: 0; }
 .lightbox-edge-nav.next { right: 0; }
 .lightbox-edge-nav::before { display: none; }
 .lightbox-edge-nav svg { position: relative; z-index: 1; width: 36px; height: 36px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.6; filter: drop-shadow(0 2px 8px #000b); transform: scale(.92); transition: transform .18s ease, opacity .18s ease; }
 .lightbox-edge-nav:hover:not(:disabled), .lightbox-edge-nav:focus-visible { opacity: 1; background: transparent; }
 .lightbox-edge-nav:hover:not(:disabled) svg, .lightbox-edge-nav:focus-visible svg { transform: scale(1); }
-.lightbox-edge-nav:disabled { color: #aab0ba; cursor: default; pointer-events: auto; opacity: .38; }
+.lightbox-edge-nav:disabled { color: #aab0ba; cursor: default; pointer-events: auto; opacity: 0; }
 .lightbox-edge-nav:disabled:hover { opacity: .48; }
 .lightbox-dock-zone { position: fixed; bottom: 0; left: 50%; z-index: 5; display: flex; width: min(680px, 96vw); height: 104px; align-items: flex-end; justify-content: center; padding-bottom: 20px; transform: translateX(-50%); }
 .lightbox-dock { position: relative; display: flex; align-items: center; gap: 5px; min-height: 58px; padding: 7px 12px; color: #eef3ef; background: #17191de8; border: 1px solid #ffffff14; border-radius: 29px; box-shadow: 0 18px 48px #0008; opacity: 1; transform: translateY(0); backdrop-filter: blur(18px); transition: opacity .2s ease, transform .24s cubic-bezier(.2,.8,.2,1); }
