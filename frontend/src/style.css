@@ -115,9 +115,9 @@ a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color
 .dark .settings-page { background: #17211f; }
 .settings-page-inner { width: 100%; margin: 0; }
 .settings-page-inner > .settings-pane + .settings-pane, .settings-page-inner > .settings-pane + .settings-window-grid, .settings-window-grid + .settings-pane { margin-top: 18px; }
-.settings-window-grid { display: grid; grid-auto-rows: 226px; grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: stretch; gap: 14px; margin-top: 18px; }
+.settings-window-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: start; gap: 14px; margin-top: 18px; }
 .settings-window-grid .settings-pane { min-width: 0; min-height: 0; }
-.settings-window-grid > .settings-pane { height: 100%; }
+.settings-window-grid > .settings-pane { height: auto; }
 .settings-page .settings-window-grid .settings-pane { min-height: 0; padding: 16px 18px 17px; }
 .settings-page .settings-window-grid .pane-heading { margin-bottom: 11px; padding-bottom: 10px; }
 .settings-page .settings-window-grid .compact-settings-pane .settings-form { margin-top: 0; }
@@ -238,7 +238,7 @@ html:has(.credential-modal-backdrop), body:has(.credential-modal-backdrop) { ove
 .filters .timeline-all-button > span { font-size: 22px; line-height: 1; }
 .filters .timeline-sort-button { display: grid; place-items: center; width: 44px; height: 44px; flex: none; padding: 0; color: #718279; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
 .filters :is(.timeline-sort-button, .timeline-view-button):hover { color: #426e56; border-color: #b8cbbd; background: #e8f2e9; }
-.filters :is(.timeline-sort-symbol, .timeline-view-symbol) { width: 22px; height: 22px; }
+.filters .timeline-sort-symbol, .filters .timeline-view-symbol:not(.list-view-symbol) { width: 30px; height: 30px; }
 .filters .timeline-view-symbol.list-view-symbol { width: 22px; height: 22px; }
 .dark .filters :is(.timeline-sort-button, .timeline-view-button):hover { color: #b9d8c4; background: #30433b; }
 .content:has(.timeline-hero) { padding-top: 28px; }
@@ -1399,7 +1399,7 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
   .phone-ui .filters { flex: none; max-width: 100%; overflow: visible; padding-bottom: 0; }
   .phone-ui .filters button { min-height: 44px; padding: 0 12px; }
   .phone-ui .filters :is(.timeline-sort-button, .timeline-view-button) { width: 44px; height: 44px; padding: 0; }
-  .phone-ui .filters :is(.timeline-sort-symbol, .timeline-view-symbol) { width: 22px; height: 22px; }
+  .phone-ui .filters .timeline-sort-symbol, .phone-ui .filters .timeline-view-symbol:not(.list-view-symbol) { width: 30px; height: 30px; }
   .phone-ui .filters .timeline-view-symbol.list-view-symbol { width: 22px; height: 22px; }
   .phone-ui .timeline-tools { justify-self: end; width: clamp(96px, 31vw, 132px); min-width: 0; margin-left: 0; }
   .phone-ui .timeline-search { width: 100%; height: 44px; }

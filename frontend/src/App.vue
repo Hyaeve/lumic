@@ -2978,7 +2978,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
             <p v-if="proxyMessage" class="success-message">{{ proxyMessage }}</p>
           </section>
           <section class="settings-pane quality-settings-pane">
-            <div class="pane-heading"><div><h3>画质调节</h3></div><span>0–5 档</span></div>
+            <div class="pane-heading"><div><h3>画质调节</h3></div></div>
             <div class="quality-slider-list">
               <label><span><b>桌面端</b><em>{{ previewQuality.desktop }} · {{ previewQualityLabel(previewQuality.desktop) }}</em></span><input v-model.number="previewQuality.desktop" type="range" min="0" max="5" step="1" :disabled="settingsBusy" @change="savePreviewQuality"><i><small v-for="level in 6" :key="level">{{ level - 1 }}</small></i></label>
               <label><span><b>移动端</b><em>{{ previewQuality.mobile }} · {{ previewQualityLabel(previewQuality.mobile) }}</em></span><input v-model.number="previewQuality.mobile" type="range" min="0" max="5" step="1" :disabled="settingsBusy" @change="savePreviewQuality"><i><small v-for="level in 6" :key="level">{{ level - 1 }}</small></i></label>
