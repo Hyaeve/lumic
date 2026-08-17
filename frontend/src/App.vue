@@ -21,7 +21,6 @@ import listViewIcon from '../icon/列表.png'
 import masonryViewIcon from '../icon/瀑布流.png'
 import originalSizeIcon from '../icon/原始尺寸.png'
 import rotateLightboxIcon from '../icon/旋转.png'
-import downloadLightboxIcon from '../icon/下载.png'
 import visitPostIcon from '../icon/访问.png'
 import scrollTopIcon from '../icon/回到顶部.png'
 import deleteIcon from '../icon/删除.png'
@@ -43,6 +42,8 @@ const previewQualitySaved = ref({ desktop: 2, mobile: 3 })
 const selectedFeed = ref(null)
 const cronEditing = ref(false)
 const showFeedSettings = ref(false)
+const showStartDatePicker = ref(false)
+const startDatePickerView = ref({ year: new Date().getFullYear(), month: new Date().getMonth() })
 const selectedPlatform = ref(null)
 const credentialPlatform = ref(null)
 const sourceActionBusy = ref('')
@@ -204,9 +205,67 @@ const sourceMeta = {
   twitter: { label: '推特', icon: 'tw', image: twitterIcon, lineImage: twitterLineIcon, nightImage: twitterLineIcon, color: 'twitter' }
 }
 const validSources = new Set(Object.keys(sourceMeta))
+const startDatePickerWeekdays = ['日', '一', '二', '三', '四', '五', '六']
+const startDatePickerLabel = computed(() => `${startDatePickerView.value.year}年${startDatePickerView.value.month + 1}月`)
+const startDatePickerDays = computed(() => {
+  const { year, month } = startDatePickerView.value
+  const firstDay = new Date(year, month, 1).getDay()
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(year, month, index - firstDay + 1)
+    const dayYear = date.getFullYear()
+    const dayMonth = date.getMonth()
+    const day = date.getDate()
+    return {
+      key: `${dayYear}-${String(dayMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
+      day,
+      current: dayMonth === month
+    }
+  })
+})
 function sourceIconFor(source) {
   const meta = sourceMeta[source]
   return isDark.value && meta?.nightImage ? meta.nightImage : meta?.image
+}
+function startDateParts(value) {
+  const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!match) return null
+  const year = Number(match[1])
+  const month = Number(match[2]) - 1
+  const day = Number(match[3])
+  const date = new Date(year, month, day)
+  return date.getFullYear() === year && date.getMonth() === month && date.getDate() === day ? { year, month, day } : null
+}
+function startDateTodayKey() {
+  const today = new Date()
+  return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+}
+function formatStartDate(value) {
+  const parts = startDateParts(value)
+  return parts ? `${parts.year}年${String(parts.month + 1).padStart(2, '0')}月${String(parts.day).padStart(2, '0')}日` : ''
+}
+function openStartDatePicker() {
+  const parts = startDateParts(selectedFeed.value?.startDate) || startDateParts(startDateTodayKey())
+  startDatePickerView.value = { year: parts.year, month: parts.month }
+  showStartDatePicker.value = true
+}
+function changeStartDatePickerMonth(offset) {
+  const current = startDatePickerView.value
+  const next = new Date(current.year, current.month + offset, 1)
+  startDatePickerView.value = { year: next.getFullYear(), month: next.getMonth() }
+}
+function selectStartDate(date) {
+  if (!selectedFeed.value) return
+  selectedFeed.value.startDate = date.key
+  showStartDatePicker.value = false
+}
+function clearStartDate() {
+  if (selectedFeed.value) selectedFeed.value.startDate = ''
+  showStartDatePicker.value = false
+}
+function selectStartDateToday() {
+  const parts = startDateParts(startDateTodayKey())
+  startDatePickerView.value = { year: parts.year, month: parts.month }
+  selectStartDate({ key: startDateTodayKey() })
 }
 const statsPosts = computed(() => {
   const allPosts = Array.isArray(posts.value) ? posts.value : []
@@ -979,6 +1038,7 @@ function managePlatformCredentials(platformKey) {
 }
 function openFeedSettings(feed) {
   cronEditing.value = false
+  showStartDatePicker.value = false
   const contentTypes = feed.source === 'bilibili' && (!feed.contentTypes || feed.contentTypes.length === 0) ? ['DRAW', 'ARTICLE'] : [...(feed.contentTypes || [])]
   selectedFeed.value = { ...feed, startDate: feed.startDate || '', includeVideos: Boolean(feed.includeVideos), contentTypes, tags: [...(feed.tags || [])], tagInput: formatTagInput(feed.tags), includeKeywordInput: formatKeywordInput(feed.includeKeywords), excludeKeywordInput: formatKeywordInput(feed.excludeKeywords) }
   showFeedSettings.value = true
@@ -1005,6 +1065,7 @@ async function saveFeedSettings() {
       if (index >= 0) feeds.value[index] = { ...selectedFeed.value }
     }
     showFeedSettings.value = false
+    showStartDatePicker.value = false
     cronEditing.value = false
   } catch (error) { settingsError.value = error.message } finally { settingsBusy.value = false }
 }
@@ -2770,6 +2831,8 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
     </div>
     <div v-if="lightbox.open" :class="['lightbox-layer', { closing: lightboxClosing, 'mobile-exit-dragging': mobileLightboxExitDragging }]" :style="phonePortrait ? mobileLightboxLayerStyle : undefined" role="dialog" aria-modal="true" :aria-label="`${lightbox.author} 的动态媒体`" @click.self="closeLightbox" @wheel.prevent="zoomLightbox">
       <button v-if="!phonePortrait" class="lightbox-close" type="button" title="关闭大图" aria-label="关闭大图" @click="closeLightbox">×</button>
+      <button v-if="!phonePortrait" class="lightbox-edge-nav previous" type="button" :disabled="lightbox.media.length < 2" title="上一张" aria-label="上一张" @click.stop="moveLightbox(-1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 5-7 7 7 7"/></svg></button>
+      <button v-if="!phonePortrait" class="lightbox-edge-nav next" type="button" :disabled="lightbox.media.length < 2" title="下一张" aria-label="下一张" @click.stop="moveLightbox(1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"/></svg></button>
       <div :class="['lightbox-image-stage', `motion-${lightbox.motion}`, { 'mobile-original-size': phonePortrait && lightboxAtOriginalSize }]" @click.self="closeLightbox" @contextmenu.prevent>
         <figure v-if="phonePortrait" class="mobile-lightbox-carousel" @click.stop @pointerdown.prevent="startLightboxGesture" @pointermove.prevent="moveLightboxGesture" @pointerup.prevent="stopLightboxGesture" @pointercancel.prevent="stopLightboxGesture">
           <div class="mobile-lightbox-track" :style="mobileLightboxTrackStyle">
@@ -2799,7 +2862,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
         </button>
         <i></i>
         <button type="button" title="顺时针旋转" aria-label="顺时针旋转" @click="rotateLightbox"><span class="lightbox-tool-mask lightbox-rotate-symbol" :style="{ '--lightbox-tool-mask': `url(${rotateLightboxIcon})` }" aria-hidden="true"></span></button>
-        <button type="button" title="下载原图" aria-label="下载原图" @click="downloadLightboxImage"><span class="lightbox-tool-mask lightbox-download-symbol" :style="{ '--lightbox-tool-mask': `url(${downloadLightboxIcon})` }" aria-hidden="true"></span></button>
+        <button type="button" title="下载原图" aria-label="下载原图" @click="downloadLightboxImage"><svg class="lightbox-download-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5v11M7.8 10.6 12 14.8l4.2-4.2M5.5 19.5v1h13v-1"/></svg></button>
       </div>
       </div>
       <div v-if="phonePortrait && mobileLightboxMenu.open" class="mobile-lightbox-menu" role="menu" aria-label="图片操作" @pointerdown.stop @click.stop>
@@ -2975,15 +3038,15 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
         </div>
       </div>
     </div>
-    <div v-if="showFeedSettings && selectedFeed" class="modal-backdrop feed-detail-backdrop" @click.self="showFeedSettings = false">
-      <div class="modal feed-settings-modal">
-        <button class="modal-close" @click="showFeedSettings = false">×</button>
+    <div v-if="showFeedSettings && selectedFeed" class="modal-backdrop feed-detail-backdrop" @click.self="showFeedSettings = false; showStartDatePicker = false">
+      <div class="modal feed-settings-modal" @click="showStartDatePicker = false">
+        <button class="modal-close" @click="showFeedSettings = false; showStartDatePicker = false">×</button>
         <p class="eyebrow">SOURCE DETAILS</p><h2>{{ selectedFeed.name }}</h2><p>{{ sourceMeta[selectedFeed.source]?.label }} · {{ selectedFeed.handle }}</p>
         <form class="settings-form feed-settings-form" @submit.prevent="saveFeedSettings">
           <div class="feed-field-row feed-primary-fields">
             <label><span>Cron</span><input v-model="selectedFeed.schedule" class="cron-input" :readonly="!cronEditing" :title="nextCronExecution(selectedFeed.schedule)" required placeholder="0 6 * * *" maxlength="80" @dblclick="cronEditing = true" @blur="cronEditing = false"></label>
             <label><span>作者标签</span><input v-model="selectedFeed.tagInput" placeholder="#绘画 #日常" maxlength="120"></label>
-            <label><span>订阅起始日期</span><input v-model="selectedFeed.startDate" class="source-start-date-input" type="date" title="留空表示不限制起始日期" autocomplete="off"></label>
+            <div class="feed-date-field"><span>订阅起始日期</span><button class="source-start-date-button" type="button" :class="{ empty: !selectedFeed.startDate }" :aria-expanded="showStartDatePicker" title="留空表示不限制起始日期" @click.stop="showStartDatePicker ? showStartDatePicker = false : openStartDatePicker()"><time>{{ formatStartDate(selectedFeed.startDate) || '选择日期' }}</time><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="5.5" width="15" height="14" rx="2"/><path d="M8 3.5v4M16 3.5v4M4.5 10h15"/></svg></button><div v-if="showStartDatePicker" class="start-date-picker" role="dialog" aria-label="选择订阅起始日期" @click.stop><header><button type="button" title="上个月" aria-label="上个月" @click="changeStartDatePickerMonth(-1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 5-7 7 7 7"/></svg></button><strong>{{ startDatePickerLabel }}</strong><button type="button" title="下个月" aria-label="下个月" @click="changeStartDatePickerMonth(1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"/></svg></button></header><div class="start-date-weekdays"><span v-for="day in startDatePickerWeekdays" :key="day">{{ day }}</span></div><div class="start-date-days"><button v-for="date in startDatePickerDays" :key="date.key" type="button" :class="{ outside: !date.current, selected: selectedFeed.startDate === date.key, today: startDateTodayKey() === date.key }" :aria-label="date.key" @click="selectStartDate(date)">{{ date.day }}</button></div><footer><button type="button" @click="clearStartDate">清除</button><button type="button" @click="selectStartDateToday">今天</button></footer></div></div>
           </div>
           <div class="feed-field-row">
             <label><span>包含关键词</span><input v-model="selectedFeed.includeKeywordInput" placeholder="插画 绘画" maxlength="240"></label>
