@@ -19,6 +19,7 @@ import newestSortIcon from '../icon/时间排序－正序.png'
 import oldestSortIcon from '../icon/时间排序－倒序.png'
 import listViewIcon from '../icon/列表.png'
 import masonryViewIcon from '../icon/瀑布流.png'
+import refreshIcon from '../icon/刷新.png'
 import originalSizeIcon from '../icon/原始尺寸.png'
 import rotateLightboxIcon from '../icon/旋转.png'
 import visitPostIcon from '../icon/访问.png'
@@ -133,7 +134,6 @@ const mobileDetailPageDragging = ref(false)
 const mobileDetailPageAnimating = ref(false)
 const showScrollTop = ref(false)
 const mobileControlsVisible = ref(true)
-const mobileAtTimelineTop = ref(true)
 const mobilePostReturnPath = ref('/')
 const pendingPostId = ref('')
 const feedListElement = ref(null)
@@ -144,7 +144,6 @@ let timelineFrame = 0
 let masonryAssignmentColumnCount = 0
 let postResizeObserver = null
 let sessionPollTimer = null
-let mobileClientPullRefreshState = null
 const observedPostElements = new Map()
 const masonryColumnAssignments = new Map()
 const transientTimers = new Set()
@@ -446,27 +445,6 @@ const authorProfile = computed(() => {
   return { ...selectedAuthor.value, avatar: selectedAuthor.value.feedId ? selectedAuthor.value.avatar : (latest?.avatar || selectedAuthor.value.avatar), count: authorPosts.length }
 })
 const isTimelinePage = computed(() => !showSettings.value && activeNav.value !== 'pulls' && !masonryDetailPost.value)
-const mobilePullRefreshEnabled = computed(() =>
-  phonePortrait.value &&
-  mobileAtAllTimeline.value &&
-  mobileAtTimelineTop.value &&
-  !timelineSearchFocused.value &&
-  !selectionMode.value &&
-  !phoneOverlayKey.value &&
-  !lightbox.value.open &&
-  !mobileLightboxMenu.value.open
-)
-// Android 的原生下拉刷新只能随页面场景切换，不能跟随每次 WebView 滚动开关。
-// 否则原生刷新容器会在首个滚动手势后重新接管触控，导致页面无法继续滚动。
-const mobileClientPullRefreshEnabled = computed(() =>
-  phonePortrait.value &&
-  mobileAtAllTimeline.value &&
-  !timelineSearchFocused.value &&
-  !selectionMode.value &&
-  !phoneOverlayKey.value &&
-  !lightbox.value.open &&
-  !mobileLightboxMenu.value.open
-)
 const platformCards = computed(() => [
   { key: 'bilibili', label: '哔哩哔哩', short: '哔', ...sourceMeta.bilibili, configured: biliAccount.value.configured, account: biliAccount.value.configured ? (biliAccount.value.userName || `UID ${biliAccount.value.userId}`) : '尚未连接', avatar: biliAccount.value.avatar, path: '/flow/bilibili', description: 'UP 主动态、专栏与账号收藏', feeds: feeds.value.filter(feed => feed.source === 'bilibili') },
   { key: 'weibo', label: '微博', short: '微', ...sourceMeta.weibo, configured: weiboAccount.value.configured, account: weiboAccount.value.configured ? (weiboAccount.value.userName || `UID ${weiboAccount.value.userId}`) : '尚未连接', avatar: weiboAccount.value.avatar, path: '/flow/weibo', description: '博主动态与图文媒体', feeds: feeds.value.filter(feed => feed.source === 'weibo') },
@@ -2337,7 +2315,6 @@ function updateMasonryMetrics() {
 }
 function updateTimelineWindow() {
   timelineFrame = 0
-  mobileAtTimelineTop.value = window.scrollY <= 1
   showScrollTop.value = isTimelinePage.value && window.scrollY > Math.min(360, Math.max(150, window.innerHeight * .32))
   if (!filteredPosts.value.length || showSettings.value || activeNav.value === 'pulls') return
   if (isMasonryView.value) {
@@ -2385,19 +2362,6 @@ function handleWindowScroll() {
 }
 function scrollTimelineToTop() {
   window.scrollTo({ top: 0, behavior: 'smooth' })
-}
-function updateMobilePullRefreshPolicy() {
-  if (typeof document === 'undefined') return
-  const enabled = mobilePullRefreshEnabled.value
-  const behavior = !phonePortrait.value ? '' : enabled ? 'auto' : 'none'
-  document.documentElement.style.overscrollBehaviorY = behavior
-  document.body.style.overscrollBehaviorY = behavior
-}
-function updateMobileClientPullRefreshPolicy() {
-  const enabled = mobileClientPullRefreshEnabled.value
-  if (mobileClientPullRefreshState === enabled) return
-  mobileClientPullRefreshState = enabled
-  window.Lumir?.setPullRefreshEnabled?.(enabled)
 }
 function resetTimelineWindow() {
   timelineStart.value = 0
@@ -2578,8 +2542,6 @@ watch(phoneOverlayKey, next => {
 watch(timelineView, value => localStorage.setItem('lumic-timeline-view', value))
 watch(effectiveTimelineView, resetTimelineWindow)
 watch(isDark, value => { if (value) startNightMeteorLoop(); else stopNightMeteorLoop() })
-watch(mobilePullRefreshEnabled, updateMobilePullRefreshPolicy, { immediate: true })
-watch(mobileClientPullRefreshEnabled, updateMobileClientPullRefreshPolicy, { immediate: true })
 watch(platformCards, cards => {
   if (!credentialPlatform.value) return
   credentialPlatform.value = cards.find(platform => platform.key === credentialPlatform.value.key) || null
@@ -2588,8 +2550,8 @@ watch(platformCards, cards => {
   if (!selectedPlatform.value) return
   selectedPlatform.value = cards.find(platform => platform.key === selectedPlatform.value.key) || null
 })
-onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; timelineView.value = localStorage.getItem('lumic-timeline-view') === 'masonry' ? 'masonry' : 'list'; loadRememberedLogin(); document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#080a0e' : '#fbf7ea'); phonePortraitQuery = window.matchMedia('(max-width: 760px)'); phonePortrait.value = isPhonePortraitScreen(); updateMobilePullRefreshPolicy(); phonePortraitQuery.addEventListener('change', updatePhonePortrait); window.addEventListener('orientationchange', updatePhonePortrait); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); if (phonePortrait.value && window.location.pathname === '/') openPhoneDefaultTimeline(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', handlePopState); window.addEventListener('scroll', handleWindowScroll, { passive: true }); window.addEventListener('resize', handleWindowResize); scheduleTimelineWindow(); if (phonePortrait.value) showMobileControls() })
-onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLoop(); if (sessionPollTimer) window.clearInterval(sessionPollTimer); if (mobileControlsTimer) window.clearTimeout(mobileControlsTimer); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); window.removeEventListener('orientationchange', updatePhonePortrait); postResizeObserver?.disconnect(); observedPostElements.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); clearMobileDetailAnimation(); resetMobileDetailPageSwipe(); lightboxHistoryActive = false; resetLightboxState(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', handlePopState); window.removeEventListener('scroll', handleWindowScroll); window.removeEventListener('resize', handleWindowResize); document.documentElement.style.overscrollBehaviorY = ''; document.body.style.overscrollBehaviorY = ''; if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
+onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; timelineView.value = localStorage.getItem('lumic-timeline-view') === 'masonry' ? 'masonry' : 'list'; loadRememberedLogin(); document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#080a0e' : '#fbf7ea'); phonePortraitQuery = window.matchMedia('(max-width: 760px)'); phonePortrait.value = isPhonePortraitScreen(); phonePortraitQuery.addEventListener('change', updatePhonePortrait); window.addEventListener('orientationchange', updatePhonePortrait); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); if (phonePortrait.value && window.location.pathname === '/') openPhoneDefaultTimeline(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', handlePopState); window.addEventListener('scroll', handleWindowScroll, { passive: true }); window.addEventListener('resize', handleWindowResize); scheduleTimelineWindow(); if (phonePortrait.value) showMobileControls() })
+onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLoop(); if (sessionPollTimer) window.clearInterval(sessionPollTimer); if (mobileControlsTimer) window.clearTimeout(mobileControlsTimer); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); window.removeEventListener('orientationchange', updatePhonePortrait); postResizeObserver?.disconnect(); observedPostElements.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); clearMobileDetailAnimation(); resetMobileDetailPageSwipe(); lightboxHistoryActive = false; resetLightboxState(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', handlePopState); window.removeEventListener('scroll', handleWindowScroll); window.removeEventListener('resize', handleWindowResize); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
 </script>
 
 <template>
@@ -2615,7 +2577,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
       </form>
     </div>
   </div>
-  <div v-else class="app-shell" :class="{ dark: isDark, 'lightbox-active': lightbox.open, 'phone-ui': phonePortrait, 'mobile-pull-refresh-enabled': mobilePullRefreshEnabled, 'timeline-search-focused': timelineSearchFocused, 'mobile-page-switching': mobilePageSwitching }" @click="showBrandMenu = false">
+  <div v-else class="app-shell" :class="{ dark: isDark, 'lightbox-active': lightbox.open, 'phone-ui': phonePortrait, 'timeline-search-focused': timelineSearchFocused, 'mobile-page-switching': mobilePageSwitching }" @click="showBrandMenu = false">
     <button v-if="phonePortrait && !lightbox.open && !masonryDetailPost" class="mobile-timeline-toggle" type="button" :class="{ open: mobileSourcesOpen, active: mobileAtAllTimeline, 'mobile-control-hidden': !mobileControlsVisible && !mobileSourcesOpen }" :aria-expanded="mobileSourcesOpen" :title="mobileSourcesOpen ? `收起${mobileTimelineTitle}栏目` : `展开${mobileTimelineTitle}栏目`" :aria-label="mobileSourcesOpen ? `收起${mobileTimelineTitle}栏目` : `展开${mobileTimelineTitle}栏目`" @pointerdown.stop @click.stop="showMobileControls(); toggleMobileTimelineShortcut()">
       <img v-if="mobileTimelineMeta" :class="['sidebar-source-icon', `sidebar-${activeSource}-icon`]" :src="mobileTimelineMeta.lineImage" alt="">
       <span v-else class="nav-line-symbol nav-mask-symbol" :style="{ '--nav-mask': `url(${timelineNavIcon})` }" aria-hidden="true"></span>
@@ -2720,8 +2682,11 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
 <button class="timeline-sort-button" type="button" :title="timelineSort === 'newest' ? '最新' : '最旧'" :aria-label="timelineSort === 'newest' ? '当前按最新排序，点击切换为最旧' : '当前按最旧排序，点击切换为最新'" @click="timelineSort = timelineSort === 'newest' ? 'oldest' : 'newest'">
   <span class="timeline-sort-symbol" :style="{ '--nav-mask': `url(${timelineSort === 'newest' ? newestSortIcon : oldestSortIcon})` }" aria-hidden="true"></span>
 </button>
-<button class="timeline-view-button" type="button" :title="isMasonryView ? '当前：瀑布流；点击切换为列表' : '当前：列表；点击切换为瀑布流'" :aria-label="isMasonryView ? '当前为瀑布流视图，点击切换为列表' : '当前为列表视图，点击切换为瀑布流'" @click="toggleTimelineView">
+<button class="timeline-view-button timeline-toolbar-button" type="button" :data-tooltip="isMasonryView ? '瀑布流' : '列表'" :aria-label="isMasonryView ? '当前为瀑布流视图，点击切换为列表' : '当前为列表视图，点击切换为瀑布流'" @click="toggleTimelineView">
   <span :class="['timeline-view-symbol', { 'list-view-symbol': !isMasonryView }]" :style="{ '--nav-mask': `url(${isMasonryView ? masonryViewIcon : listViewIcon})` }" aria-hidden="true"></span>
+</button>
+<button class="timeline-refresh-button timeline-toolbar-button" type="button" :disabled="syncing" data-tooltip="刷新动态" aria-label="刷新动态" @click="runFullSync">
+  <span class="timeline-refresh-symbol" :class="{ spin: syncing }" :style="{ '--nav-mask': `url(${refreshIcon})` }" aria-hidden="true"></span>
 </button>
 </div>
 <div class="timeline-tools">
