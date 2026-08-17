@@ -259,8 +259,8 @@ const mobileLightboxTrackStyle = computed(() => {
 })
 const mobileDetailPageStyle = computed(() => ({
   transform: `translate3d(${mobileDetailPageDragX.value}px, 0, 0)`,
-  opacity: String(Math.max(.7, 1 - Math.abs(mobileDetailPageDragX.value) / Math.max(1, window.innerWidth) * .3)),
-  transition: mobileDetailPageDragging.value ? 'none' : mobileDetailPageAnimating.value ? 'transform .29s cubic-bezier(.16, .86, .2, 1), opacity .25s ease' : 'none'
+  opacity: '1',
+  transition: mobileDetailPageDragging.value ? 'none' : mobileDetailPageAnimating.value ? 'transform .3s cubic-bezier(.16, .86, .2, 1)' : 'none'
 }))
 const mobileAuthorPreviewPosts = computed(() => {
   const post = masonryDetailPost.value
@@ -271,7 +271,7 @@ const mobileAuthorPreviewStyle = computed(() => {
   const width = typeof window === 'undefined' ? 390 : Math.max(1, window.innerWidth)
   const progress = Math.min(1, Math.abs(mobileDetailPageDragX.value) / width)
   return {
-    opacity: String(Math.min(1, .62 + progress * .38)),
+    opacity: '1',
     transform: `translate3d(${100 - progress * 100}%, 0, 0)`
   }
 })
@@ -1341,7 +1341,9 @@ function scheduleLightboxSingleTapClose() {
 }
 function scheduleLightboxLongPress(event) {
   clearLightboxLongPress()
-  if (!phonePortrait.value || event.pointerType !== 'touch' || event.target !== lightboxImageElement.value) return
+  const imageTarget = event.target instanceof HTMLImageElement ? event.target : null
+  const isCurrentImage = Boolean(imageTarget?.closest?.('.mobile-lightbox-slide.current'))
+  if (!phonePortrait.value || event.pointerType !== 'touch' || !isCurrentImage) return
   const pointerId = event.pointerId
   const x = event.clientX
   const y = event.clientY
@@ -2061,13 +2063,13 @@ function updateMobileDetailPageSwipe(event) {
   if (!mobileDetailPageTouch.axis && Math.max(Math.abs(dx), Math.abs(dy)) > 7) {
     mobileDetailPageTouch.axis = Math.abs(dx) > Math.abs(dy) * 1.12 ? 'horizontal' : 'vertical'
   }
-  if (mobileDetailPageTouch.axis !== 'horizontal' || dx >= 0) return
+  if (mobileDetailPageTouch.axis !== 'horizontal' || dx <= 0) return
   event.preventDefault()
   mobileDetailPageTouch.prevX = mobileDetailPageTouch.lastX
   mobileDetailPageTouch.prevTime = mobileDetailPageTouch.lastTime
   mobileDetailPageTouch.lastX = touch.clientX
   mobileDetailPageTouch.lastTime = event.timeStamp
-  mobileDetailPageDragX.value = Math.max(-window.innerWidth, dx)
+  mobileDetailPageDragX.value = -Math.min(window.innerWidth, dx)
 }
 function finishMobileDetailPageSwipe(event) {
   if (!mobileDetailPageTouch) return
@@ -2079,7 +2081,7 @@ function finishMobileDetailPageSwipe(event) {
   mobileDetailPageTouch = null
   mobileDetailPageDragging.value = false
   mobileDetailPageAnimating.value = true
-  if (horizontal && (dx < -Math.min(78, window.innerWidth * .2) || velocityX < -.48)) {
+  if (horizontal && (dx > Math.min(78, window.innerWidth * .2) || velocityX > .48)) {
     const post = masonryDetailPost.value
     mobileDetailPageDragX.value = -window.innerWidth
     mobileDetailPageTimer = window.setTimeout(() => {
