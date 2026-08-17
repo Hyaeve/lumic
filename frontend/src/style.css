@@ -108,7 +108,7 @@ a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color
 @keyframes lightbox-image-enter-next { from { opacity: 0; transform: translateX(44px) scale(.97); } }
 @keyframes lightbox-image-enter-previous { from { opacity: 0; transform: translateX(-44px) scale(.97); } }
 @keyframes mobile-lightbox-menu-in { from { opacity: 0; transform: translate(-50%, 18px) scale(.98); } }
-@keyframes mobile-page-switch { from { opacity: .2; transform: translateY(8px) scale(.992); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes mobile-page-switch { from { opacity: .32; transform: translateX(18px); } to { opacity: 1; transform: translateX(0); } }
 @media (prefers-reduced-motion: reduce) {
   .lightbox-layer, .lightbox-image-stage { animation: none!important; }
 }
@@ -1384,7 +1384,7 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
     transform: translateY(-4px);
   }
   .phone-ui .content:not(.pulls-page):not(.mobile-post-detail-page) {
-    padding-top: calc(max(12px, env(safe-area-inset-top)) + 29px);
+    padding-top: calc(max(12px, env(safe-area-inset-top)) + 20px);
   }
   .phone-ui .timeline-hero .eyebrow { margin-bottom: 7px; font-size: 9px; }
   .phone-ui .timeline-hero h1 { font-size: 23px; line-height: 1.3; }
@@ -1421,13 +1421,13 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
     margin: 16px 0 12px;
   }
   .phone-ui .filters { flex: none; max-width: 100%; overflow: visible; padding-bottom: 0; }
-  .phone-ui .filters button { min-height: 40px; padding: 0 10px; }
-  .phone-ui .filters :is(.timeline-sort-button, .timeline-view-button, .timeline-refresh-button) { width: 40px; height: 40px; padding: 0; }
-  .phone-ui .filters .timeline-sort-symbol, .phone-ui .filters .timeline-view-symbol:not(.list-view-symbol) { width: 27px; height: 27px; }
-  .phone-ui .filters .timeline-view-symbol.list-view-symbol { width: 20px; height: 20px; }
-  .phone-ui .filters .timeline-refresh-symbol { width: 22px; height: 22px; }
+  .phone-ui .filters button { min-height: 38px; padding: 0 9px; }
+  .phone-ui .filters :is(.timeline-sort-button, .timeline-view-button, .timeline-refresh-button) { width: 38px; height: 38px; padding: 0; }
+  .phone-ui .filters .timeline-sort-symbol, .phone-ui .filters .timeline-view-symbol:not(.list-view-symbol) { width: 26px; height: 26px; }
+  .phone-ui .filters .timeline-view-symbol.list-view-symbol { width: 19px; height: 19px; }
+  .phone-ui .filters .timeline-refresh-symbol { width: 21px; height: 21px; }
   .phone-ui .timeline-tools { justify-self: end; width: clamp(96px, 31vw, 132px); min-width: 0; margin-left: 0; }
-  .phone-ui .timeline-search { width: 100%; height: 40px; padding: 0 11px; }
+  .phone-ui .timeline-search { width: 100%; height: 38px; padding: 0 10px; }
   .phone-ui .timeline-search input { font-size: 12px; }
   .phone-ui.timeline-search-focused .sidebar,
   .phone-ui.timeline-search-focused .mobile-menu-scrim { display: none!important; }

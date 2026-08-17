@@ -2186,7 +2186,9 @@ function finishMobileDetailPageSwipe(event) {
     mobileDetailPageTimer = window.setTimeout(() => {
       mobileDetailPageTimer = 0
       if (post) {
+        mobilePageSwitching.value = true
         openAuthor(post)
+        scheduleTransient(() => { mobilePageSwitching.value = false }, 360)
       }
       resetMobileDetailPageSwipe()
     }, 295)
