@@ -22,6 +22,7 @@ import masonryViewIcon from '../icon/瀑布流.png'
 import refreshIcon from '../icon/刷新.png'
 import originalSizeIcon from '../icon/原始尺寸.png'
 import rotateLightboxIcon from '../icon/旋转.png'
+import downloadLightboxIcon from '../icon/下载.png'
 import visitPostIcon from '../icon/访问.png'
 import scrollTopIcon from '../icon/回到顶部.png'
 import deleteIcon from '../icon/删除.png'
@@ -3205,7 +3206,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
         </button>
         <i></i>
         <button type="button" title="顺时针旋转" aria-label="顺时针旋转" @click="rotateLightbox"><span class="lightbox-tool-mask lightbox-rotate-symbol" :style="{ '--lightbox-tool-mask': `url(${rotateLightboxIcon})` }" aria-hidden="true"></span></button>
-        <button type="button" title="下载原图" aria-label="下载原图" @click="downloadLightboxImage"><svg class="lightbox-download-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5v11M7.8 10.6 12 14.8l4.2-4.2M5.5 19.5v1h13v-1"/></svg></button>
+        <button type="button" title="下载原图" aria-label="下载原图" @click="downloadLightboxImage"><span class="lightbox-tool-mask lightbox-download-symbol" :style="{ '--lightbox-tool-mask': `url(${downloadLightboxIcon})` }" aria-hidden="true"></span></button>
       </div>
       </div>
       <div v-if="phonePortrait && mobileLightboxMenu.open" class="mobile-lightbox-menu" role="menu" aria-label="图片操作" @pointerdown.stop @click.stop>

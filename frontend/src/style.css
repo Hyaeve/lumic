@@ -93,7 +93,7 @@ a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color
 .lightbox-tool-mask { display: block; width: 23px; height: 23px; background: currentColor; -webkit-mask: var(--lightbox-tool-mask) center / contain no-repeat; mask: var(--lightbox-tool-mask) center / contain no-repeat; }
 .lightbox-original-size-symbol { width: 22px; height: 22px; }
 .lightbox-rotate-symbol { width: 20px; height: 20px; opacity: .9; }
-.lightbox-dock .lightbox-download-icon { width: 18px; height: 18px; stroke-width: 1.45; opacity: .92; }
+.lightbox-download-symbol { width: 22px; height: 22px; opacity: .92; }
 .lightbox-fit-symbol { width: 23px!important; height: 23px!important; }
 .lightbox-dock > i { width: 1px; height: 32px; margin: 0 7px; background: #ffffff24; }
 .lightbox-counter, .lightbox-scale { min-width: 47px; color: #edf2ee; font-size: 14px; text-align: center; white-space: nowrap; }
