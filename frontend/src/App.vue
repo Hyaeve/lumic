@@ -2899,7 +2899,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
     </div>
   </div>
   <div v-else class="app-shell" :class="{ dark: isDark, 'lightbox-active': lightbox.open, 'phone-ui': phonePortrait, 'timeline-search-focused': timelineSearchFocused, 'mobile-page-switching': mobilePageSwitching }" @click="showBrandMenu = false">
-    <button v-if="phonePortrait && !lightbox.open && !masonryDetailPost" class="mobile-timeline-toggle" type="button" :class="{ open: mobileSourcesOpen, active: mobileAtAllTimeline, 'icon-switching': mobileTimelineIconSwitching, 'mobile-control-hidden': !mobileControlsVisible && !mobileSourcesOpen }" :aria-expanded="mobileSourcesOpen" :title="mobileSourcesOpen ? `收起${mobileTimelineTitle}栏目` : `展开${mobileTimelineTitle}栏目`" :aria-label="mobileSourcesOpen ? `收起${mobileTimelineTitle}栏目` : `展开${mobileTimelineTitle}栏目`" @pointerdown.stop @click.stop="showMobileControls(); toggleMobileTimelineShortcut()">
+    <button v-if="phonePortrait && !lightbox.open && !masonryDetailPost" class="mobile-timeline-toggle mobile-frosted-control" type="button" :class="{ open: mobileSourcesOpen, active: mobileAtAllTimeline, 'icon-switching': mobileTimelineIconSwitching, 'mobile-control-hidden': !mobileControlsVisible && !mobileSourcesOpen }" :aria-expanded="mobileSourcesOpen" :title="mobileSourcesOpen ? `收起${mobileTimelineTitle}栏目` : `展开${mobileTimelineTitle}栏目`" :aria-label="mobileSourcesOpen ? `收起${mobileTimelineTitle}栏目` : `展开${mobileTimelineTitle}栏目`" @pointerdown.stop @click.stop="showMobileControls(); toggleMobileTimelineShortcut()">
       <img v-if="mobileTimelineMeta" :class="['sidebar-source-icon', `sidebar-${activeSource}-icon`]" :src="mobileTimelineMeta.lineImage" alt="">
       <span v-else class="nav-line-symbol nav-mask-symbol" :style="{ '--nav-mask': `url(${timelineNavIcon})` }" aria-hidden="true"></span>
     </button>
@@ -2907,7 +2907,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
       <button type="button" :class="{ active: mobileAtAllTimeline }" title="查看全部动态" aria-label="查看全部动态" @click.stop="navigateToMobileAll"><span class="nav-line-symbol nav-mask-symbol" :style="{ '--nav-mask': `url(${timelineNavIcon})` }" aria-hidden="true"></span></button>
       <button v-for="(meta, key) in sourceMeta" :key="`mobile-source-${key}`" type="button" :class="{ active: activeNav === 'source' && activeSource === key }" :title="`查看${meta.label}动态`" :aria-label="`查看${meta.label}动态`" @click.stop="navigateToMobileSource(key)"><img :class="['sidebar-source-icon', `sidebar-${key}-icon`]" :src="meta.lineImage" alt=""></button>
     </nav>
-    <button v-if="phonePortrait && !lightbox.open && !masonryDetailPost" class="mobile-menu-toggle" type="button" :class="{ open: mobileMenuOpen, 'mobile-control-hidden': !mobileControlsVisible && !mobileMenuOpen }" :aria-expanded="mobileMenuOpen" :title="mobileMenuOpen ? '关闭导航' : '打开导航'" :aria-label="mobileMenuOpen ? '关闭导航' : '打开导航'" @pointerdown.stop @click.stop="showMobileControls(); mobileSourcesOpen = false; mobileMenuOpen = !mobileMenuOpen">
+    <button v-if="phonePortrait && !lightbox.open && !masonryDetailPost" class="mobile-menu-toggle mobile-frosted-control" type="button" :class="{ open: mobileMenuOpen, 'mobile-control-hidden': !mobileControlsVisible && !mobileMenuOpen }" :aria-expanded="mobileMenuOpen" :title="mobileMenuOpen ? '关闭导航' : '打开导航'" :aria-label="mobileMenuOpen ? '关闭导航' : '打开导航'" @pointerdown.stop @click.stop="showMobileControls(); mobileSourcesOpen = false; mobileMenuOpen = !mobileMenuOpen">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path class="menu-line menu-line-top" d="M5 7h14"/><path class="menu-line menu-line-middle" d="M5 12h14"/><path class="menu-line menu-line-bottom" d="M5 17h14"/></svg>
     </button>
     <button v-if="mobileMenuOpen || mobileSourcesOpen" class="mobile-menu-scrim" type="button" aria-label="关闭导航" @click="mobileMenuOpen = false; mobileSourcesOpen = false"></button>
@@ -3209,7 +3209,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
         <button type="button" role="menuitem" @click="saveMobileLightboxImage"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7.5 10.5 12 15l4.5-4.5M5 19v2h14v-2"/></svg><span>保存图片</span></button>
       </div>
     </div>
-    <button v-if="isTimelinePage && showScrollTop && !selectionMode && !lightbox.open" class="scroll-top-button" :class="{ 'mobile-control-hidden': phonePortrait && !mobileControlsVisible }" type="button" title="回到顶部" aria-label="回到顶部" @click="scrollTimelineToTop"><span :style="{ '--scroll-top-mask': `url(${scrollTopIcon})` }" aria-hidden="true"></span></button>
+    <button v-if="isTimelinePage && showScrollTop && !selectionMode && !lightbox.open" class="scroll-top-button mobile-frosted-control" :class="{ 'mobile-control-hidden': phonePortrait && !mobileControlsVisible }" type="button" title="回到顶部" aria-label="回到顶部" @click="scrollTimelineToTop"><span :style="{ '--scroll-top-mask': `url(${scrollTopIcon})` }" aria-hidden="true"></span></button>
     <button v-if="!showSettings && activeNav === 'pulls'" class="add-fab" @click="showAdd = true">＋ <span>添加订阅</span>
 </button>
     <div v-if="showAdd" class="modal-backdrop" @click.self="showAdd = false">
