@@ -1717,9 +1717,9 @@ function moveLightboxGesture(event) {
       lightboxGesture.edgeOverscroll = edgeOverscroll
       lightbox.value.x = dampBeyond(rawX, bounds.x)
       lightbox.value.y = dampBeyond(rawY, bounds.y)
-      if (edgeOverscroll && lightbox.value.media.length > 1) {
+      if (Math.abs(edgeOverscroll) > 28 && lightbox.value.media.length > 1) {
         mobileLightboxDragging.value = true
-        mobileLightboxDragX.value = edgeOverscroll * .42
+        mobileLightboxDragX.value = edgeOverscroll * .32
         showMobileLightboxDots(1800)
       } else {
         mobileLightboxDragging.value = false
@@ -1800,12 +1800,12 @@ function stopLightboxGesture(event) {
   const wasCancelled = event.type === 'pointercancel'
   const canSwipe = phonePortrait.value ? gesture?.startDefaultView : gesture?.startFit && gesture?.startScale <= 1.02 && Math.abs(gesture?.imageX || 0) < 3 && Math.abs(gesture?.imageY || 0) < 3
   const swipeDistance = Math.min(52, window.innerWidth * .13)
-  const edgeSwipeDistance = Math.min(52, window.innerWidth * .13)
+  const edgeSwipeDistance = Math.min(128, window.innerWidth * .3)
   const isDefaultSwipe = !wasCancelled && !lightboxGestureHadPinch && wasSinglePan && !gesture.longPressed && canSwipe && duration < 850 && (Math.abs(dx) > swipeDistance || Math.abs(velocityX) > .42) && Math.abs(dx) > Math.abs(dy) * 1.12
-  const isZoomEdgeSwipe = phonePortrait.value && !wasCancelled && !lightboxGestureHadPinch && wasSinglePan && !gesture.longPressed && !gesture?.startDefaultView && gesture?.axis === 'horizontal' && (Math.abs(gesture?.edgeOverscroll || 0) > edgeSwipeDistance || (Math.abs(gesture?.edgeOverscroll || 0) > 10 && Math.abs(velocityX) > .52))
+  const isZoomEdgeSwipe = phonePortrait.value && !wasCancelled && !lightboxGestureHadPinch && wasSinglePan && !gesture.longPressed && !gesture?.startDefaultView && gesture?.axis === 'horizontal' && (Math.abs(gesture?.edgeOverscroll || 0) > edgeSwipeDistance || (Math.abs(gesture?.edgeOverscroll || 0) > 38 && Math.abs(velocityX) > .8))
   const isSwipe = isDefaultSwipe || isZoomEdgeSwipe
   const verticalExitThresholdMet = gesture?.startDefaultView
-    ? (Math.abs(dy) > Math.min(72, window.innerHeight * .1) || Math.abs(velocityY) > .56)
+    ? (Math.abs(dy) > Math.min(94, window.innerHeight * .13) || (Math.abs(dy) > 34 && Math.abs(velocityY) > .68))
     : false
   const isVerticalExit = phonePortrait.value && !wasCancelled && !lightboxGestureHadPinch && wasSinglePan && !gesture.longPressed && gesture?.startDefaultView && duration < 780 && verticalExitThresholdMet && Math.abs(dy) > Math.abs(dx) * 1.08
   const isTap = !wasCancelled && !lightboxGestureHadPinch && wasSinglePan && !gesture.longPressed && duration < 280 && Math.hypot(dx, dy) < 10
@@ -2380,7 +2380,7 @@ function updateMobileDetailPageSwipe(event) {
   if (!touch || !mobileDetailPageTouch) return
   const dx = touch.clientX - mobileDetailPageTouch.x
   const dy = touch.clientY - mobileDetailPageTouch.y
-  if (!mobileDetailPageTouch.axis && Math.max(Math.abs(dx), Math.abs(dy)) > 7) {
+  if (!mobileDetailPageTouch.axis && Math.max(Math.abs(dx), Math.abs(dy)) > 9) {
     mobileDetailPageTouch.axis = Math.abs(dx) > Math.abs(dy) * 1.12 ? 'horizontal' : 'vertical'
   }
   if (mobileDetailPageTouch.axis !== 'horizontal') return
@@ -2404,8 +2404,10 @@ function finishMobileDetailPageSwipe(event) {
   mobileDetailPageTouch = null
   mobileDetailPageDragging.value = false
   mobileDetailPageAnimating.value = true
-  const threshold = Math.min(86, window.innerWidth * .22)
-  if (!cancelled && horizontal && (dx < -threshold || velocityX < -.48)) {
+  const threshold = Math.min(112, window.innerWidth * .28)
+  const fastLeft = dx < -36 && velocityX < -.78
+  const fastRight = dx > 36 && velocityX > .78
+  if (!cancelled && horizontal && (dx < -threshold || fastLeft)) {
     const post = masonryDetailPost.value
     mobileDetailPageDragX.value = -window.innerWidth
     mobileDetailPageTimer = window.setTimeout(() => {
@@ -2417,7 +2419,7 @@ function finishMobileDetailPageSwipe(event) {
     }, 320)
     return
   }
-  if (!cancelled && horizontal && (dx > threshold || velocityX > .48)) {
+  if (!cancelled && horizontal && (dx > threshold || fastRight)) {
     mobileDetailPageDragX.value = window.innerWidth
     mobileDetailPageTimer = window.setTimeout(() => {
       mobileDetailPageTimer = 0
@@ -2451,7 +2453,7 @@ function updateMobileAuthorPageSwipe(event) {
   if (!touch || !mobileAuthorPageTouch) return
   const dx = touch.clientX - mobileAuthorPageTouch.x
   const dy = touch.clientY - mobileAuthorPageTouch.y
-  if (!mobileAuthorPageTouch.axis && Math.max(Math.abs(dx), Math.abs(dy)) > 7) {
+  if (!mobileAuthorPageTouch.axis && Math.max(Math.abs(dx), Math.abs(dy)) > 9) {
     mobileAuthorPageTouch.axis = Math.abs(dx) > Math.abs(dy) * 1.12 ? 'horizontal' : 'vertical'
   }
   if (mobileAuthorPageTouch.axis !== 'horizontal' || dx <= 0) return
@@ -2475,7 +2477,9 @@ function finishMobileAuthorPageSwipe(event) {
   mobileAuthorPageTouch = null
   mobileAuthorPageDragging.value = false
   mobileAuthorPageAnimating.value = true
-  if (!cancelled && horizontal && (dx > Math.min(86, window.innerWidth * .22) || velocityX > .48)) {
+  const threshold = Math.min(112, window.innerWidth * .28)
+  const fastReturn = dx > 36 && velocityX > .78
+  if (!cancelled && horizontal && (dx > threshold || fastReturn)) {
     if (mobileAuthorDetailState.value) mobileAuthorDetailState.value.authorScrollY = window.scrollY
     mobileAuthorPageDragX.value = window.innerWidth
     mobileAuthorPageTimer = window.setTimeout(() => {
