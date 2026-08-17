@@ -2119,42 +2119,43 @@ function resetMobileDetailPageSwipe() {
   mobileDetailPageAnimating.value = false
 }
 function beginMobileDetailPageSwipe(event) {
-  const touch = event.touches?.[0]
   const target = event.target
-  if (!touch || !masonryDetailPost.value || target?.closest?.('.mobile-post-media-stage, button, a, input, textarea, select, label')) return
+  if (event.pointerType !== 'touch' || event.button !== 0 || !masonryDetailPost.value || target?.closest?.('.mobile-post-media-stage, button, a, input, textarea, select, label')) return
   if (mobileDetailPageTimer) window.clearTimeout(mobileDetailPageTimer)
   mobileDetailPageTimer = 0
-  mobileDetailPageTouch = { x: touch.clientX, y: touch.clientY, time: event.timeStamp, axis: '', prevX: touch.clientX, prevTime: event.timeStamp, lastX: touch.clientX, lastTime: event.timeStamp }
+  event.currentTarget.setPointerCapture?.(event.pointerId)
+  mobileDetailPageTouch = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, time: event.timeStamp, axis: '', prevX: event.clientX, prevTime: event.timeStamp, lastX: event.clientX, lastTime: event.timeStamp }
   mobileDetailPageDragging.value = true
   mobileDetailPageAnimating.value = false
 }
 function updateMobileDetailPageSwipe(event) {
-  const touch = event.touches?.[0]
-  if (!touch || !mobileDetailPageTouch) return
-  const dx = touch.clientX - mobileDetailPageTouch.x
-  const dy = touch.clientY - mobileDetailPageTouch.y
+  if (!mobileDetailPageTouch || event.pointerId !== mobileDetailPageTouch.pointerId) return
+  const dx = event.clientX - mobileDetailPageTouch.x
+  const dy = event.clientY - mobileDetailPageTouch.y
   if (!mobileDetailPageTouch.axis && Math.max(Math.abs(dx), Math.abs(dy)) > 7) {
     mobileDetailPageTouch.axis = Math.abs(dx) > Math.abs(dy) * 1.12 ? 'horizontal' : 'vertical'
   }
-  if (mobileDetailPageTouch.axis !== 'horizontal' || dx <= 0) return
+  if (mobileDetailPageTouch.axis !== 'horizontal' || dx >= 0) return
   event.preventDefault()
   mobileDetailPageTouch.prevX = mobileDetailPageTouch.lastX
   mobileDetailPageTouch.prevTime = mobileDetailPageTouch.lastTime
-  mobileDetailPageTouch.lastX = touch.clientX
+  mobileDetailPageTouch.lastX = event.clientX
   mobileDetailPageTouch.lastTime = event.timeStamp
-  mobileDetailPageDragX.value = -Math.min(window.innerWidth, dx)
+  mobileDetailPageDragX.value = Math.max(-window.innerWidth, dx)
 }
 function finishMobileDetailPageSwipe(event) {
-  if (!mobileDetailPageTouch) return
-  const touch = event.changedTouches?.[0]
-  const dx = touch ? touch.clientX - mobileDetailPageTouch.x : 0
+  if (!mobileDetailPageTouch || event.pointerId !== mobileDetailPageTouch.pointerId) return
+  const touchState = mobileDetailPageTouch
+  const dx = event.clientX - touchState.x
+  const cancelled = event.type === 'pointercancel'
   const horizontal = mobileDetailPageTouch.axis === 'horizontal'
   const velocityDuration = Math.max(1, mobileDetailPageTouch.lastTime - mobileDetailPageTouch.prevTime)
   const velocityX = (mobileDetailPageTouch.lastX - mobileDetailPageTouch.prevX) / velocityDuration
+  if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
   mobileDetailPageTouch = null
   mobileDetailPageDragging.value = false
   mobileDetailPageAnimating.value = true
-  if (horizontal && (dx > Math.min(78, window.innerWidth * .2) || velocityX > .48)) {
+  if (!cancelled && horizontal && (dx < -Math.min(78, window.innerWidth * .2) || velocityX < -.48)) {
     const post = masonryDetailPost.value
     mobileDetailPageDragX.value = -window.innerWidth
     mobileDetailPageTimer = window.setTimeout(() => {
@@ -2345,7 +2346,7 @@ function showMobileControls() {
   mobileControlsTimer = window.setTimeout(() => {
     mobileControlsTimer = 0
     if (!mobileMenuOpen.value && !mobileSourcesOpen.value) mobileControlsVisible.value = false
-  }, 1150)
+  }, 1650)
 }
 function handleWindowScroll() {
   showMobileControls()
@@ -2775,7 +2776,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
       <header><img :src="postAvatar(masonryDetailPost)" alt=""><div><strong>{{ masonryDetailPost.author }}</strong><small>{{ sourceMeta[masonryDetailPost.source].label }} · {{ mobileAuthorPreviewPosts.length }} 条预览</small></div></header>
       <div class="mobile-author-preview-grid"><article v-for="post in mobileAuthorPreviewPosts" :key="post.id"><img v-if="masonryCover(post)" :src="previewMedia(masonryCover(post))" alt=""><p v-else>{{ post.caption || '动态内容' }}</p></article></div>
     </aside>
-    <main v-if="phonePortrait && masonryDetailPost" :class="['content', 'mobile-post-detail-page', { 'page-dragging': mobileDetailPageDragging }]" :style="mobileDetailPageStyle" @touchstart.passive="beginMobileDetailPageSwipe" @touchmove="updateMobileDetailPageSwipe" @touchend.passive="finishMobileDetailPageSwipe" @touchcancel.passive="finishMobileDetailPageSwipe">
+    <main v-if="phonePortrait && masonryDetailPost" :class="['content', 'mobile-post-detail-page', { 'page-dragging': mobileDetailPageDragging }]" :style="mobileDetailPageStyle" @pointerdown="beginMobileDetailPageSwipe" @pointermove="updateMobileDetailPageSwipe" @pointerup="finishMobileDetailPageSwipe" @pointercancel="finishMobileDetailPageSwipe">
       <header class="mobile-post-detail-head">
         <button class="mobile-post-back" type="button" title="返回动态页" aria-label="返回动态页" @click="closePostDetail"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg></button>
         <button class="mobile-post-author" type="button" @click="openAuthor(masonryDetailPost)"><img :src="postAvatar(masonryDetailPost)" data-fallback-index="0" :alt="masonryDetailPost.author" referrerpolicy="no-referrer" @error="handlePostAvatarError($event, masonryDetailPost)"><strong>{{ masonryDetailPost.author }}</strong></button>
