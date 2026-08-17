@@ -46,8 +46,8 @@ a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color
 .app-shell > .sidebar, .app-shell > .content, .app-shell > .settings-page, .app-shell > .add-fab, .app-shell > .masonry-detail-backdrop { transition: filter .22s ease; }
 .app-shell.lightbox-active > .sidebar, .app-shell.lightbox-active > .content, .app-shell.lightbox-active > .settings-page, .app-shell.lightbox-active > .add-fab, .app-shell.lightbox-active > .masonry-detail-backdrop { filter: blur(18px) brightness(.72) saturate(.78); pointer-events: none; }
 .lightbox-layer { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; overflow: hidden; padding: 38px 54px 104px; background: #10161470; backdrop-filter: blur(11px); -webkit-backdrop-filter: blur(11px); animation: lightbox-layer-in .25s cubic-bezier(.2,.8,.2,1) both; }
-.lightbox-layer.closing { animation: lightbox-layer-out .185s ease-in both; pointer-events: none; }
-.lightbox-layer.closing .lightbox-image-stage { animation: lightbox-image-return .28s cubic-bezier(.16,.88,.22,1) both; }
+.lightbox-layer.closing { animation: lightbox-layer-out .3s cubic-bezier(.22,.72,.2,1) both; pointer-events: none; }
+.lightbox-layer.closing .lightbox-image-stage { animation: lightbox-image-return .36s cubic-bezier(.16,.88,.22,1) both; }
 .lightbox-layer figure { display: grid; place-items: center; min-width: 100%; min-height: 100%; margin: 0; }
 .lightbox-image-stage { position: relative; display: grid; place-items: center; width: 100%; height: 100%; min-width: 0; min-height: 0; touch-action: none; will-change: transform, opacity; }
 .lightbox-image-stage.motion-enter { animation: lightbox-image-enter .3s cubic-bezier(.2,.8,.2,1); }
@@ -101,7 +101,7 @@ a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color
 .mobile-lightbox-menu svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 @keyframes lightbox-layer-in { from { opacity: 0; } }
 @keyframes lightbox-layer-out { to { opacity: 0; backdrop-filter: blur(3px); } }
-@keyframes lightbox-image-return { 0% { opacity: 1; transform: translate3d(0, 0, 0) scale(1); filter: blur(0); } 58% { opacity: .82; transform: translate3d(0, 8px, 0) scale(.9); filter: blur(.2px); } 100% { opacity: 0; transform: translate3d(0, 18px, 0) scale(.78); filter: blur(1px); } }
+@keyframes lightbox-image-return { 0% { opacity: 1; transform: translate3d(0, 0, 0) scale(1); filter: blur(0); } 54% { opacity: .9; transform: translate3d(0, 5px, 0) scale(.94); filter: blur(0); } 100% { opacity: 0; transform: translate3d(0, 14px, 0) scale(.84); filter: blur(.8px); } }
 @keyframes lightbox-image-enter { from { opacity: 0; transform: scale(.94); } }
 @keyframes lightbox-image-leave-next { to { opacity: 0; transform: translateX(-34px) scale(.975); } }
 @keyframes lightbox-image-leave-previous { to { opacity: 0; transform: translateX(34px) scale(.975); } }
@@ -975,9 +975,9 @@ body, button, input, textarea, select { font-size: 14px; }
 
 .dark .night-sky-decor::before { position: absolute; inset: -72px -8% -86px -8%; background: radial-gradient(ellipse at 91% 38%, #f5df8b1e 0 3%, #c9d5ff18 19%, #aa91d912 35%, transparent 59%), radial-gradient(ellipse at 66% 3%, #a9bfff14 0, transparent 52%), radial-gradient(ellipse at 33% -8%, #745fa010 0, transparent 44%), linear-gradient(180deg, #10121b4d 0, #0d0f1752 38%, transparent 88%); content: ''; filter: blur(14px); }
 .dark .night-haze { position: absolute; top: -48px; right: -26px; width: 360px; height: 235px; background: radial-gradient(ellipse at 68% 42%, #f7e8a43a 0 6%, #c7d5ff24 23%, #b79be518 43%, transparent 73%); filter: blur(14px); animation: moon-haze-breathe 8.5s ease-in-out infinite alternate; }
-.dark .night-moon { position: absolute; top: 28px; right: 7%; width: 38px; height: 38px; background: radial-gradient(circle at 34% 30%, #fffbe2 0 8%, #f5dda0 28%, #d4c795 67%, #a9a386 100%); border: 1px solid #fff2b8aa; border-radius: 50%; box-shadow: 0 0 8px #fff4c6c4, 0 0 22px #e6cf7d8f, 0 0 44px #9eb8f55c, 0 0 72px #a989dc30; }
+.dark .night-moon { position: absolute; top: 28px; right: 7%; width: 38px; height: 38px; background: radial-gradient(circle at 31% 28%, #fffde8 0 8%, #f7dfa1 31%, #d9c689 69%, #b2a374 100%); border: 1px solid #fff2b8aa; border-radius: 50%; box-shadow: 0 0 8px #fff4c6c4, 0 0 22px #e6cf7d8f, 0 0 44px #9eb8f55c, 0 0 72px #a989dc30; }
 .dark .night-moon::before { position: absolute; inset: -34px; background: radial-gradient(circle, #fff0ac26 0 17%, #bcd0ff20 34%, #b397e018 52%, transparent 72%); border-radius: 50%; content: ''; filter: blur(5px); animation: moon-haze-breathe 5.8s ease-in-out infinite alternate; }
-.dark .night-moon::after { position: absolute; top: 9px; left: 8px; width: 6px; height: 6px; background: #aa9e7b55; border-radius: 50%; box-shadow: 13px -3px 0 1px #fff4c72b, 16px 13px 0 2px #8f896f45, 3px 17px 0 1px #c4b98e4a; content: ''; }
+.dark .night-moon::after { position: absolute; top: -4px; left: 14px; width: 35px; height: 35px; background: #10121b; border-radius: 50%; box-shadow: -1px 1px 0 #c6d6ff12; content: ''; }
 .dark .night-star { position: absolute; width: 12px; height: 12px; color: #f7e7ad; filter: drop-shadow(0 0 5px currentColor); animation: night-star-twinkle var(--twinkle-duration, 9s) ease-in-out infinite; }
 .dark .night-star::before, .dark .night-star::after { position: absolute; top: 50%; left: 50%; background: currentColor; border-radius: 999px; content: ''; transform: translate(-50%, -50%); }
 .dark .night-star::before { width: 100%; height: 1px; }
@@ -1827,6 +1827,14 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
 .mobile-return-swipe-preview > header strong { margin-top: 5px; color: var(--ink); font-size: 16px; }
 .mobile-return-swipe-preview > header .source-pill { flex: none; max-width: 100px; }
 .dark .mobile-return-swipe-preview { background: #0e1015; }
+.mobile-detail-return-preview { position: fixed; inset: 0; z-index: 0; overflow: hidden; padding: max(16px, env(safe-area-inset-top)) 12px 24px; background: #fbf7ea; pointer-events: none; will-change: transform, opacity; }
+.mobile-detail-return-preview > header { display: flex; align-items: center; gap: 7px; min-height: 58px; padding: 8px 4px; background: color-mix(in srgb, var(--card) 96%, transparent); border-bottom: 1px solid var(--line); }
+.mobile-detail-return-preview .mobile-post-author { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+.mobile-detail-return-preview .mobile-post-author img { width: 38px; height: 38px; border-radius: 50%; object-fit: cover; }
+.mobile-detail-return-preview .mobile-post-author strong { overflow: hidden; color: var(--ink); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.mobile-detail-return-media { display: block; width: 100%; max-height: 58dvh; margin-top: 12px; background: #050607; object-fit: contain; }
+.mobile-detail-return-preview .caption { margin: 15px 4px 0; }
+.dark .mobile-detail-return-preview { background: #0e1015; }
 .mobile-post-detail-page { position: relative; z-index: 1; min-height: 100dvh; background: #fbf7ea; box-shadow: -16px 0 38px #17130b24; animation: mobile-post-detail-in .3s cubic-bezier(.16,.88,.22,1) both; }
 .mobile-post-detail-head { display: flex; align-items: center; gap: 7px; min-height: 58px; padding: 8px 12px; background: color-mix(in srgb, var(--card) 96%, transparent); border-bottom: 1px solid var(--line); backdrop-filter: blur(16px); }
 .mobile-post-back { display: grid; place-items: center; width: 34px; height: 38px; flex: none; padding: 0; color: var(--ink); background: transparent; border-radius: 7px; }
@@ -1888,7 +1896,8 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
   .phone-ui .masonry-media-count { top: 6px; right: 6px; min-width: 31px; height: 20px; padding: 0 5px; }
   .phone-ui .masonry-video-mark { right: 6px; bottom: 6px; width: 25px; height: 25px; }
   .phone-ui .masonry-select-control { top: 6px; right: 6px; }
-  .phone-ui .mobile-post-detail-page { width: 100%; margin: 0; padding: env(safe-area-inset-top) 0 0; overflow-x: hidden; touch-action: pan-y; will-change: transform, opacity; }
+  .phone-ui .mobile-post-detail-page { width: 100%; margin: 0; padding: env(safe-area-inset-top) 0 0; overflow-x: hidden; overscroll-behavior-x: contain; touch-action: pan-y; will-change: transform, opacity; }
+  .phone-ui .mobile-author-detail-page { position: relative; z-index: 1; overscroll-behavior-x: contain; touch-action: pan-y; will-change: transform; }
   .phone-ui .mobile-post-detail-page.page-dragging { user-select: none; }
   .phone-ui .mobile-post-detail-head { position: sticky; top: 0; z-index: 5; gap: 4px; padding: 8px 7px 8px 4px; }
   .phone-ui .mobile-post-back { width: 31px; }
