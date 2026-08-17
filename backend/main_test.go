@@ -80,6 +80,39 @@ func TestInitializeFlowStorageCreatesPreviewRootAndRemovesLegacyCache(t *testing
 	}
 }
 
+func TestTwitterCollectionArchiveUsesLikesDirectoryUntilAuthorIsSubscribed(t *testing.T) {
+	collection := SourceConfig{ID: "twitter-likes-42", Source: SourceTwitter, Name: twitterLikesName}
+	if !isCollectionFeed(collection) {
+		t.Fatal("twitter likes source was not recognized as a collection")
+	}
+	post := Post{Source: SourceTwitter, Author: "Author", FeedIDs: []string{collection.ID}}
+	if postUsesAuthorArchive(post) {
+		t.Fatal("likes-only Twitter post should use the collection archive")
+	}
+	if key := textArchiveKeyForPost(post); key.AuthorDirectory != safeFlowDirectoryName(twitterLikesName) {
+		t.Fatalf("unexpected collection text archive directory: %#v", key)
+	}
+	post.FeedIDs = append(post.FeedIDs, "twitter-author-7")
+	if !postUsesAuthorArchive(post) {
+		t.Fatal("Twitter post shared with a direct subscription should use the author archive")
+	}
+}
+
+func TestTwitterVideoURLSelectsHighestQualityMP4(t *testing.T) {
+	variants := []struct {
+		URL         string `json:"url"`
+		ContentType string `json:"content_type"`
+		BitRate     int64  `json:"bit_rate"`
+	}{
+		{URL: "https://video.example/playlist.m3u8", ContentType: "application/x-mpegURL"},
+		{URL: "https://video.example/low.mp4", ContentType: "video/mp4", BitRate: 256000},
+		{URL: "https://video.example/high.mp4", ContentType: "video/mp4", BitRate: 832000},
+	}
+	if got := twitterVideoURL(variants); got != "https://video.example/high.mp4" {
+		t.Fatalf("unexpected Twitter video variant: %s", got)
+	}
+}
+
 func TestMediaPreviewHandlerCompressesAndCleansCache(t *testing.T) {
 	root := t.TempDir()
 	oldFlowRoot, oldPreviewRoot := flowRoot, previewRoot

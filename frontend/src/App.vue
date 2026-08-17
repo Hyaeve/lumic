@@ -99,6 +99,10 @@ const weiboQR = ref(null)
 const weiboBusy = ref(false)
 const weiboError = ref('')
 let weiboPollTimer = null
+const twitterAccount = ref({ configured: false, userId: '', userName: '', avatar: '' })
+const twitterCredentials = ref({ accessToken: '' })
+const twitterBusy = ref(false)
+const twitterError = ref('')
 const syncing = ref(false)
 const posts = ref([])
 const feeds = ref([])
@@ -326,11 +330,15 @@ const mobileLightboxTrackStyle = computed(() => {
     transition: mobileLightboxDragging.value ? 'none' : mobileLightboxAnimating.value ? 'transform .24s cubic-bezier(.18, .86, .22, 1)' : 'none'
   }
 })
-const mobileDetailPageStyle = computed(() => ({
-  transform: `translate3d(${mobileDetailPageDragX.value}px, 0, 0)`,
-  opacity: '1',
-  transition: mobileDetailPageDragging.value ? 'none' : mobileDetailPageAnimating.value ? 'transform .3s cubic-bezier(.16, .86, .2, 1)' : 'none'
-}))
+const mobileDetailPageStyle = computed(() => {
+  const width = typeof window === 'undefined' ? 390 : Math.max(1, window.innerWidth)
+  const progress = Math.min(1, Math.abs(mobileDetailPageDragX.value) / width)
+  return {
+    transform: `translate3d(${mobileDetailPageDragX.value}px, 0, 0) scale(${1 - progress * .018})`,
+    opacity: String(1 - progress * .08),
+    transition: mobileDetailPageDragging.value ? 'none' : mobileDetailPageAnimating.value ? 'transform .32s cubic-bezier(.16, .86, .2, 1), opacity .26s ease' : 'none'
+  }
+})
 const mobileAuthorPreviewPosts = computed(() => {
   const post = masonryDetailPost.value
   if (!post) return []
@@ -340,8 +348,8 @@ const mobileAuthorPreviewStyle = computed(() => {
   const width = typeof window === 'undefined' ? 390 : Math.max(1, window.innerWidth)
   const progress = Math.min(1, Math.max(0, -mobileDetailPageDragX.value) / width)
   return {
-    opacity: '1',
-    transform: `translate3d(${100 - progress * 100}%, 0, 0)`,
+    opacity: String(.7 + progress * .3),
+    transform: `translate3d(${100 - progress * 100}%, 0, 0) scale(${.985 + progress * .015})`,
     transition: mobileDetailPageDragging.value ? 'none' : mobileDetailPageAnimating.value ? 'transform .32s cubic-bezier(.16,.88,.22,1)' : 'none'
   }
 })
@@ -350,21 +358,26 @@ const mobileReturnPreviewStyle = computed(() => {
   const width = typeof window === 'undefined' ? 390 : Math.max(1, window.innerWidth)
   const progress = Math.min(1, Math.max(0, mobileDetailPageDragX.value) / width)
   return {
-    opacity: '1',
-    transform: `translate3d(${-100 + progress * 100}%, 0, 0)`,
+    opacity: String(.7 + progress * .3),
+    transform: `translate3d(${-100 + progress * 100}%, 0, 0) scale(${.985 + progress * .015})`,
     transition: mobileDetailPageDragging.value ? 'none' : mobileDetailPageAnimating.value ? 'transform .32s cubic-bezier(.16,.88,.22,1)' : 'none'
   }
 })
-const mobileAuthorPageStyle = computed(() => ({
-  transform: `translate3d(${mobileAuthorPageDragX.value}px, 0, 0)`,
-  transition: mobileAuthorPageDragging.value ? 'none' : mobileAuthorPageAnimating.value ? 'transform .32s cubic-bezier(.16,.88,.22,1)' : 'none'
-}))
+const mobileAuthorPageStyle = computed(() => {
+  const width = typeof window === 'undefined' ? 390 : Math.max(1, window.innerWidth)
+  const progress = Math.min(1, Math.max(0, mobileAuthorPageDragX.value) / width)
+  return {
+    transform: `translate3d(${mobileAuthorPageDragX.value}px, 0, 0) scale(${1 - progress * .018})`,
+    opacity: String(1 - progress * .08),
+    transition: mobileAuthorPageDragging.value ? 'none' : mobileAuthorPageAnimating.value ? 'transform .32s cubic-bezier(.16,.88,.22,1), opacity .26s ease' : 'none'
+  }
+})
 const mobileDetailReturnPreviewStyle = computed(() => {
   const width = typeof window === 'undefined' ? 390 : Math.max(1, window.innerWidth)
   const progress = Math.min(1, Math.max(0, mobileAuthorPageDragX.value) / width)
   return {
-    opacity: '1',
-    transform: `translate3d(${-100 + progress * 100}%, 0, 0)`,
+    opacity: String(.7 + progress * .3),
+    transform: `translate3d(${-100 + progress * 100}%, 0, 0) scale(${.985 + progress * .015})`,
     transition: mobileAuthorPageDragging.value ? 'none' : mobileAuthorPageAnimating.value ? 'transform .32s cubic-bezier(.16,.88,.22,1)' : 'none'
   }
 })
@@ -483,7 +496,7 @@ const platformCards = computed(() => [
   { key: 'bilibili', label: '哔哩哔哩', short: '哔', ...sourceMeta.bilibili, configured: biliAccount.value.configured, account: biliAccount.value.configured ? (biliAccount.value.userName || `UID ${biliAccount.value.userId}`) : '尚未连接', avatar: biliAccount.value.avatar, path: '/flow/bilibili', description: 'UP 主动态、专栏与账号收藏', feeds: feeds.value.filter(feed => feed.source === 'bilibili') },
   { key: 'weibo', label: '微博', short: '微', ...sourceMeta.weibo, configured: weiboAccount.value.configured, account: weiboAccount.value.configured ? (weiboAccount.value.userName || `UID ${weiboAccount.value.userId}`) : '尚未连接', avatar: weiboAccount.value.avatar, path: '/flow/weibo', description: '博主动态与图文媒体', feeds: feeds.value.filter(feed => feed.source === 'weibo') },
   { key: 'pixiv', label: 'Pixiv', short: 'P', ...sourceMeta.pixiv, configured: pixivAccount.value.configured, account: pixivAccount.value.configured ? (pixivAccount.value.userName || `UID ${pixivAccount.value.userId}`) : '尚未连接', avatar: pixivAccount.value.avatar, path: '/flow/pixiv', description: '画师作品与插画媒体', feeds: feeds.value.filter(feed => feed.source === 'pixiv') },
-  { key: 'twitter', label: '推特', short: '推', ...sourceMeta.twitter, image: sourceIconFor('twitter'), configured: false, account: '暂未开放', avatar: '', path: '/flow/twitter', description: '推文、图片与媒体动态', feeds: feeds.value.filter(feed => feed.source === 'twitter') }
+  { key: 'twitter', label: '推特', short: '推', ...sourceMeta.twitter, image: sourceIconFor('twitter'), configured: twitterAccount.value.configured, account: twitterAccount.value.configured ? (`@${String(twitterAccount.value.userName || twitterAccount.value.userId).replace(/^@/, '')}`) : '尚未连接', avatar: twitterAccount.value.avatar, path: '/flow/twitter', description: '账号点赞的推文与媒体', feeds: feeds.value.filter(feed => feed.source === 'twitter') }
 ])
 const subscriptionPageSize = 10
 const subscriptionPageCount = computed(() => Math.max(1, Math.ceil(feeds.value.length / subscriptionPageSize)))
@@ -495,8 +508,9 @@ const pagedFeeds = computed(() => {
 const hasWeiboLikesSource = computed(() => feeds.value.some(feed => feed.id?.startsWith('weibo-likes-')))
 const hasPixivBookmarksSource = computed(() => feeds.value.some(feed => feed.id?.startsWith('pixiv-bookmarks-')))
 const hasBilibiliFavoriteOpusSource = computed(() => feeds.value.some(feed => feed.id?.startsWith('bili-opus-favorites-')))
+const hasTwitterLikesSource = computed(() => feeds.value.some(feed => feed.id?.startsWith('twitter-likes-')))
 function isAccountCollectionFeed(feed) {
-  return feed?.id?.startsWith('weibo-likes-') || feed?.id?.startsWith('pixiv-bookmarks-') || feed?.id?.startsWith('bili-opus-favorites-')
+  return feed?.id?.startsWith('weibo-likes-') || feed?.id?.startsWith('pixiv-bookmarks-') || feed?.id?.startsWith('bili-opus-favorites-') || feed?.id?.startsWith('twitter-likes-')
 }
 function sourceAvatarCandidates(feed, platform) {
   const candidates = []
@@ -635,7 +649,7 @@ async function loadProjectSettings() {
   } catch {}
 }
 async function loadFeeds(fallbackFeed = null) {
-  const endpoints = ['/api/feeds', '/api/bilibili/subscriptions', '/api/weibo/subscriptions', '/api/pixiv/subscriptions']
+  const endpoints = ['/api/feeds', '/api/bilibili/subscriptions', '/api/weibo/subscriptions', '/api/pixiv/subscriptions', '/api/twitter/subscriptions']
   const responses = await Promise.allSettled(endpoints.map(endpoint => fetch(endpoint, { cache: 'no-store' })))
   const loaded = []
   for (const result of responses) {
@@ -655,14 +669,16 @@ async function loadFeeds(fallbackFeed = null) {
   return true
 }
 async function loadPlatformAccounts() {
-  const [biliResponse, weiboResponse, pixivResponse] = await Promise.allSettled([
+  const [biliResponse, weiboResponse, pixivResponse, twitterResponse] = await Promise.allSettled([
     fetch('/api/bilibili/account', { cache: 'no-store' }),
     fetch('/api/weibo/account', { cache: 'no-store' }),
-    fetch('/api/pixiv/account', { cache: 'no-store' })
+    fetch('/api/pixiv/account', { cache: 'no-store' }),
+    fetch('/api/twitter/account', { cache: 'no-store' })
   ])
   if (biliResponse.status === 'fulfilled' && biliResponse.value.ok) biliAccount.value = await biliResponse.value.json()
   if (weiboResponse.status === 'fulfilled' && weiboResponse.value.ok) weiboAccount.value = await weiboResponse.value.json()
   if (pixivResponse.status === 'fulfilled' && pixivResponse.value.ok) pixivAccount.value = await pixivResponse.value.json()
+  if (twitterResponse.status === 'fulfilled' && twitterResponse.value.ok) twitterAccount.value = await twitterResponse.value.json()
 }
 function setDarkMode(value) {
   isDark.value = Boolean(value)
@@ -741,10 +757,10 @@ async function openSettings(_section = 'settings', updateHistory = true) {
   mobileMenuOpen.value = false
   mobileSourcesOpen.value = false
   showBrandMenu.value = false
-  settingsTab.value = 'settings'; showSettings.value = true; activeNav.value = 'settings'; settingsError.value = ''; proxyMessage.value = ''; pixivError.value = ''; weiboError.value = ''
+  settingsTab.value = 'settings'; showSettings.value = true; activeNav.value = 'settings'; settingsError.value = ''; proxyMessage.value = ''; pixivError.value = ''; weiboError.value = ''; twitterError.value = ''
   if (updateHistory) updateRoute('/settings')
   try {
-    const [projectResponse, settingsResponse, biliResponse, pixivResponse, weiboResponse] = await Promise.all([fetch('/api/project/settings'), fetch('/api/settings'), fetch('/api/bilibili/account'), fetch('/api/pixiv/account'), fetch('/api/weibo/account')])
+    const [projectResponse, settingsResponse, biliResponse, pixivResponse, weiboResponse, twitterResponse] = await Promise.all([fetch('/api/project/settings'), fetch('/api/settings'), fetch('/api/bilibili/account'), fetch('/api/pixiv/account'), fetch('/api/weibo/account'), fetch('/api/twitter/account')])
     if (projectResponse.ok) {
       const project = await projectResponse.json()
       proxyStatus.value = project
@@ -762,6 +778,7 @@ async function openSettings(_section = 'settings', updateHistory = true) {
     if (biliResponse.ok) biliAccount.value = await biliResponse.json()
     if (pixivResponse.ok) pixivAccount.value = await pixivResponse.json()
     if (weiboResponse.ok) weiboAccount.value = await weiboResponse.json()
+    if (twitterResponse.ok) twitterAccount.value = await twitterResponse.json()
   } catch { settingsError.value = '无法读取项目设置' }
 }
 function normalizePreviewQualityLevel(value, fallback) {
@@ -933,6 +950,16 @@ async function saveWeiboAccount() {
     weiboCredentials.value = { cookie: '', userId: '' }
   } catch (error) { weiboError.value = error.message } finally { weiboBusy.value = false }
 }
+async function saveTwitterAccount() {
+  twitterBusy.value = true; twitterError.value = ''
+  try {
+    const response = await fetch('/api/twitter/account', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accessToken: twitterCredentials.value.accessToken.trim() }) })
+    if (!response.ok) throw new Error(await responseError(response, '推特访问令牌验证失败'))
+    twitterAccount.value = await response.json()
+    twitterCredentials.value = { accessToken: '' }
+    await loadFeeds()
+  } catch (error) { twitterError.value = error.message } finally { twitterBusy.value = false }
+}
 async function downloadConfigurationBackup() {
   settingsBusy.value = true; settingsError.value = ''; proxyMessage.value = ''
   try {
@@ -1090,6 +1117,7 @@ function openCredentialSettings(platformKey) {
   biliError.value = ''
   weiboError.value = ''
   pixivError.value = ''
+  twitterError.value = ''
 }
 function handleCredentialCardClick(platformKey) {
   if (phonePortrait.value) openCredentialSettings(platformKey)
@@ -1112,7 +1140,7 @@ async function saveFeedSettings() {
     selectedFeed.value.tags = parseTagInput(selectedFeed.value.tagInput)
     selectedFeed.value.includeKeywords = parseKeywordInput(selectedFeed.value.includeKeywordInput)
     selectedFeed.value.excludeKeywords = parseKeywordInput(selectedFeed.value.excludeKeywordInput)
-    if ((selectedFeed.value.source === 'bilibili' && selectedFeed.value.id.startsWith('bili-')) || (selectedFeed.value.source === 'weibo' && selectedFeed.value.id.startsWith('weibo-')) || (selectedFeed.value.source === 'pixiv' && selectedFeed.value.id.startsWith('pixiv-'))) {
+    if ((selectedFeed.value.source === 'bilibili' && selectedFeed.value.id.startsWith('bili-')) || (selectedFeed.value.source === 'weibo' && selectedFeed.value.id.startsWith('weibo-')) || (selectedFeed.value.source === 'pixiv' && selectedFeed.value.id.startsWith('pixiv-')) || (selectedFeed.value.source === 'twitter' && selectedFeed.value.id.startsWith('twitter-'))) {
       const response = await fetch(sourceOperationEndpoint(selectedFeed.value), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(selectedFeed.value) })
       if (!response.ok) throw new Error(await responseError(response, '来源设置保存失败'))
       const saved = await response.json(); const index = feeds.value.findIndex(feed => feed.id === saved.id)
@@ -1135,6 +1163,7 @@ function sourceOperationEndpoint(feed) {
   if (feed.source === 'bilibili' && feed.id.startsWith('bili-')) return '/api/bilibili/subscriptions'
   if (feed.source === 'weibo' && feed.id.startsWith('weibo-')) return '/api/weibo/subscriptions'
   if (feed.source === 'pixiv' && feed.id.startsWith('pixiv-')) return '/api/pixiv/subscriptions'
+  if (feed.source === 'twitter' && feed.id.startsWith('twitter-')) return '/api/twitter/subscriptions'
   return '/api/feeds'
 }
 async function toggleFeedEnabled(feed) {
@@ -1503,7 +1532,7 @@ function scheduleLightboxScaleUpdate() {
   nextTick(() => {
     lightboxScaleFrame = window.requestAnimationFrame(() => {
       lightboxScaleFrame = 0
-      const image = lightboxImageElement.value
+      const image = currentLightboxImage()
       if (!image?.naturalWidth) return
       const baseScale = lightbox.value.fit ? image.clientWidth / image.naturalWidth : 1
       const renderedScale = baseScale * lightbox.value.scale
@@ -1512,8 +1541,12 @@ function scheduleLightboxScaleUpdate() {
     })
   })
 }
+function currentLightboxImage() {
+  const candidates = Array.isArray(lightboxImageElement.value) ? lightboxImageElement.value : [lightboxImageElement.value]
+  return candidates.find(image => image?.closest?.('.mobile-lightbox-slide.current')) || candidates.find(Boolean) || null
+}
 function lightboxBaseScale() {
-  const image = lightboxImageElement.value
+  const image = currentLightboxImage()
   if (!image?.naturalWidth || !lightbox.value.fit) return 1
   return Math.max(0.01, image.clientWidth / image.naturalWidth)
 }
@@ -1542,7 +1575,7 @@ function clearMobileLightboxInertia() {
   mobileLightboxInertiaFrame = 0
 }
 function mobileLightboxBounds() {
-  const image = lightboxImageElement.value
+  const image = currentLightboxImage()
   if (!image) return { x: 0, y: 0 }
   const scale = Math.max(.01, lightbox.value.scale)
   return {
@@ -1633,7 +1666,8 @@ function startLightboxGesture(event) {
   lightboxZoomTimer = 0
   lightboxZoomAnimating.value = false
   event.currentTarget.setPointerCapture(event.pointerId)
-  lightboxPointers.set(event.pointerId, { id: event.pointerId, x: event.clientX, y: event.clientY, time: event.timeStamp, startedOnImage: event.target === lightboxImageElement.value })
+  const startedOnImage = event.target instanceof HTMLImageElement && Boolean(event.target.closest('.mobile-lightbox-slide.current'))
+  lightboxPointers.set(event.pointerId, { id: event.pointerId, x: event.clientX, y: event.clientY, time: event.timeStamp, startedOnImage })
   lightbox.value.dragging = phonePortrait.value ? !isMobileLightboxDefaultView() : true
   if (lightboxPointers.size === 1) {
     lightboxGestureHadPinch = false
@@ -1698,8 +1732,8 @@ function moveLightboxGesture(event) {
       lightbox.value.dragging = false
       mobileLightboxExitDragging.value = true
       mobileLightboxExitAnimating.value = false
-      const threshold = Math.min(88, window.innerHeight * .12)
-      const capped = Math.min(42, Math.abs(dy) * .28)
+      const threshold = Math.min(76, window.innerHeight * .1)
+      const capped = Math.min(threshold * .78, Math.abs(dy) * .48)
       mobileLightboxExitY.value = Math.sign(dy || 1) * capped
       return
     }
@@ -1727,13 +1761,16 @@ function toggleLightboxDoubleTap(event) {
     lightbox.value.fit = true
     if (atDefaultFit) {
       const previousScale = lightbox.value.scale
-      const targetScale = Math.min(lightboxMaximumScale(), lightboxBaseScale() > .82 ? 2.05 : 2.45)
+      const targetScale = Math.min(lightboxMaximumScale(), lightboxBaseScale() > .82 ? 1.92 : 2.22)
       const scaleRatio = targetScale / previousScale
-      const focusX = event.clientX - window.innerWidth / 2
-      const focusY = event.clientY - window.innerHeight / 2
+      const image = currentLightboxImage()
+      const rect = image?.getBoundingClientRect()
+      const focusX = event.clientX - (rect ? rect.left + rect.width / 2 : window.innerWidth / 2)
+      const focusY = event.clientY - (rect ? rect.top + rect.height / 2 : window.innerHeight / 2)
       lightbox.value.scale = targetScale
       lightbox.value.x -= focusX * (scaleRatio - 1)
       lightbox.value.y -= focusY * (scaleRatio - 1)
+      nextTick(() => clampMobileLightboxPosition(false))
     } else {
       lightbox.value.scale = 1
       lightbox.value.x = 0
@@ -2052,6 +2089,16 @@ async function addPixivBookmarksSource() {
     sourceActionMessage.value = '已添加“P站收藏”，默认标签为 #P站收藏'
   } catch (error) { settingsError.value = error.message } finally { sourceActionBusy.value = '' }
 }
+async function addTwitterLikesSource() {
+  sourceActionBusy.value = 'add:twitter-likes'; sourceActionMessage.value = ''; settingsError.value = ''
+  try {
+    const response = await fetch('/api/twitter/subscriptions?type=likes', { method: 'POST' })
+    if (!response.ok) throw new Error(await responseError(response, response.status === 409 ? '推特账号点赞来源已添加' : '添加推特账号点赞来源失败'))
+    const feed = await response.json(); await loadFeeds(feed)
+    if (selectedPlatform.value?.key === 'twitter') selectedPlatform.value.feeds = feeds.value.filter(item => item.source === 'twitter')
+    sourceActionMessage.value = '已添加“推特点赞”，可设置启停、Cron 和过滤规则'
+  } catch (error) { settingsError.value = error.message } finally { sourceActionBusy.value = '' }
+}
 async function addBilibiliFavoriteOpusSource() {
   sourceActionBusy.value = 'add:bili-opus-favorites'; sourceActionMessage.value = ''; settingsError.value = ''
   try {
@@ -2321,7 +2368,7 @@ function resetMobileDetailPageSwipe() {
 function beginMobileDetailPageSwipe(event) {
   const touch = event.touches?.[0]
   const target = event.target
-  if (!touch || !masonryDetailPost.value || target?.closest?.('.mobile-post-media-stage, input, textarea, select, label')) return
+  if (!touch || !masonryDetailPost.value || target?.closest?.('.mobile-post-media-stage, button, a, input, textarea, select, label')) return
   if (mobileDetailPageTimer) window.clearTimeout(mobileDetailPageTimer)
   mobileDetailPageTimer = 0
   mobileDetailPageTouch = { x: touch.clientX, y: touch.clientY, time: event.timeStamp, axis: '', prevX: touch.clientX, prevTime: event.timeStamp, lastX: touch.clientX, lastTime: event.timeStamp }
@@ -2343,7 +2390,7 @@ function updateMobileDetailPageSwipe(event) {
   mobileDetailPageTouch.prevTime = mobileDetailPageTouch.lastTime
   mobileDetailPageTouch.lastX = touch.clientX
   mobileDetailPageTouch.lastTime = event.timeStamp
-  mobileDetailPageDragX.value = Math.max(-window.innerWidth, Math.min(window.innerWidth, dx))
+  mobileDetailPageDragX.value = dampBeyond(dx, window.innerWidth, .18)
 }
 function finishMobileDetailPageSwipe(event) {
   const touch = event.changedTouches?.[0]
@@ -2357,7 +2404,8 @@ function finishMobileDetailPageSwipe(event) {
   mobileDetailPageTouch = null
   mobileDetailPageDragging.value = false
   mobileDetailPageAnimating.value = true
-  if (!cancelled && horizontal && (dx < -Math.min(78, window.innerWidth * .2) || velocityX < -.48)) {
+  const threshold = Math.min(86, window.innerWidth * .22)
+  if (!cancelled && horizontal && (dx < -threshold || velocityX < -.48)) {
     const post = masonryDetailPost.value
     mobileDetailPageDragX.value = -window.innerWidth
     mobileDetailPageTimer = window.setTimeout(() => {
@@ -2369,7 +2417,7 @@ function finishMobileDetailPageSwipe(event) {
     }, 320)
     return
   }
-  if (!cancelled && horizontal && (dx > Math.min(78, window.innerWidth * .2) || velocityX > .48)) {
+  if (!cancelled && horizontal && (dx > threshold || velocityX > .48)) {
     mobileDetailPageDragX.value = window.innerWidth
     mobileDetailPageTimer = window.setTimeout(() => {
       mobileDetailPageTimer = 0
@@ -2413,7 +2461,7 @@ function updateMobileAuthorPageSwipe(event) {
   mobileAuthorPageTouch.prevTime = mobileAuthorPageTouch.lastTime
   mobileAuthorPageTouch.lastX = touch.clientX
   mobileAuthorPageTouch.lastTime = event.timeStamp
-  mobileAuthorPageDragX.value = Math.min(window.innerWidth, dx)
+  mobileAuthorPageDragX.value = dampBeyond(dx, window.innerWidth, .18)
 }
 function finishMobileAuthorPageSwipe(event) {
   const touch = event.changedTouches?.[0]
@@ -2427,7 +2475,7 @@ function finishMobileAuthorPageSwipe(event) {
   mobileAuthorPageTouch = null
   mobileAuthorPageDragging.value = false
   mobileAuthorPageAnimating.value = true
-  if (!cancelled && horizontal && (dx > Math.min(78, window.innerWidth * .2) || velocityX > .48)) {
+  if (!cancelled && horizontal && (dx > Math.min(86, window.innerWidth * .22) || velocityX > .48)) {
     if (mobileAuthorDetailState.value) mobileAuthorDetailState.value.authorScrollY = window.scrollY
     mobileAuthorPageDragX.value = window.innerWidth
     mobileAuthorPageTimer = window.setTimeout(() => {
@@ -2615,7 +2663,7 @@ function showMobileControls() {
   mobileControlsTimer = window.setTimeout(() => {
     mobileControlsTimer = 0
     if (!mobileMenuOpen.value && !mobileSourcesOpen.value) mobileControlsVisible.value = false
-  }, 3800)
+  }, 2200)
 }
 function handleWindowScroll() {
   if (phonePortrait.value && authorProfile.value && mobileAuthorDetailState.value) mobileAuthorDetailState.value.authorScrollY = window.scrollY
@@ -2762,7 +2810,7 @@ function platformEmptyMessage(platformKey) {
   if (platformKey === 'bilibili') return '点击“添加 UP 主”开始订阅图文与专栏。'
   if (platformKey === 'weibo') return '点击“添加博主”开始订阅微博动态。'
   if (platformKey === 'pixiv') return '添加画师或账号收藏来源，作品将以原图归档。'
-  if (platformKey === 'twitter') return '推特账号连接与作者采集器尚未开放。'
+  if (platformKey === 'twitter') return '连接账号后，可将“推特点赞”添加为同步来源。'
   return '作者订阅连接器将在后续版本开放。'
 }
 async function checkSession(refreshData = true) {
@@ -3212,7 +3260,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
           <div class="pane-heading"><div><h3>平台凭证</h3></div><span>4 个平台</span></div>
           <div class="platform-auth-grid">
             <article v-for="platform in platformCards" :key="platform.key" :class="['platform-auth-card', platform.key]" tabindex="0" @contextmenu.prevent="openCredentialSettings(platform.key)" @click="handleCredentialCardClick(platform.key)" @keydown.enter="openCredentialSettings(platform.key)">
-              <header class="platform-auth-head"><img :class="['source-icon', { 'twitter-night-icon': platform.key === 'twitter' && isDark }]" :src="platform.image" :alt="`${platform.label}图标`"><div><h3>{{ platform.label }}</h3><span>{{ platform.key === 'twitter' ? '账号连接与作者采集' : '平台账号凭证' }}</span></div><em :class="['connection-dot', { online: platform.configured }]">{{ platform.key === 'twitter' ? '未开放' : platform.configured ? '已连接' : '未连接' }}</em></header>
+              <header class="platform-auth-head"><img :class="['source-icon', { 'twitter-night-icon': platform.key === 'twitter' && isDark }]" :src="platform.image" :alt="`${platform.label}图标`"><div><h3>{{ platform.label }}</h3><span>平台账号凭证</span></div><em :class="['connection-dot', { online: platform.configured }]">{{ platform.configured ? '已连接' : '未连接' }}</em></header>
               <div class="platform-account-summary"><img :src="platform.avatar || platform.image" :alt="`${platform.account}头像`" @error="$event.target.src = platform.image"><div><span>接入账号</span><strong>{{ platform.account }}</strong></div></div>
             </article>
           </div>
@@ -3248,7 +3296,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
         <div class="credential-modal-head">
           <img :class="['source-icon', { 'twitter-night-icon': credentialPlatform.key === 'twitter' && isDark }]" :src="credentialPlatform.image" :alt="`${credentialPlatform.label}图标`">
           <div><p class="eyebrow">PLATFORM CREDENTIAL</p><h2>{{ credentialPlatform.label }}</h2><span>{{ credentialPlatform.account }}</span></div>
-          <em :class="['connection-dot', { online: credentialPlatform.configured }]">{{ credentialPlatform.key === 'twitter' ? '未开放' : credentialPlatform.configured ? '已连接' : '未连接' }}</em>
+          <em :class="['connection-dot', { online: credentialPlatform.configured }]">{{ credentialPlatform.configured ? '已连接' : '未连接' }}</em>
         </div>
 
         <div v-if="credentialPlatform.key === 'bilibili'" class="credential-config-body">
@@ -3279,7 +3327,14 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
           <p v-if="pixivError" class="login-error">{{ pixivError }}</p>
         </div>
 
-        <div v-else class="credential-unavailable"><img :class="{ 'twitter-night-icon': isDark }" :src="sourceIconFor('twitter')" alt="推特图标"><strong>连接能力开发中</strong><p>账号授权与作者采集器将在后续版本开放。</p></div>
+        <div v-else-if="credentialPlatform.key === 'twitter'" class="credential-config-body">
+          <form class="settings-form platform-auth-form" @submit.prevent="saveTwitterAccount" autocomplete="off">
+            <label class="credential-field"><span>OAuth 2.0 用户访问令牌</span><textarea v-model="twitterCredentials.accessToken" rows="4" required autocomplete="off" placeholder="需要 tweet.read、users.read、like.read 权限"></textarea></label>
+            <p class="credential-note">令牌仅加密保存于服务端，不会再次显示。</p>
+            <button class="login-button" :disabled="twitterBusy">{{ twitterBusy ? '验证中…' : twitterAccount.configured ? '验证并切换推特账号' : '验证并连接推特' }}</button>
+          </form>
+          <p v-if="twitterError" class="login-error">{{ twitterError }}</p>
+        </div>
       </div>
     </div>
     <div v-if="showPixiv" class="modal-backdrop" @click.self="showPixiv = false">
@@ -3301,7 +3356,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
         <button class="modal-close" @click="selectedPlatform = null">×</button>
         <div class="platform-detail-title"><img :class="['source-icon', { 'twitter-night-icon': selectedPlatform.key === 'twitter' && isDark }]" :src="selectedPlatform.image" alt="平台图标"><div><p class="eyebrow">PLATFORM SOURCE</p><h2>{{ selectedPlatform.label }}</h2></div><span :class="['connection-dot', { online: selectedPlatform.configured }]">{{ selectedPlatform.configured ? '已连接' : '未连接' }}</span></div>
         <div class="platform-detail-summary"><div><span>当前账号</span><strong>{{ selectedPlatform.account }}</strong></div><div><span>内容目录</span><strong>{{ selectedPlatform.path }}</strong></div><div><span>作者来源</span><strong>{{ selectedPlatform.feeds.length }} 个</strong></div></div>
-        <div class="platform-detail-actions"><button v-if="selectedPlatform.key !== 'twitter'" class="secondary-button" @click="managePlatformCredentials(selectedPlatform.key)">{{ selectedPlatform.configured ? '管理账号凭证' : '连接平台账号' }}</button><button v-if="selectedPlatform.key === 'weibo' && selectedPlatform.configured && !hasWeiboLikesSource" class="secondary-button" :disabled="sourceActionBusy !== ''" @click="addWeiboLikesSource">添加我的点赞</button><button v-if="selectedPlatform.key === 'pixiv' && selectedPlatform.configured && !hasPixivBookmarksSource" class="secondary-button" :disabled="sourceActionBusy !== ''" @click="addPixivBookmarksSource">添加 P站收藏</button><button v-if="selectedPlatform.key === 'bilibili' && selectedPlatform.configured && !hasBilibiliFavoriteOpusSource" class="secondary-button" :disabled="sourceActionBusy !== ''" @click="addBilibiliFavoriteOpusSource">添加收藏专栏</button><button v-if="selectedPlatform.key === 'bilibili' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openBilibili()">添加 UP 主</button><button v-if="selectedPlatform.key === 'weibo' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openWeibo()">添加博主</button><button v-if="selectedPlatform.key === 'pixiv' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openPixiv()">添加画师</button></div>
+        <div class="platform-detail-actions"><button class="secondary-button" @click="managePlatformCredentials(selectedPlatform.key)">{{ selectedPlatform.configured ? '管理账号凭证' : '连接平台账号' }}</button><button v-if="selectedPlatform.key === 'weibo' && selectedPlatform.configured && !hasWeiboLikesSource" class="secondary-button" :disabled="sourceActionBusy !== ''" @click="addWeiboLikesSource">添加我的点赞</button><button v-if="selectedPlatform.key === 'pixiv' && selectedPlatform.configured && !hasPixivBookmarksSource" class="secondary-button" :disabled="sourceActionBusy !== ''" @click="addPixivBookmarksSource">添加 P站收藏</button><button v-if="selectedPlatform.key === 'twitter' && selectedPlatform.configured && !hasTwitterLikesSource" class="secondary-button" :disabled="sourceActionBusy !== ''" @click="addTwitterLikesSource">添加账号点赞</button><button v-if="selectedPlatform.key === 'bilibili' && selectedPlatform.configured && !hasBilibiliFavoriteOpusSource" class="secondary-button" :disabled="sourceActionBusy !== ''" @click="addBilibiliFavoriteOpusSource">添加收藏专栏</button><button v-if="selectedPlatform.key === 'bilibili' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openBilibili()">添加 UP 主</button><button v-if="selectedPlatform.key === 'weibo' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openWeibo()">添加博主</button><button v-if="selectedPlatform.key === 'pixiv' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openPixiv()">添加画师</button></div>
         <p v-if="sourceActionMessage" class="success-message source-action-message">{{ sourceActionMessage }}</p><p v-if="settingsError" class="login-error">{{ settingsError }}</p>
         <div class="configured-source-list">
           <div class="configured-source-heading"><h3>订阅列表</h3><span>{{ selectedPlatform.feeds.length }} 个</span></div>

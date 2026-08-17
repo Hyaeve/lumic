@@ -101,6 +101,8 @@ func registerAPIV1Routes(mux *http.ServeMux, sessions *SessionStore, auth *AuthC
 	mux.HandleFunc("/api/v1/bilibili/subscriptions", platforms.subscriptionsHandler)
 	mux.HandleFunc("/api/v1/pixiv/account", platforms.pixivHandler)
 	mux.HandleFunc("/api/v1/pixiv/subscriptions", platforms.pixivSubscriptionsHandler)
+	mux.HandleFunc("/api/v1/twitter/account", platforms.twitterAccountHandler)
+	mux.HandleFunc("/api/v1/twitter/subscriptions", platforms.twitterSubscriptionsHandler)
 	mux.HandleFunc("/api/v1/weibo/account", platforms.weiboAccountHandler)
 	mux.HandleFunc("/api/v1/weibo/qr", platforms.weiboQRHandler)
 	mux.HandleFunc("/api/v1/weibo/search", platforms.weiboSearchHandler)
