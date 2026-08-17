@@ -567,6 +567,7 @@ type BilibiliStore struct {
 	bilibiliClients map[string]*http.Client
 	weiboQR         map[string]WeiboQRSession
 	weiboClients    map[string]*http.Client
+	syncInProgress  bool
 }
 
 type BilibiliUser struct {
@@ -5134,18 +5135,31 @@ func (b *BilibiliStore) syncHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	b.RLock()
-	feeds := append(append(append([]SourceConfig{}, b.config.Subscriptions...), b.config.WeiboSubscriptions...), b.config.PixivSubscriptions...)
-	b.RUnlock()
-	results := make([]SourceConfig, 0, len(feeds))
-	for _, feed := range feeds {
-		if !feed.Enabled {
-			continue
-		}
-		updated, _ := b.syncSource(feed, false)
-		results = append(results, updated)
+	b.Lock()
+	if b.syncInProgress {
+		b.Unlock()
+		writeJSON(w, map[string]any{"status": "running", "message": "正在后台拉取最新动态，请稍后刷新查看。"})
+		return
 	}
-	writeJSON(w, map[string]any{"status": "completed", "message": fmt.Sprintf("已完成 %d 个来源的拉取", len(results)), "sources": results})
+	b.syncInProgress = true
+	b.Unlock()
+
+	go func() {
+		defer func() {
+			b.Lock()
+			b.syncInProgress = false
+			b.Unlock()
+		}()
+		b.RLock()
+		feeds := append(append(append([]SourceConfig{}, b.config.Subscriptions...), b.config.WeiboSubscriptions...), b.config.PixivSubscriptions...)
+		b.RUnlock()
+		for _, feed := range feeds {
+			if feed.Enabled {
+				_, _ = b.syncSource(feed, false)
+			}
+		}
+	}()
+	writeJSON(w, map[string]any{"status": "started", "message": "已开始在后台拉取最新动态。"})
 }
 
 func (b *BilibiliStore) runScheduledSync(at time.Time) {

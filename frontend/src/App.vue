@@ -1004,7 +1004,7 @@ async function runFullSync() {
     try { result = payload ? JSON.parse(payload) : {} } catch {}
     if (!response.ok && !result.message) throw new Error(result.error || '同步失败')
     timelineMessage.value = result.message || '拉取任务已完成'
-    await loadData()
+    void loadData()
   } catch (error) { timelineMessage.value = error?.name === 'AbortError' ? '同步请求超时，后台任务仍可能继续执行。' : error.message } finally { window.clearTimeout(timeout); syncing.value = false }
 }
 async function subscribeWeibo(user) {
@@ -1227,7 +1227,7 @@ function resetLightboxState() {
   if (lightboxScaleFrame) window.cancelAnimationFrame(lightboxScaleFrame)
   lightboxScaleFrame = 0
 }
-function closeLightbox(fromHistory = false, delay = 185) {
+function closeLightbox(fromHistory = false, delay = 285) {
   if (lightboxClosing.value) return
   lightboxClosing.value = true
   clearLightboxSingleTap()
@@ -2796,7 +2796,8 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
       </nav>
     </main>
     <aside v-if="phonePortrait && masonryDetailPost" class="mobile-author-swipe-preview" :style="mobileAuthorPreviewStyle" aria-hidden="true">
-      <header><img :src="postAvatar(masonryDetailPost)" alt=""><div><strong>{{ masonryDetailPost.author }}</strong><small>{{ sourceMeta[masonryDetailPost.source].label }} · {{ mobileAuthorPreviewPosts.length }} 条预览</small></div></header>
+      <header><img :src="postAvatar(masonryDetailPost)" alt=""><div><strong>{{ masonryDetailPost.author }}</strong><small>{{ sourceMeta[masonryDetailPost.source].label }} · {{ authorProfile?.count || mobileAuthorPreviewPosts.length }} 条已拉取动态</small></div><span :class="['source-pill', sourceMeta[masonryDetailPost.source].color]"><img class="source-icon" :src="sourceIconFor(masonryDetailPost.source)" alt="">{{ sourceMeta[masonryDetailPost.source].label }}</span></header>
+      <div class="mobile-author-preview-toolbar"><span>全部</span><i></i><i></i><label><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><b>搜索</b></label></div>
       <div class="mobile-author-preview-grid"><article v-for="post in mobileAuthorPreviewPosts" :key="post.id"><img v-if="masonryCover(post)" :src="previewMedia(masonryCover(post))" alt=""><p v-else>{{ post.caption || '动态内容' }}</p></article></div>
     </aside>
     <main v-if="phonePortrait && masonryDetailPost" :class="['content', 'mobile-post-detail-page', { 'page-dragging': mobileDetailPageDragging }]" :style="mobileDetailPageStyle" @pointerdown="beginMobileDetailPageSwipe" @pointermove="updateMobileDetailPageSwipe" @pointerup="finishMobileDetailPageSwipe" @pointercancel="finishMobileDetailPageSwipe">
@@ -2971,12 +2972,11 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
             </div>
           </section>
           <section class="settings-pane backup-settings-pane">
-            <div class="pane-heading"><div><h3>备份配置</h3></div></div>
+            <div class="pane-heading"><div><h3>备份配置</h3><p class="backup-settings-note">备份或还原账号、订阅、过滤与显示配置，不包含已拉取的动态文件。</p></div></div>
             <div class="backup-action-grid">
               <button class="secondary-button" type="button" :disabled="settingsBusy" @click="downloadConfigurationBackup">备份</button>
               <label class="restore-file-button" :class="{ disabled: settingsBusy }"><input type="file" accept="application/json,.json" :disabled="settingsBusy" @change="restoreConfiguration"><span>还原</span></label>
             </div>
-            <p class="backup-settings-note">备份或还原账号、订阅、过滤与显示配置，不包含已拉取的动态文件。</p>
           </section>
           <section class="settings-pane compact-settings-pane"><div class="pane-heading"><div><h3>账号管理</h3></div></div><form class="settings-form account-settings-form" @submit.prevent="saveSettings" autocomplete="off"><label>账号</label><input v-model="settingsForm.username" required minlength="3" autocomplete="username"><label>密码</label><input v-model="settingsForm.newPassword" type="password" required minlength="8" autocomplete="new-password"><button class="login-button" type="submit" :disabled="settingsBusy">{{ settingsBusy ? '保存中…' : '保存' }}</button></form></section>
         </div>
