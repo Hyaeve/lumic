@@ -386,7 +386,19 @@ const authorProfile = computed(() => {
   return { ...selectedAuthor.value, avatar: selectedAuthor.value.feedId ? selectedAuthor.value.avatar : (latest?.avatar || selectedAuthor.value.avatar), count: authorPosts.length }
 })
 const isTimelinePage = computed(() => !showSettings.value && activeNav.value !== 'pulls' && !masonryDetailPost.value)
-const mobilePullRefreshEnabled = computed(() => phonePortrait.value && mobileAtAllTimeline.value && mobileAtTimelineTop.value && !phoneOverlayKey.value && !lightbox.value.open)
+const mobilePullRefreshEnabled = computed(() =>
+  phonePortrait.value &&
+  mobileAtAllTimeline.value &&
+  mobileAtTimelineTop.value &&
+  mobileControlsVisible.value &&
+  !mobileMenuOpen.value &&
+  !mobileSourcesOpen.value &&
+  !timelineSearchFocused.value &&
+  !selectionMode.value &&
+  !phoneOverlayKey.value &&
+  !lightbox.value.open &&
+  !mobileLightboxMenu.value.open
+)
 const platformCards = computed(() => [
   { key: 'bilibili', label: '哔哩哔哩', short: '哔', ...sourceMeta.bilibili, configured: biliAccount.value.configured, account: biliAccount.value.configured ? (biliAccount.value.userName || `UID ${biliAccount.value.userId}`) : '尚未连接', avatar: biliAccount.value.avatar, path: '/flow/bilibili', description: 'UP 主动态、专栏与账号收藏', feeds: feeds.value.filter(feed => feed.source === 'bilibili') },
   { key: 'weibo', label: '微博', short: '微', ...sourceMeta.weibo, configured: weiboAccount.value.configured, account: weiboAccount.value.configured ? (weiboAccount.value.userName || `UID ${weiboAccount.value.userId}`) : '尚未连接', avatar: weiboAccount.value.avatar, path: '/flow/weibo', description: '博主动态与图文媒体', feeds: feeds.value.filter(feed => feed.source === 'weibo') },
@@ -2283,9 +2295,11 @@ function scrollTimelineToTop() {
 }
 function updateMobilePullRefreshPolicy() {
   if (typeof document === 'undefined') return
-  const behavior = !phonePortrait.value ? '' : mobilePullRefreshEnabled.value ? 'auto' : 'none'
+  const enabled = mobilePullRefreshEnabled.value
+  const behavior = !phonePortrait.value ? '' : enabled ? 'auto' : 'none'
   document.documentElement.style.overscrollBehaviorY = behavior
   document.body.style.overscrollBehaviorY = behavior
+  window.Lumir?.setPullRefreshEnabled?.(enabled)
 }
 function resetTimelineWindow() {
   timelineStart.value = 0
