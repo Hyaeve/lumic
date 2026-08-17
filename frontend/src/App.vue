@@ -3186,8 +3186,10 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
           <div class="mobile-lightbox-track" :style="mobileLightboxTrackStyle">
             <div v-for="slide in mobileLightboxSlides" :key="`${slide.position}:${slide.media}`" :class="['mobile-lightbox-slide', { current: slide.position === 0 }]">
               <template v-if="slide.position === 0">
-                <img class="mobile-lightbox-preview" :src="previewMedia(slide.media)" :alt="`${lightbox.author} 的动态图片 ${slide.index + 1}`" :class="{ dragging: lightbox.dragging, 'zoom-animating': lightboxZoomAnimating, 'original-size': !lightbox.fit }" :style="{ transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) rotate(${lightbox.rotation}deg) scale(${lightbox.scale})` }" draggable="false">
-                <img ref="lightboxImageElement" class="mobile-lightbox-original" :src="slide.media" :alt="`${lightbox.author} 的动态图片 ${slide.index + 1}`" :class="{ dragging: lightbox.dragging, 'zoom-animating': lightboxZoomAnimating, 'original-size': !lightbox.fit, 'original-loaded': lightboxOriginalLoaded }" :style="{ transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) rotate(${lightbox.rotation}deg) scale(${lightbox.scale})` }" draggable="false" @load="handleLightboxImageLoad">
+                <div :class="['mobile-lightbox-media-frame', { dragging: lightbox.dragging, 'zoom-animating': lightboxZoomAnimating, 'original-size': !lightbox.fit }]" :style="{ transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) rotate(${lightbox.rotation}deg) scale(${lightbox.scale})` }">
+                  <img class="mobile-lightbox-preview" :src="previewMedia(slide.media)" :alt="`${lightbox.author} 的动态图片 ${slide.index + 1}`" draggable="false">
+                  <img ref="lightboxImageElement" class="mobile-lightbox-original" :src="slide.media" :alt="`${lightbox.author} 的动态图片 ${slide.index + 1}`" :class="{ 'original-loaded': lightboxOriginalLoaded }" draggable="false" @load="handleLightboxImageLoad">
+                </div>
               </template>
               <img v-else :src="slide.source" alt="" draggable="false">
             </div>
