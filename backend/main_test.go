@@ -1594,7 +1594,7 @@ func TestCollectionTextArchivesUseSourceFolderInsteadOfAuthorFolders(t *testing.
 	}
 }
 
-func TestCollectionTextMigrationKeepsAuthorArchiveUsedByRegularFeed(t *testing.T) {
+func TestCollectionTextMigrationPrefersAuthorArchiveUsedByRegularFeed(t *testing.T) {
 	root := t.TempDir()
 	oldFlowRoot := flowRoot
 	flowRoot = root
@@ -1615,12 +1615,12 @@ func TestCollectionTextMigrationKeepsAuthorArchiveUsedByRegularFeed(t *testing.T
 	if _, err := store.reconcileTextArchives(); err != nil {
 		t.Fatalf("migrate shared text archive: %v", err)
 	}
-	if store.posts[0].TextFile != flowPublicPath(SourcePixiv, pixivBookmarksName, "post_contents.txt") || store.posts[1].TextFile != legacyPublicPath {
-		t.Fatalf("unexpected split archive paths: %#v", store.posts)
+	if store.posts[0].TextFile != legacyPublicPath || store.posts[1].TextFile != legacyPublicPath {
+		t.Fatalf("subscribed author posts should share the author archive: %#v", store.posts)
 	}
 	authorContents, err := os.ReadFile(authorPath)
-	if err != nil || bytes.Contains(authorContents, []byte("收藏中的作品")) || !bytes.Contains(authorContents, []byte("普通订阅作品")) {
-		t.Fatalf("regular author archive was removed or mixed: data=%q err=%v", authorContents, err)
+	if err != nil || !bytes.Contains(authorContents, []byte("收藏中的作品")) || !bytes.Contains(authorContents, []byte("普通订阅作品")) {
+		t.Fatalf("subscribed author archive is incomplete: data=%q err=%v", authorContents, err)
 	}
 }
 
@@ -1654,7 +1654,7 @@ func TestReconcileCollectionMediaMovesExistingFilesIntoSourceFolder(t *testing.T
 				file:  filepath.Join(root, strings.ReplaceAll(test.name, " ", "-")+".json"),
 			}
 			feed := SourceConfig{ID: test.feedID, Source: test.source, Name: test.feedName}
-			if err := store.reconcileCollectionMedia(feed); err != nil {
+			if err := store.reconcileCollectionMedia(feed, nil); err != nil {
 				t.Fatalf("move collection media: %v", err)
 			}
 			expectedPublicPath := flowPublicPath(test.source, test.feedName, test.fileName)
@@ -1668,6 +1668,49 @@ func TestReconcileCollectionMediaMovesExistingFilesIntoSourceFolder(t *testing.T
 				t.Fatalf("collection media missing from source folder: %v", err)
 			}
 		})
+	}
+}
+
+func TestCollectionMediaPrefersSubscribedAuthorAndKeepsCollectionMembership(t *testing.T) {
+	root := t.TempDir()
+	oldFlowRoot := flowRoot
+	flowRoot = root
+	t.Cleanup(func() { flowRoot = oldFlowRoot })
+	collection := SourceConfig{ID: "weibo-likes-42", Source: SourceWeibo, Name: weiboLikesName}
+	author := "已订阅博主"
+	collectionPath := filepath.Join(sourceStoragePath(SourceWeibo, weiboLikesName), "liked.jpg")
+	if err := os.MkdirAll(filepath.Dir(collectionPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(collectionPath, []byte("liked"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	store := &Store{posts: []Post{{
+		ID:        "liked-post",
+		Source:    SourceWeibo,
+		FeedIDs:   []string{collection.ID},
+		Author:    author,
+		Caption:   "同时出现在我的点赞与订阅作者中",
+		Published: time.Date(2026, time.August, 17, 10, 0, 0, 0, time.Local),
+		Media:     []string{flowPublicPath(SourceWeibo, weiboLikesName, "liked.jpg")},
+	}}, file: filepath.Join(root, "content.json")}
+	configured := []SourceConfig{collection, {ID: "weibo-123", Source: SourceWeibo, Name: author}}
+	if err := store.reconcileCollectionMedia(collection, configured); err != nil {
+		t.Fatalf("reconcile collection media: %v", err)
+	}
+	post := store.posts[0]
+	expectedMedia := flowPublicPath(SourceWeibo, author, "liked.jpg")
+	if post.Media[0] != expectedMedia || !containsString(post.FeedIDs, collection.ID) || !containsString(post.FeedIDs, "weibo-123") {
+		t.Fatalf("collection membership or author archive target is wrong: %#v", post)
+	}
+	if post.TextFile != flowPublicPath(SourceWeibo, author, "post_contents.txt") {
+		t.Fatalf("collection post text should use the subscribed author archive: %q", post.TextFile)
+	}
+	if _, err := os.Stat(collectionPath); !os.IsNotExist(err) {
+		t.Fatalf("old collection media was not moved: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(sourceStoragePath(SourceWeibo, author), "liked.jpg")); err != nil {
+		t.Fatalf("author archive media missing: %v", err)
 	}
 }
 

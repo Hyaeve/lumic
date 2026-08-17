@@ -292,6 +292,42 @@ func isCollectionFeed(feed SourceConfig) bool {
 		isBilibiliFavoriteOpusFeed(feed)
 }
 
+// Collection posts retain their collection feed ID for browsing, but share the
+// subscribed author's archive whenever that author is also configured directly.
+func collectionAuthorSubscription(post Post, feeds []SourceConfig) (SourceConfig, bool) {
+	for _, feed := range feeds {
+		if feed.Source != post.Source || isCollectionFeed(feed) || !sameSourceAuthor(post.Author, feed.Name) {
+			continue
+		}
+		return feed, true
+	}
+	return SourceConfig{}, false
+}
+
+func postUsesAuthorArchive(post Post) bool {
+	switch post.Source {
+	case SourceWeibo:
+		for _, feedID := range post.FeedIDs {
+			if !strings.HasPrefix(feedID, "weibo-likes-") {
+				return true
+			}
+		}
+	case SourcePixiv:
+		for _, feedID := range post.FeedIDs {
+			if !strings.HasPrefix(feedID, "pixiv-bookmarks-") {
+				return true
+			}
+		}
+	case SourceBilibili:
+		for _, feedID := range post.FeedIDs {
+			if !strings.HasPrefix(feedID, bilibiliFavoriteOpusPrefix) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func filterSourcePosts(posts []Post, feed SourceConfig) []Post {
 	include, exclude := normalizeKeywords(feed.IncludeKeywords), normalizeKeywords(feed.ExcludeKeywords)
 	startBoundary, hasStartBoundary := sourceStartBoundary(feed)
@@ -581,15 +617,35 @@ func applyCollectionAccountProfiles(feeds []SourceConfig, config BilibiliConfig)
 	}
 }
 
+func sourceConfigsFromConfig(config BilibiliConfig) []SourceConfig {
+	feeds := make([]SourceConfig, 0, len(config.Subscriptions)+len(config.WeiboSubscriptions)+len(config.PixivSubscriptions))
+	feeds = append(feeds, config.Subscriptions...)
+	feeds = append(feeds, config.WeiboSubscriptions...)
+	feeds = append(feeds, config.PixivSubscriptions...)
+	applyCollectionAccountProfiles(feeds, config)
+	return feeds
+}
+
 func (b *BilibiliStore) allSourceConfigs() []SourceConfig {
 	b.RLock()
 	defer b.RUnlock()
-	feeds := make([]SourceConfig, 0, len(b.config.Subscriptions)+len(b.config.WeiboSubscriptions)+len(b.config.PixivSubscriptions))
-	feeds = append(feeds, b.config.Subscriptions...)
-	feeds = append(feeds, b.config.WeiboSubscriptions...)
-	feeds = append(feeds, b.config.PixivSubscriptions...)
-	applyCollectionAccountProfiles(feeds, b.config)
-	return feeds
+	return sourceConfigsFromConfig(b.config)
+}
+
+func (b *BilibiliStore) reconcileCollectionArchives() error {
+	if b.content == nil {
+		return nil
+	}
+	feeds := b.allSourceConfigs()
+	for _, feed := range feeds {
+		if !isCollectionFeed(feed) {
+			continue
+		}
+		if err := b.content.reconcileCollectionMedia(feed, feeds); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type Store struct {
@@ -912,7 +968,7 @@ func (b *BilibiliStore) reconcileFlowStorage() error {
 				}
 			}
 			if b.content != nil && isCollectionFeed(prepared) {
-				if err := b.content.reconcileCollectionMedia(prepared); err != nil {
+				if err := b.content.reconcileCollectionMedia(prepared, sourceConfigsFromConfig(b.config)); err != nil {
 					return fmt.Errorf("reconcile collection media for %s: %w", prepared.Name, err)
 				}
 			}
@@ -1534,21 +1590,14 @@ func (s *Store) rewriteMediaPrefix(oldPrefix, newPrefix string) error {
 	return s.saveLocked()
 }
 
-func (s *Store) reconcileCollectionMedia(feed SourceConfig) error {
+func (s *Store) reconcileCollectionMedia(feed SourceConfig, configuredFeeds []SourceConfig) error {
 	if !isCollectionFeed(feed) {
 		return nil
 	}
 	s.Lock()
 	defer s.Unlock()
-	targetName := canonicalSourceName(feed)
-	targetDirectory := sourceStoragePath(feed.Source, targetName)
-	if err := os.MkdirAll(targetDirectory, 0755); err != nil {
-		return err
-	}
-	targetDirectoryAbsolute, err := filepath.Abs(targetDirectory)
-	if err != nil {
-		return err
-	}
+	previous := append([]Post(nil), s.posts...)
+	changed := false
 	type mediaMove struct {
 		postIndex  int
 		mediaIndex int
@@ -1573,7 +1622,7 @@ func (s *Store) reconcileCollectionMedia(feed SourceConfig) error {
 			}
 		}
 	}
-	moveMedia := func(postIndex, mediaIndex int, mediaKind, media string) error {
+	moveMedia := func(postIndex, mediaIndex int, mediaKind, media, targetName string) error {
 		localPath, ok := localFlowArchivePath(media)
 		if !ok {
 			return nil
@@ -1587,6 +1636,14 @@ func (s *Store) reconcileCollectionMedia(feed SourceConfig) error {
 		}
 		if info.IsDir() {
 			return nil
+		}
+		targetDirectory := sourceStoragePath(feed.Source, targetName)
+		if err := os.MkdirAll(targetDirectory, 0755); err != nil {
+			return err
+		}
+		targetDirectoryAbsolute, err := filepath.Abs(targetDirectory)
+		if err != nil {
+			return err
 		}
 		currentDirectory, pathErr := filepath.Abs(filepath.Dir(localPath))
 		if pathErr != nil {
@@ -1604,6 +1661,7 @@ func (s *Store) reconcileCollectionMedia(feed SourceConfig) error {
 		}
 		updated := flowPublicPath(feed.Source, targetName, filepath.Base(targetPath))
 		moves = append(moves, mediaMove{postIndex: postIndex, mediaIndex: mediaIndex, mediaKind: mediaKind, oldPublic: media, oldLocal: localPath, newLocal: targetPath})
+		changed = true
 		switch mediaKind {
 		case "video":
 			s.posts[postIndex].Videos[mediaIndex].URL = updated
@@ -1618,28 +1676,51 @@ func (s *Store) reconcileCollectionMedia(feed SourceConfig) error {
 		if !containsString(s.posts[postIndex].FeedIDs, feed.ID) {
 			continue
 		}
+		targetName := canonicalSourceName(feed)
+		if authorFeed, ok := collectionAuthorSubscription(s.posts[postIndex], configuredFeeds); ok {
+			targetName = authorFeed.Name
+			updatedFeedIDs := mergeUniqueStrings(s.posts[postIndex].FeedIDs, []string{authorFeed.ID})
+			if !stringSlicesEqual(s.posts[postIndex].FeedIDs, updatedFeedIDs) {
+				s.posts[postIndex].FeedIDs = updatedFeedIDs
+				changed = true
+			}
+		}
 		for mediaIndex, media := range s.posts[postIndex].Media {
-			if err := moveMedia(postIndex, mediaIndex, "image", media); err != nil {
+			if err := moveMedia(postIndex, mediaIndex, "image", media, targetName); err != nil {
 				rollback()
+				s.posts = previous
 				return err
 			}
 		}
 		for videoIndex, video := range s.posts[postIndex].Videos {
-			if err := moveMedia(postIndex, videoIndex, "video", video.URL); err != nil {
+			if err := moveMedia(postIndex, videoIndex, "video", video.URL, targetName); err != nil {
 				rollback()
+				s.posts = previous
 				return err
 			}
-			if err := moveMedia(postIndex, videoIndex, "poster", video.Poster); err != nil {
+			if err := moveMedia(postIndex, videoIndex, "poster", video.Poster, targetName); err != nil {
 				rollback()
+				s.posts = previous
 				return err
 			}
 		}
 	}
-	if len(moves) == 0 {
+	if len(moves) == 0 && !changed {
+		return nil
+	}
+	textChanged, err := s.reconcileTextArchivesFor(nil)
+	if err != nil {
+		rollback()
+		s.posts = previous
+		return err
+	}
+	changed = changed || textChanged
+	if !changed {
 		return nil
 	}
 	if err := s.saveLocked(); err != nil {
 		rollback()
+		s.posts = previous
 		return err
 	}
 	return nil
@@ -2984,6 +3065,10 @@ func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "unable to save subscription", http.StatusInternalServerError)
 		return
 	}
+	if err := b.reconcileCollectionArchives(); err != nil {
+		http.Error(w, "unable to reconcile collection archives", http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, feed)
 }
 
@@ -3755,15 +3840,15 @@ func textArchiveKeyForPost(post Post) textArchiveKey {
 	archiveName := post.Author
 	switch post.Source {
 	case SourceWeibo:
-		if hasFeedPrefix(post.FeedIDs, "weibo-likes-") {
+		if hasFeedPrefix(post.FeedIDs, "weibo-likes-") && !postUsesAuthorArchive(post) {
 			archiveName = weiboLikesName
 		}
 	case SourcePixiv:
-		if hasFeedPrefix(post.FeedIDs, "pixiv-bookmarks-") {
+		if hasFeedPrefix(post.FeedIDs, "pixiv-bookmarks-") && !postUsesAuthorArchive(post) {
 			archiveName = pixivBookmarksName
 		}
 	case SourceBilibili:
-		if hasFeedPrefix(post.FeedIDs, bilibiliFavoriteOpusPrefix) {
+		if hasFeedPrefix(post.FeedIDs, bilibiliFavoriteOpusPrefix) && !postUsesAuthorArchive(post) {
 			archiveName = bilibiliFavoriteOpusName
 		}
 	}
@@ -3955,8 +4040,23 @@ func (b *BilibiliStore) archiveSourceContent(feed SourceConfig, posts []Post) (S
 			prepared.Avatar = flowPublicPath(prepared.Source, prepared.Name, filepath.Base(avatarPath))
 		}
 	}
+	configuredFeeds := make([]SourceConfig, 0, len(b.config.Subscriptions)+len(b.config.WeiboSubscriptions)+len(b.config.PixivSubscriptions))
+	configuredFeeds = append(configuredFeeds, b.config.Subscriptions...)
+	configuredFeeds = append(configuredFeeds, b.config.WeiboSubscriptions...)
+	configuredFeeds = append(configuredFeeds, b.config.PixivSubscriptions...)
 	for postIndex := range posts {
 		posts[postIndex].Videos = normalizePostVideos(posts[postIndex].Videos)
+		target := prepared
+		if isCollectionFeed(prepared) {
+			if authorFeed, ok := collectionAuthorSubscription(posts[postIndex], configuredFeeds); ok {
+				var prepareErr error
+				target, prepareErr = prepareSourceStorage(authorFeed)
+				if prepareErr != nil {
+					return feed, posts, prepareErr
+				}
+				posts[postIndex].FeedIDs = mergeUniqueStrings(posts[postIndex].FeedIDs, []string{prepared.ID, target.ID})
+			}
+		}
 		if !strings.HasPrefix(prepared.ID, "weibo-likes-") && !strings.HasPrefix(prepared.ID, "pixiv-bookmarks-") && !isBilibiliFavoriteOpusFeed(prepared) {
 			posts[postIndex].Avatar = prepared.Avatar
 		}
@@ -3965,12 +4065,12 @@ func (b *BilibiliStore) archiveSourceContent(feed SourceConfig, posts []Post) (S
 			if strings.HasPrefix(remoteURL, "/flow/") {
 				localMedia = append(localMedia, remoteURL)
 			} else {
-				base := availableMediaTargetBase(prepared.StoragePath, postMediaBaseName(posts[postIndex], mediaIndex))
+				base := availableMediaTargetBase(target.StoragePath, postMediaBaseName(posts[postIndex], mediaIndex))
 				localPath, downloadErr := downloadRemoteImage(client, remoteURL, base, referer, cookie)
 				if downloadErr != nil {
 					return feed, posts, fmt.Errorf("下载动态 %s 的第 %d 张图片失败: %w", posts[postIndex].ID, mediaIndex+1, downloadErr)
 				}
-				localMedia = append(localMedia, flowPublicPath(prepared.Source, prepared.Name, filepath.Base(localPath)))
+				localMedia = append(localMedia, flowPublicPath(target.Source, target.Name, filepath.Base(localPath)))
 				if delay := imageDownloadDelay(feed.Source, postIndex+mediaIndex); delay > 0 {
 					time.Sleep(delay)
 				}
@@ -3984,20 +4084,20 @@ func (b *BilibiliStore) archiveSourceContent(feed SourceConfig, posts []Post) (S
 			}
 			localVideo := video
 			if video.Poster != "" && !strings.HasPrefix(video.Poster, "/flow/") {
-				posterBase := availableMediaTargetBase(prepared.StoragePath, postVideoBaseName(posts[postIndex], videoIndex, true))
+				posterBase := availableMediaTargetBase(target.StoragePath, postVideoBaseName(posts[postIndex], videoIndex, true))
 				posterPath, downloadErr := downloadRemoteImage(client, video.Poster, posterBase, referer, cookie)
 				if downloadErr != nil {
 					return feed, posts, fmt.Errorf("下载动态 %s 的第 %d 个视频封面失败: %w", posts[postIndex].ID, videoIndex+1, downloadErr)
 				}
-				localVideo.Poster = flowPublicPath(prepared.Source, prepared.Name, filepath.Base(posterPath))
+				localVideo.Poster = flowPublicPath(target.Source, target.Name, filepath.Base(posterPath))
 			}
 			if !strings.HasPrefix(video.URL, "/flow/") {
-				videoBase := availableMediaTargetBase(prepared.StoragePath, postVideoBaseName(posts[postIndex], videoIndex, false))
+				videoBase := availableMediaTargetBase(target.StoragePath, postVideoBaseName(posts[postIndex], videoIndex, false))
 				videoPath, downloadErr := downloadRemoteVideo(client, video.URL, videoBase, referer, cookie)
 				if downloadErr != nil {
 					return feed, posts, fmt.Errorf("下载动态 %s 的第 %d 个视频失败: %w", posts[postIndex].ID, videoIndex+1, downloadErr)
 				}
-				localVideo.URL = flowPublicPath(prepared.Source, prepared.Name, filepath.Base(videoPath))
+				localVideo.URL = flowPublicPath(target.Source, target.Name, filepath.Base(videoPath))
 				if delay := videoDownloadDelay(feed.Source, postIndex+videoIndex); delay > 0 {
 					time.Sleep(delay)
 				}
@@ -4955,6 +5055,9 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 			err = errors.New("动态存储未初始化")
 		} else if err == nil {
 			added, err = b.content.mergePosts(posts)
+			if err == nil && isCollectionFeed(feed) {
+				err = b.content.reconcileCollectionMedia(feed, b.allSourceConfigs())
+			}
 		}
 	}
 	now := time.Now()
@@ -5534,6 +5637,10 @@ func (b *BilibiliStore) pixivSubscriptionsHandler(w http.ResponseWriter, r *http
 	b.Unlock()
 	if err := b.save(); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "无法保存 Pixiv 来源")
+		return
+	}
+	if err := b.reconcileCollectionArchives(); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "无法整理收藏归档")
 		return
 	}
 	writeJSON(w, feed)
@@ -6400,6 +6507,10 @@ func (b *BilibiliStore) weiboSubscriptionsHandler(w http.ResponseWriter, r *http
 		b.config.WeiboSubscriptions = b.config.WeiboSubscriptions[:len(b.config.WeiboSubscriptions)-1]
 		b.Unlock()
 		writeAPIError(w, http.StatusInternalServerError, "无法保存微博订阅")
+		return
+	}
+	if err := b.reconcileCollectionArchives(); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "无法整理收藏归档")
 		return
 	}
 	writeJSON(w, feed)

@@ -144,6 +144,7 @@ let timelineFrame = 0
 let masonryAssignmentColumnCount = 0
 let postResizeObserver = null
 let sessionPollTimer = null
+let mobileClientPullRefreshState = null
 const observedPostElements = new Map()
 const masonryColumnAssignments = new Map()
 const transientTimers = new Set()
@@ -449,9 +450,17 @@ const mobilePullRefreshEnabled = computed(() =>
   phonePortrait.value &&
   mobileAtAllTimeline.value &&
   mobileAtTimelineTop.value &&
-  mobileControlsVisible.value &&
-  !mobileMenuOpen.value &&
-  !mobileSourcesOpen.value &&
+  !timelineSearchFocused.value &&
+  !selectionMode.value &&
+  !phoneOverlayKey.value &&
+  !lightbox.value.open &&
+  !mobileLightboxMenu.value.open
+)
+// Android 的原生下拉刷新只能随页面场景切换，不能跟随每次 WebView 滚动开关。
+// 否则原生刷新容器会在首个滚动手势后重新接管触控，导致页面无法继续滚动。
+const mobileClientPullRefreshEnabled = computed(() =>
+  phonePortrait.value &&
+  mobileAtAllTimeline.value &&
   !timelineSearchFocused.value &&
   !selectionMode.value &&
   !phoneOverlayKey.value &&
@@ -2123,9 +2132,8 @@ function beginMobileDetailPageSwipe(event) {
   if (event.pointerType !== 'touch' || event.button !== 0 || !masonryDetailPost.value || target?.closest?.('.mobile-post-media-stage, button, a, input, textarea, select, label')) return
   if (mobileDetailPageTimer) window.clearTimeout(mobileDetailPageTimer)
   mobileDetailPageTimer = 0
-  event.currentTarget.setPointerCapture?.(event.pointerId)
   mobileDetailPageTouch = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, time: event.timeStamp, axis: '', prevX: event.clientX, prevTime: event.timeStamp, lastX: event.clientX, lastTime: event.timeStamp }
-  mobileDetailPageDragging.value = true
+  mobileDetailPageDragging.value = false
   mobileDetailPageAnimating.value = false
 }
 function updateMobileDetailPageSwipe(event) {
@@ -2136,7 +2144,9 @@ function updateMobileDetailPageSwipe(event) {
     mobileDetailPageTouch.axis = Math.abs(dx) > Math.abs(dy) * 1.12 ? 'horizontal' : 'vertical'
   }
   if (mobileDetailPageTouch.axis !== 'horizontal' || dx >= 0) return
+  if (!event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.setPointerCapture?.(event.pointerId)
   event.preventDefault()
+  mobileDetailPageDragging.value = true
   mobileDetailPageTouch.prevX = mobileDetailPageTouch.lastX
   mobileDetailPageTouch.prevTime = mobileDetailPageTouch.lastTime
   mobileDetailPageTouch.lastX = event.clientX
@@ -2361,6 +2371,11 @@ function updateMobilePullRefreshPolicy() {
   const behavior = !phonePortrait.value ? '' : enabled ? 'auto' : 'none'
   document.documentElement.style.overscrollBehaviorY = behavior
   document.body.style.overscrollBehaviorY = behavior
+}
+function updateMobileClientPullRefreshPolicy() {
+  const enabled = mobileClientPullRefreshEnabled.value
+  if (mobileClientPullRefreshState === enabled) return
+  mobileClientPullRefreshState = enabled
   window.Lumir?.setPullRefreshEnabled?.(enabled)
 }
 function resetTimelineWindow() {
@@ -2543,6 +2558,7 @@ watch(timelineView, value => localStorage.setItem('lumic-timeline-view', value))
 watch(effectiveTimelineView, resetTimelineWindow)
 watch(isDark, value => { if (value) startNightMeteorLoop(); else stopNightMeteorLoop() })
 watch(mobilePullRefreshEnabled, updateMobilePullRefreshPolicy, { immediate: true })
+watch(mobileClientPullRefreshEnabled, updateMobileClientPullRefreshPolicy, { immediate: true })
 watch(platformCards, cards => {
   if (!credentialPlatform.value) return
   credentialPlatform.value = cards.find(platform => platform.key === credentialPlatform.value.key) || null

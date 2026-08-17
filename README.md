@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./Lumic.png" alt="Lumic Logo" width="88">
+  <img src="./Lumic-icon.png" alt="Lumic Logo" width="88">
 </p>
 
 # Lumic · 拾光
