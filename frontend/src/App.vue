@@ -138,8 +138,10 @@ const mobileDetailTrackShift = ref(0)
 const mobileDetailDragging = ref(false)
 const mobileDetailAnimating = ref(false)
 const mobileDetailPageDragX = ref(0)
+const mobileDetailPageDragY = ref(0)
 const mobileDetailPageDragging = ref(false)
 const mobileDetailPageAnimating = ref(false)
+const mobileDetailPageTransitionMs = ref(320)
 const showScrollTop = ref(false)
 const mobileControlsVisible = ref(true)
 const mobilePostReturnPath = ref('/')
@@ -336,11 +338,12 @@ const mobileLightboxTrackStyle = computed(() => {
 })
 const mobileDetailPageStyle = computed(() => {
   const width = typeof window === 'undefined' ? 390 : Math.max(1, window.innerWidth)
-  const progress = Math.min(1, Math.abs(mobileDetailPageDragX.value) / width)
+  const height = typeof window === 'undefined' ? 844 : Math.max(1, window.innerHeight)
+  const progress = Math.min(1, Math.max(Math.abs(mobileDetailPageDragX.value) / width, Math.abs(mobileDetailPageDragY.value) / height))
   return {
-    transform: `translate3d(${mobileDetailPageDragX.value}px, 0, 0) scale(${1 - progress * .018})`,
+    transform: `translate3d(${mobileDetailPageDragX.value}px, ${mobileDetailPageDragY.value}px, 0) scale(${1 - progress * .018})`,
     opacity: String(1 - progress * .08),
-    transition: mobileDetailPageDragging.value ? 'none' : mobileDetailPageAnimating.value ? 'transform .32s cubic-bezier(.16, .86, .2, 1), opacity .26s ease' : 'none'
+    transition: mobileDetailPageDragging.value ? 'none' : mobileDetailPageAnimating.value ? `transform ${mobileDetailPageTransitionMs.value}ms cubic-bezier(.16, .86, .2, 1), opacity ${Math.min(280, mobileDetailPageTransitionMs.value)}ms ease` : 'none'
   }
 })
 const mobileAuthorPreviewPosts = computed(() => {
@@ -411,6 +414,18 @@ const filteredPosts = computed(() => {
 })
 const effectiveTimelineView = computed(() => timelineView.value)
 const isMasonryView = computed(() => effectiveTimelineView.value === 'masonry')
+const mobileDetailTimelineIndex = computed(() => {
+  if (!masonryDetailPost.value) return -1
+  return filteredPosts.value.findIndex(post => String(post.id) === String(masonryDetailPost.value.id))
+})
+const mobileDetailPreviousPost = computed(() => {
+  const index = mobileDetailTimelineIndex.value
+  return index > 0 ? filteredPosts.value[index - 1] : null
+})
+const mobileDetailNextPost = computed(() => {
+  const index = mobileDetailTimelineIndex.value
+  return index >= 0 && index < filteredPosts.value.length - 1 ? filteredPosts.value[index + 1] : null
+})
 const mobileAtAllTimeline = computed(() => activeNav.value === 'all' && activeSource.value === 'all' && !showSettings.value && !masonryDetailPost.value)
 const mobileTimelineMeta = computed(() => activeNav.value === 'source' && sourceMeta[activeSource.value] ? sourceMeta[activeSource.value] : null)
 const mobileTimelineTitle = computed(() => mobileTimelineMeta.value ? `${mobileTimelineMeta.value.label}动态` : '全部动态')
@@ -2438,8 +2453,64 @@ function resetMobileDetailPageSwipe() {
   mobileDetailPageTimer = 0
   mobileDetailPageTouch = null
   mobileDetailPageDragX.value = 0
+  mobileDetailPageDragY.value = 0
   mobileDetailPageDragging.value = false
   mobileDetailPageAnimating.value = false
+  mobileDetailPageTransitionMs.value = 320
+}
+function mobileDetailAdjacentPost(step) {
+  return step > 0 ? mobileDetailNextPost.value : mobileDetailPreviousPost.value
+}
+function preloadMobileDetailPost(post) {
+  if (!post) return
+  const cover = masonryCover(post) || primaryVideo(post)?.poster
+  if (!cover) return
+  const image = new Image()
+  image.decoding = 'async'
+  image.src = previewMedia(cover)
+}
+function switchMobileDetailPost(post, step) {
+  if (!post) return
+  masonryDetailPost.value = post
+  mobileDetailIndex.value = 0
+  resetMobileDetailTrack()
+  pendingPostId.value = ''
+  updateRoute(`/post/${encodeURIComponent(post.id)}`, true)
+  window.scrollTo({ top: 0, behavior: 'auto' })
+  mobileDetailPageDragging.value = false
+  mobileDetailPageAnimating.value = false
+  mobileDetailPageDragX.value = 0
+  mobileDetailPageDragY.value = step > 0 ? window.innerHeight : -window.innerHeight
+  mobileDetailPageTransitionMs.value = 340
+  nextTick(() => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        mobileDetailPageAnimating.value = true
+        mobileDetailPageDragY.value = 0
+        mobileDetailPageTimer = window.setTimeout(() => {
+          mobileDetailPageTimer = 0
+          resetMobileDetailPageSwipe()
+          mobileDetailSwipeClickBlocked = false
+        }, 340)
+      })
+    })
+  })
+}
+function commitMobileDetailVerticalSwipe(step, velocityY) {
+  const target = mobileDetailAdjacentPost(step)
+  if (!target) return false
+  preloadMobileDetailPost(target)
+  mobileDetailPageDragging.value = false
+  mobileDetailPageAnimating.value = true
+  mobileDetailPageDragX.value = 0
+  mobileDetailPageDragY.value = step > 0 ? -window.innerHeight : window.innerHeight
+  const duration = Math.max(190, Math.min(310, 300 - Math.abs(velocityY) * 90))
+  mobileDetailPageTransitionMs.value = duration
+  mobileDetailPageTimer = window.setTimeout(() => {
+    mobileDetailPageTimer = 0
+    switchMobileDetailPost(target, step)
+  }, duration)
+  return true
 }
 function beginMobileDetailPageSwipe(event) {
   const touch = mobileGesturePoint(event)
@@ -2447,9 +2518,28 @@ function beginMobileDetailPageSwipe(event) {
   if (!touch || !masonryDetailPost.value || target?.closest?.('button, a, input, textarea, select, label')) return
   if (mobileDetailPageTimer) window.clearTimeout(mobileDetailPageTimer)
   mobileDetailPageTimer = 0
-  mobileDetailPageTouch = { x: touch.clientX, y: touch.clientY, time: event.timeStamp, axis: '', targetIsMedia: Boolean(target?.closest?.('.mobile-post-media-stage')), prevX: touch.clientX, prevTime: event.timeStamp, lastX: touch.clientX, lastTime: event.timeStamp }
+  const maxScrollY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight)
+  mobileDetailPageTouch = {
+    x: touch.clientX,
+    y: touch.clientY,
+    time: event.timeStamp,
+    axis: '',
+    targetIsMedia: Boolean(target?.closest?.('.mobile-post-media-stage')),
+    verticalActive: false,
+    verticalOriginY: touch.clientY,
+    maxScrollY,
+    prevX: touch.clientX,
+    prevY: touch.clientY,
+    prevTime: event.timeStamp,
+    lastX: touch.clientX,
+    lastY: touch.clientY,
+    lastTime: event.timeStamp
+  }
   mobileDetailPageDragging.value = false
   mobileDetailPageAnimating.value = false
+  mobileDetailPageTransitionMs.value = 320
+  preloadMobileDetailPost(mobileDetailPreviousPost.value)
+  preloadMobileDetailPost(mobileDetailNextPost.value)
 }
 function updateMobileDetailPageSwipe(event) {
   const touch = mobileGesturePoint(event)
@@ -2460,23 +2550,56 @@ function updateMobileDetailPageSwipe(event) {
     mobileDetailPageTouch.axis = Math.abs(dx) > Math.abs(dy) * 1.12 ? 'horizontal' : 'vertical'
   }
   if (mobileDetailPageTouch.targetIsMedia && mobileDetailPageTouch.axis === 'horizontal') return
-  if (mobileDetailPageTouch.axis !== 'horizontal') return
+  if (mobileDetailPageTouch.axis === 'horizontal') {
+    event.preventDefault?.()
+    mobileDetailPageDragging.value = true
+    mobileDetailPageTouch.prevX = mobileDetailPageTouch.lastX
+    mobileDetailPageTouch.prevTime = mobileDetailPageTouch.lastTime
+    mobileDetailPageTouch.lastX = touch.clientX
+    mobileDetailPageTouch.lastTime = event.timeStamp
+    mobileDetailPageDragX.value = dampBeyond(dx, window.innerWidth, .18)
+    mobileDetailPageDragY.value = 0
+    return
+  }
+  if (mobileDetailPageTouch.axis !== 'vertical') return
+  const atTop = window.scrollY <= 1
+  const atBottom = window.scrollY >= mobileDetailPageTouch.maxScrollY - 1
+  const pullingPrevious = dy > 0 && atTop
+  const pullingNext = dy < 0 && atBottom
+  if (!mobileDetailPageTouch.verticalActive) {
+    if (!pullingPrevious && !pullingNext) return
+    mobileDetailPageTouch.verticalActive = true
+    mobileDetailPageTouch.verticalOriginY = touch.clientY
+    mobileDetailPageTouch.prevY = touch.clientY
+    mobileDetailPageTouch.lastY = touch.clientY
+    mobileDetailPageTouch.prevTime = event.timeStamp
+    mobileDetailPageTouch.lastTime = event.timeStamp
+  }
+  const dragY = touch.clientY - mobileDetailPageTouch.verticalOriginY
+  if ((dragY > 0 && !atTop) || (dragY < 0 && !atBottom)) return
+  event.preventDefault?.()
   mobileDetailPageDragging.value = true
-  mobileDetailPageTouch.prevX = mobileDetailPageTouch.lastX
+  mobileDetailSwipeClickBlocked = Math.abs(dragY) > 7
+  mobileDetailPageTouch.prevY = mobileDetailPageTouch.lastY
   mobileDetailPageTouch.prevTime = mobileDetailPageTouch.lastTime
-  mobileDetailPageTouch.lastX = touch.clientX
+  mobileDetailPageTouch.lastY = touch.clientY
   mobileDetailPageTouch.lastTime = event.timeStamp
-  mobileDetailPageDragX.value = dampBeyond(dx, window.innerWidth, .18)
+  const target = mobileDetailAdjacentPost(dragY < 0 ? 1 : -1)
+  const resistedY = target ? dampBeyond(dragY, window.innerHeight * .72, .16) : dragY * .24
+  mobileDetailPageDragX.value = 0
+  mobileDetailPageDragY.value = resistedY
 }
 function finishMobileDetailPageSwipe(event) {
   const touch = mobileGesturePoint(event)
   if (!touch || !mobileDetailPageTouch) return
   const touchState = mobileDetailPageTouch
   const dx = touch.clientX - touchState.x
+  const dy = touchState.verticalActive ? touch.clientY - touchState.verticalOriginY : touch.clientY - touchState.y
   const cancelled = event.type === 'touchcancel' || event.type === 'pointercancel'
   const horizontal = mobileDetailPageTouch.axis === 'horizontal'
   const velocityDuration = Math.max(1, mobileDetailPageTouch.lastTime - mobileDetailPageTouch.prevTime)
   const velocityX = (mobileDetailPageTouch.lastX - mobileDetailPageTouch.prevX) / velocityDuration
+  const velocityY = (mobileDetailPageTouch.lastY - mobileDetailPageTouch.prevY) / velocityDuration
   mobileDetailPageTouch = null
   if (touchState.targetIsMedia && horizontal) {
     mobileDetailPageDragging.value = false
@@ -2486,6 +2609,18 @@ function finishMobileDetailPageSwipe(event) {
   }
   mobileDetailPageDragging.value = false
   mobileDetailPageAnimating.value = true
+  if (!cancelled && touchState.verticalActive) {
+    const threshold = Math.min(138, window.innerHeight * .17)
+    const fastVertical = Math.abs(dy) > 38 && Math.abs(velocityY) > .68
+    const step = dy < 0 ? 1 : -1
+    if ((Math.abs(dy) >= threshold || fastVertical) && commitMobileDetailVerticalSwipe(step, velocityY)) return
+    mobileDetailPageDragY.value = 0
+    mobileDetailPageTimer = window.setTimeout(() => {
+      resetMobileDetailPageSwipe()
+      mobileDetailSwipeClickBlocked = false
+    }, 320)
+    return
+  }
   const threshold = Math.min(112, window.innerWidth * .28)
   const fastLeft = dx < -36 && velocityX < -.78
   const fastRight = dx > 36 && velocityX > .78
@@ -2510,6 +2645,7 @@ function finishMobileDetailPageSwipe(event) {
     return
   }
   mobileDetailPageDragX.value = 0
+  mobileDetailPageDragY.value = 0
   mobileDetailPageTimer = window.setTimeout(resetMobileDetailPageSwipe, 320)
 }
 function resetMobileAuthorPageSwipe() {
@@ -2821,6 +2957,18 @@ function updateRoute(path, replace = false) {
   if (`${window.location.pathname}${window.location.search}` === path) return
   window.history[replace ? 'replaceState' : 'pushState']({}, '', path)
 }
+function ensurePhoneExitBoundary() {
+  if (!phonePortrait.value) return
+  const currentPath = `${window.location.pathname}${window.location.search}`
+  const atAllTimeline = currentPath === '/' && activeNav.value === 'all' && activeSource.value === 'all'
+  if (atAllTimeline) {
+    window.history.replaceState({ ...(window.history.state || {}), lumicExitBoundary: true }, '', '/')
+    return
+  }
+  if (window.history.state?.lumicChildRoute) return
+  window.history.replaceState({ lumicExitBoundary: true }, '', '/')
+  window.history.pushState({ lumicChildRoute: true }, '', currentPath)
+}
 function handlePopState() {
   if (phoneOverlayHistoryClosing) {
     phoneOverlayHistoryClosing = false
@@ -2949,7 +3097,7 @@ watch(platformCards, cards => {
   if (!selectedPlatform.value) return
   selectedPlatform.value = cards.find(platform => platform.key === selectedPlatform.value.key) || null
 })
-onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; timelineView.value = localStorage.getItem('lumic-timeline-view') === 'masonry' ? 'masonry' : 'list'; loadRememberedLogin(); document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#080a0e' : '#fbf7ea'); phonePortraitQuery = window.matchMedia('(max-width: 760px)'); phonePortrait.value = isPhonePortraitScreen(); phonePortraitQuery.addEventListener('change', updatePhonePortrait); window.addEventListener('orientationchange', updatePhonePortrait); document.addEventListener('pointerover', useRoundedTooltip, true); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); if (phonePortrait.value && window.location.pathname === '/') openPhoneDefaultTimeline(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', handlePopState); window.addEventListener('scroll', handleWindowScroll, { passive: true }); window.addEventListener('resize', handleWindowResize); scheduleTimelineWindow(); if (phonePortrait.value) showMobileControls() })
+onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; timelineView.value = localStorage.getItem('lumic-timeline-view') === 'masonry' ? 'masonry' : 'list'; loadRememberedLogin(); document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#080a0e' : '#fbf7ea'); phonePortraitQuery = window.matchMedia('(max-width: 760px)'); phonePortrait.value = isPhonePortraitScreen(); phonePortraitQuery.addEventListener('change', updatePhonePortrait); window.addEventListener('orientationchange', updatePhonePortrait); document.addEventListener('pointerover', useRoundedTooltip, true); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); if (phonePortrait.value && window.location.pathname === '/') openPhoneDefaultTimeline(); ensurePhoneExitBoundary(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', handlePopState); window.addEventListener('scroll', handleWindowScroll, { passive: true }); window.addEventListener('resize', handleWindowResize); scheduleTimelineWindow(); if (phonePortrait.value) showMobileControls() })
 onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLoop(); if (sessionPollTimer) window.clearInterval(sessionPollTimer); if (mobileControlsTimer) window.clearTimeout(mobileControlsTimer); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); window.removeEventListener('orientationchange', updatePhonePortrait); document.removeEventListener('pointerover', useRoundedTooltip, true); postResizeObserver?.disconnect(); observedPostElements.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); clearMobileDetailAnimation(); resetMobileDetailPageSwipe(); lightboxHistoryActive = false; resetLightboxState(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', handlePopState); window.removeEventListener('scroll', handleWindowScroll); window.removeEventListener('resize', handleWindowResize); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
 </script>
 
@@ -3193,7 +3341,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
       <div class="mobile-author-preview-toolbar"><span>全部</span><i></i><i></i><label><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><b>搜索</b></label></div>
       <div class="mobile-author-preview-grid"><article v-for="post in mobileReturnPreviewPosts" :key="post.id"><img v-if="masonryCover(post)" :src="previewMedia(masonryCover(post))" alt=""><p v-else>{{ post.caption || '动态内容' }}</p></article></div>
     </aside>
-    <main v-if="phonePortrait && masonryDetailPost" :class="['content', 'mobile-post-detail-page', { 'page-dragging': mobileDetailPageDragging }]" :style="mobileDetailPageStyle" @pointerdown="beginMobileDetailPageSwipe" @pointermove="updateMobileDetailPageSwipe" @pointerup="finishMobileDetailPageSwipe" @pointercancel="finishMobileDetailPageSwipe">
+    <main v-if="phonePortrait && masonryDetailPost" :class="['content', 'mobile-post-detail-page', { 'page-dragging': mobileDetailPageDragging }]" :style="mobileDetailPageStyle" @touchstart="beginMobileDetailPageSwipe" @touchmove="updateMobileDetailPageSwipe" @touchend="finishMobileDetailPageSwipe" @touchcancel="finishMobileDetailPageSwipe">
       <header class="mobile-post-detail-head">
         <button class="mobile-post-back" type="button" title="返回动态页" aria-label="返回动态页" @click="closePostDetail"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg></button>
         <button class="mobile-post-author" type="button" @click="openAuthor(masonryDetailPost)"><img :src="postAvatar(masonryDetailPost)" data-fallback-index="0" :alt="masonryDetailPost.author" referrerpolicy="no-referrer" @error="handlePostAvatarError($event, masonryDetailPost)"><strong>{{ masonryDetailPost.author }}</strong></button>
