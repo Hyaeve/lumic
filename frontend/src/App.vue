@@ -150,6 +150,14 @@ const mobileAuthorDetailState = ref(null)
 const mobileAuthorPageDragX = ref(0)
 const mobileAuthorPageDragging = ref(false)
 const mobileAuthorPageAnimating = ref(false)
+const mobileAuthorPreviewPost = ref(null)
+const mobileAuthorPreviewHandoff = ref(false)
+const mobileAuthorPreviewFading = ref(false)
+const mobileDetailReturnHandoff = ref(false)
+const mobileDetailReturnFading = ref(false)
+const mobileTimelineReturnPreviewPost = ref(null)
+const mobileTimelineReturnHandoff = ref(false)
+const mobileTimelineReturnFading = ref(false)
 const pendingPostId = ref('')
 const feedListElement = ref(null)
 const estimatedPostHeight = 560
@@ -215,6 +223,9 @@ let mobileDetailPageTouch = null
 let mobileDetailPageTimer = 0
 let mobileAuthorPageTouch = null
 let mobileAuthorPageTimer = 0
+let mobileAuthorHandoffTimer = 0
+let mobileDetailReturnHandoffTimer = 0
+let mobileTimelineReturnHandoffTimer = 0
 let mobileLightboxAnimationTimer = 0
 let mobileLightboxAnimationFrame = 0
 let mobileLightboxTransitionStep = 0
@@ -351,12 +362,20 @@ const mobileDetailPageStyle = computed(() => {
     transition: mobileDetailPageDragging.value ? 'none' : mobileDetailPageAnimating.value ? `transform ${mobileDetailPageTransitionMs.value}ms cubic-bezier(.16, .86, .2, 1), opacity ${Math.min(280, mobileDetailPageTransitionMs.value)}ms ease` : 'none'
   }
 })
-const mobileAuthorPreviewPosts = computed(() => {
-  const post = masonryDetailPost.value
+const mobileAuthorPreviewDisplayPost = computed(() => masonryDetailPost.value || mobileAuthorPreviewPost.value)
+const mobileAuthorTimelinePosts = computed(() => {
+  const post = mobileAuthorPreviewDisplayPost.value
   if (!post) return []
-  return posts.value.filter(item => item.source === post.source && item.author === post.author).slice(0, 6)
+  return posts.value.filter(item => item.source === post.source && item.author === post.author)
 })
+const mobileAuthorPreviewPosts = computed(() => mobileAuthorTimelinePosts.value.slice(0, 6))
 const mobileAuthorPreviewStyle = computed(() => {
+  if (mobileAuthorPreviewHandoff.value) return {
+    zIndex: 70,
+    opacity: mobileAuthorPreviewFading.value ? '0' : '1',
+    transform: 'translate3d(0, 0, 0) scale(1)',
+    transition: mobileAuthorPreviewFading.value ? 'opacity .18s ease-out' : 'none'
+  }
   const width = typeof window === 'undefined' ? 390 : Math.max(1, window.innerWidth)
   const progress = Math.min(1, Math.max(0, -mobileDetailPageDragX.value) / width)
   return {
@@ -366,7 +385,14 @@ const mobileAuthorPreviewStyle = computed(() => {
   }
 })
 const mobileReturnPreviewPosts = computed(() => filteredPosts.value.slice(0, 6))
+const mobileReturnPreviewDisplayPost = computed(() => masonryDetailPost.value || mobileTimelineReturnPreviewPost.value)
 const mobileReturnPreviewStyle = computed(() => {
+  if (mobileTimelineReturnHandoff.value) return {
+    zIndex: 70,
+    opacity: mobileTimelineReturnFading.value ? '0' : '1',
+    transform: 'translate3d(0, 0, 0) scale(1)',
+    transition: mobileTimelineReturnFading.value ? 'opacity .18s ease-out' : 'none'
+  }
   const width = typeof window === 'undefined' ? 390 : Math.max(1, window.innerWidth)
   const progress = Math.min(1, Math.max(0, mobileDetailPageDragX.value) / width)
   return {
@@ -405,6 +431,12 @@ const mobileAuthorPageStyle = computed(() => {
   }
 })
 const mobileDetailReturnPreviewStyle = computed(() => {
+  if (mobileDetailReturnHandoff.value) return {
+    zIndex: 70,
+    opacity: mobileDetailReturnFading.value ? '0' : '1',
+    transform: 'translate3d(0, 0, 0) scale(1)',
+    transition: mobileDetailReturnFading.value ? 'opacity .18s ease-out' : 'none'
+  }
   const width = typeof window === 'undefined' ? 390 : Math.max(1, window.innerWidth)
   const progress = Math.min(1, Math.max(0, mobileAuthorPageDragX.value) / width)
   return {
@@ -2302,7 +2334,7 @@ function openMasonryPost(post) {
     mobilePostReturnPath.value = window.location.pathname.startsWith('/post/') ? '/' : returnPath
     mobilePostReturnScrollY.value = window.scrollY
     if (!returnPath.startsWith('/author/')) mobileAuthorDetailState.value = null
-    updateRoute(`/post/${encodeURIComponent(post.id)}`)
+    updateRoute(`/post/${encodeURIComponent(post.id)}`, false, { lumicMobileDetail: true, lumicReturnPath: returnPath })
     window.scrollTo({ top: 0, behavior: 'auto' })
   }
 }
@@ -2315,6 +2347,11 @@ function restoreMobileScroll(top = 0) {
   })
 }
 function closePostDetail() {
+  if (phonePortrait.value && window.location.pathname.startsWith('/post/') && window.history.state?.lumicMobileDetail) {
+    pendingPostId.value = ''
+    window.history.back()
+    return
+  }
   resetMobileDetailPageSwipe()
   masonryDetailPost.value = null
   mobileDetailIndex.value = 0
@@ -2324,6 +2361,50 @@ function closePostDetail() {
     updateRoute(mobilePostReturnPath.value || '/', true)
     restoreMobileScroll(mobilePostReturnScrollY.value)
   }
+}
+function startMobileAuthorPreviewHandoff(post) {
+  if (mobileAuthorHandoffTimer) window.clearTimeout(mobileAuthorHandoffTimer)
+  mobileAuthorPreviewPost.value = post
+  mobileAuthorPreviewHandoff.value = true
+  mobileAuthorPreviewFading.value = false
+  nextTick(() => window.requestAnimationFrame(() => window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+    mobileAuthorPreviewFading.value = true
+    mobileAuthorHandoffTimer = window.setTimeout(() => {
+      mobileAuthorHandoffTimer = 0
+      mobileAuthorPreviewHandoff.value = false
+      mobileAuthorPreviewFading.value = false
+      mobileAuthorPreviewPost.value = null
+    }, 190)
+  }))))
+}
+function startMobileDetailReturnHandoff() {
+  if (mobileDetailReturnHandoffTimer) window.clearTimeout(mobileDetailReturnHandoffTimer)
+  mobileDetailReturnHandoff.value = true
+  mobileDetailReturnFading.value = false
+  nextTick(() => window.requestAnimationFrame(() => window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+    mobileDetailReturnFading.value = true
+    mobileDetailReturnHandoffTimer = window.setTimeout(() => {
+      mobileDetailReturnHandoffTimer = 0
+      mobileDetailReturnHandoff.value = false
+      mobileDetailReturnFading.value = false
+    }, 190)
+  }))))
+}
+function startMobileTimelineReturnHandoff(post) {
+  if (!post) return
+  if (mobileTimelineReturnHandoffTimer) window.clearTimeout(mobileTimelineReturnHandoffTimer)
+  mobileTimelineReturnPreviewPost.value = post
+  mobileTimelineReturnHandoff.value = true
+  mobileTimelineReturnFading.value = false
+  nextTick(() => window.requestAnimationFrame(() => window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+    mobileTimelineReturnFading.value = true
+    mobileTimelineReturnHandoffTimer = window.setTimeout(() => {
+      mobileTimelineReturnHandoffTimer = 0
+      mobileTimelineReturnHandoff.value = false
+      mobileTimelineReturnFading.value = false
+      mobileTimelineReturnPreviewPost.value = null
+    }, 190)
+  }))))
 }
 function openMobileDetailAuthor(post) {
   if (!post) return
@@ -2336,6 +2417,7 @@ function openMobileDetailAuthor(post) {
   state.detailScrollY = window.scrollY
   mobileAuthorDetailState.value = state
   mobileAuthorScrollY = state.authorScrollY
+  startMobileAuthorPreviewHandoff(post)
   openAuthorPage(post.author, post.source, post.avatar, '', true)
   restoreMobileScroll(state.authorScrollY)
 }
@@ -2350,8 +2432,15 @@ function openMobileDetailFromAuthor() {
   activeNav.value = 'all'
   activeSource.value = 'all'
   selectedAuthor.value = null
-  updateRoute(`/post/${encodeURIComponent(post.id)}`)
+  updateRoute(`/post/${encodeURIComponent(post.id)}`, true, { lumicMobileDetail: true, lumicMobileAuthor: false, lumicReturnPath: mobilePostReturnPath.value })
   restoreMobileScroll(state.detailScrollY)
+}
+function returnToMobileDetailFromAuthor() {
+  if (window.history.state?.lumicMobileAuthor) {
+    window.history.back()
+    return
+  }
+  openMobileDetailFromAuthor()
 }
 function clearMobileDetailAnimation() {
   if (mobileDetailAnimationTimer) window.clearTimeout(mobileDetailAnimationTimer)
@@ -2744,8 +2833,7 @@ function finishMobileAuthorPageSwipe(event) {
     mobileAuthorPageDragX.value = window.innerWidth
     mobileAuthorPageTimer = window.setTimeout(() => {
       mobileAuthorPageTimer = 0
-      openMobileDetailFromAuthor()
-      resetMobileAuthorPageSwipe()
+      returnToMobileDetailFromAuthor()
     }, 320)
     return
   }
@@ -2999,7 +3087,8 @@ function openAuthorPage(name, source, avatar = '', feedId = '', fromMobileDetail
   activeSource.value = source
   selectedAuthor.value = { name, source, avatar, feedId }
   const query = feedId ? `?feed=${encodeURIComponent(feedId)}` : ''
-  updateRoute(`/author/${source}/${encodeURIComponent(name)}${query}`)
+  const routeState = fromMobileDetail ? { lumicMobileAuthor: true, lumicParentPost: `/post/${encodeURIComponent(mobileAuthorDetailState.value?.post?.id || '')}` } : {}
+  updateRoute(`/author/${source}/${encodeURIComponent(name)}${query}`, false, routeState)
   window.scrollTo({ top: 0, behavior: 'auto' })
 }
 function openAuthor(post) {
@@ -3009,9 +3098,10 @@ function openFeedAuthor(feed) {
   openAuthorPage(feed.name, feed.source, sourceAvatar(feed, platformCardForSource(feed.source)), isAccountCollectionFeed(feed) ? feed.id : '')
 }
 function closeSettingsPage() { navigateTo(activeSource.value === 'all' ? 'all' : 'source') }
-function updateRoute(path, replace = false) {
+function updateRoute(path, replace = false, state = {}) {
   if (`${window.location.pathname}${window.location.search}` === path) return
-  window.history[replace ? 'replaceState' : 'pushState']({}, '', path)
+  const nextState = replace ? { ...(window.history.state || {}), ...state } : state
+  window.history[replace ? 'replaceState' : 'pushState'](nextState, '', path)
 }
 function ensurePhoneExitBoundary() {
   if (!phonePortrait.value) return
@@ -3044,8 +3134,16 @@ function handlePopState() {
     closeLightbox(true)
     return
   }
-  if (phonePortrait.value && authorProfile.value && mobileAuthorDetailState.value) mobileAuthorDetailState.value.authorScrollY = mobileAuthorScrollY
+  const returningFromAuthor = phonePortrait.value && Boolean(authorProfile.value && mobileAuthorDetailState.value)
+  const leavingDetail = phonePortrait.value && Boolean(masonryDetailPost.value)
+  const departingDetailPost = masonryDetailPost.value
+  if (returningFromAuthor) mobileAuthorDetailState.value.authorScrollY = mobileAuthorScrollY
+  if (returningFromAuthor && window.location.pathname.startsWith('/post/')) startMobileDetailReturnHandoff()
+  if (leavingDetail && !window.location.pathname.startsWith('/post/') && !window.location.pathname.startsWith('/author/')) startMobileTimelineReturnHandoff(departingDetailPost)
   applyRoute()
+  resetMobileAuthorPageSwipe()
+  if (returningFromAuthor && window.location.pathname.startsWith('/post/') && mobileAuthorDetailState.value) restoreMobileScroll(mobileAuthorDetailState.value.detailScrollY)
+  else if (leavingDetail && !window.location.pathname.startsWith('/post/') && !window.location.pathname.startsWith('/author/')) restoreMobileScroll(mobilePostReturnScrollY.value)
 }
 function applyRoute() {
   resetMobileDetailPageSwipe()
@@ -3155,7 +3253,7 @@ watch(platformCards, cards => {
   selectedPlatform.value = cards.find(platform => platform.key === selectedPlatform.value.key) || null
 })
 onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; timelineView.value = localStorage.getItem('lumic-timeline-view') === 'masonry' ? 'masonry' : 'list'; loadRememberedLogin(); document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#080a0e' : '#fbf7ea'); phonePortraitQuery = window.matchMedia('(max-width: 760px)'); phonePortrait.value = isPhonePortraitScreen(); phonePortraitQuery.addEventListener('change', updatePhonePortrait); window.addEventListener('orientationchange', updatePhonePortrait); document.addEventListener('pointerover', useRoundedTooltip, true); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = postById.value.get(String(entry.target.dataset.postId)); const borderBox = Array.isArray(entry.borderBoxSize) ? entry.borderBoxSize[0] : entry.borderBoxSize; if (post) measurePostElement(post, entry.target, entry.target.dataset.layout || 'list', borderBox?.blockSize || entry.contentRect.height) }; scheduleTimelineWindow() }); applyRoute(); if (phonePortrait.value && window.location.pathname === '/') openPhoneDefaultTimeline(); ensurePhoneExitBoundary(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', handlePopState); window.addEventListener('scroll', handleWindowScroll, { passive: true }); window.addEventListener('resize', handleWindowResize); scheduleTimelineWindow(); if (phonePortrait.value) showMobileControls() })
-onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLoop(); if (sessionPollTimer) window.clearInterval(sessionPollTimer); if (mobileControlsTimer) window.clearTimeout(mobileControlsTimer); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); window.removeEventListener('orientationchange', updatePhonePortrait); document.removeEventListener('pointerover', useRoundedTooltip, true); postResizeObserver?.disconnect(); observedPostElements.clear(); preloadedPreviewUrls.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); clearMobileDetailAnimation(); resetMobileDetailPageSwipe(); lightboxHistoryActive = false; resetLightboxState(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', handlePopState); window.removeEventListener('scroll', handleWindowScroll); window.removeEventListener('resize', handleWindowResize); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
+onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLoop(); if (sessionPollTimer) window.clearInterval(sessionPollTimer); if (mobileControlsTimer) window.clearTimeout(mobileControlsTimer); if (mobileAuthorHandoffTimer) window.clearTimeout(mobileAuthorHandoffTimer); if (mobileDetailReturnHandoffTimer) window.clearTimeout(mobileDetailReturnHandoffTimer); if (mobileTimelineReturnHandoffTimer) window.clearTimeout(mobileTimelineReturnHandoffTimer); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); window.removeEventListener('orientationchange', updatePhonePortrait); document.removeEventListener('pointerover', useRoundedTooltip, true); postResizeObserver?.disconnect(); observedPostElements.clear(); preloadedPreviewUrls.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); clearMobileDetailAnimation(); resetMobileDetailPageSwipe(); lightboxHistoryActive = false; resetLightboxState(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', handlePopState); window.removeEventListener('scroll', handleWindowScroll); window.removeEventListener('resize', handleWindowResize); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
 </script>
 
 <template>
@@ -3232,10 +3330,11 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
       </div>
     </aside>
 
-    <aside v-if="phonePortrait && authorProfile && mobileAuthorDetailState" class="mobile-detail-return-preview" :style="mobileDetailReturnPreviewStyle" aria-hidden="true">
-      <header><button class="mobile-post-back" type="button"><svg viewBox="0 0 24 24"><path d="m15 5-7 7 7 7"/></svg></button><div class="mobile-post-author"><img :src="postAvatar(mobileAuthorDetailState.post)" :alt="mobileAuthorDetailState.post.author"><strong>{{ mobileAuthorDetailState.post.author }}</strong></div><span :class="['source-pill', 'mobile-post-source', sourceMeta[mobileAuthorDetailState.post.source].color]"><img class="source-icon" :src="sourceIconFor(mobileAuthorDetailState.post.source)" alt="">{{ sourceMeta[mobileAuthorDetailState.post.source].label }}</span></header>
-      <img v-if="masonryCover(mobileAuthorDetailState.post)" :src="previewMedia(masonryCover(mobileAuthorDetailState.post))" :alt="mobileAuthorDetailState.post.author" class="mobile-detail-return-media">
-      <p v-if="mobileAuthorDetailState.post.caption" class="caption">{{ mobileAuthorDetailState.post.caption }}</p>
+    <aside v-if="phonePortrait && mobileAuthorDetailState && (authorProfile || mobileDetailReturnHandoff)" class="mobile-detail-return-preview" :style="mobileDetailReturnPreviewStyle" aria-hidden="true">
+      <header class="mobile-post-detail-head"><span class="mobile-detail-preview-back"><svg viewBox="0 0 24 24"><path d="m15 5-7 7 7 7"/></svg></span><div class="mobile-post-author"><img :src="postAvatar(mobileAuthorDetailState.post)" :alt="mobileAuthorDetailState.post.author"><strong>{{ mobileAuthorDetailState.post.author }}</strong></div><span :class="['source-pill', 'mobile-post-source', sourceMeta[mobileAuthorDetailState.post.source].color]"><img class="source-icon" :src="sourceIconFor(mobileAuthorDetailState.post.source)" alt="">{{ sourceMeta[mobileAuthorDetailState.post.source].label }}</span></header>
+      <section v-if="mobileDetailPreviewMedia(mobileAuthorDetailState.post)" :class="['mobile-detail-preview-media', { 'video-media': mobileDetailPreviewMedia(mobileAuthorDetailState.post).type === 'video' }]" :style="mobileDetailPreviewMedia(mobileAuthorDetailState.post).type === 'video' ? postVideoFrameStyle(mobileAuthorDetailState.post) : undefined"><img v-if="mobileDetailPreviewCover(mobileAuthorDetailState.post)" :src="previewMedia(mobileDetailPreviewCover(mobileAuthorDetailState.post))" :alt="mobileAuthorDetailState.post.author" loading="eager" decoding="async" fetchpriority="low"><span v-else class="mobile-detail-preview-video-mark"><svg viewBox="0 0 24 24"><path d="m9 7 8 5-8 5Z"/></svg></span></section>
+      <section class="mobile-post-copy"><p v-if="mobileAuthorDetailState.post.caption" class="caption">{{ mobileAuthorDetailState.post.caption }}</p><div v-if="mobileAuthorDetailState.post.tags?.length" class="tag-row"><span v-for="tag in mobileAuthorDetailState.post.tags" :key="tag">#{{ tag }}</span></div></section>
+      <footer class="mobile-post-detail-foot"><time :datetime="mobileAuthorDetailState.post.published">{{ postDateTime(mobileAuthorDetailState.post.published) }}</time><div class="mobile-detail-preview-actions"><i></i><i></i></div></footer>
     </aside>
     <main v-if="!showSettings && activeNav !== 'pulls' && !(phonePortrait && masonryDetailPost)" :class="['content', { 'liked-page': activeNav === 'liked', 'mobile-author-detail-page': phonePortrait && authorProfile && mobileAuthorDetailState }]" :style="phonePortrait && authorProfile && mobileAuthorDetailState ? mobileAuthorPageStyle : undefined" @touchstart.passive="beginMobileAuthorPageSwipe" @touchmove="updateMobileAuthorPageSwipe" @touchend.passive="finishMobileAuthorPageSwipe" @touchcancel.passive="finishMobileAuthorPageSwipe" @click="closeContextMenu" @contextmenu.prevent="openContextMenu($event)">
       <div v-if="!authorProfile && activeNav !== 'liked'" class="night-sky-decor" aria-hidden="true"><i class="night-haze"></i><i class="night-moon"></i><i class="night-star star-one"></i><i class="night-star star-two"></i><i class="night-star star-three"></i><i class="night-star star-four"></i><i class="night-star star-five"></i><i class="night-star star-six"></i><i class="night-star star-seven"></i><i class="night-star star-eight"></i></div>
@@ -3389,13 +3488,13 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
         <button type="button" :disabled="subscriptionPage >= subscriptionPageCount" title="下一页" aria-label="下一页" @click="subscriptionPage++"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 5 7 7-7 7"/></svg></button>
       </nav>
     </main>
-    <aside v-if="phonePortrait && masonryDetailPost" class="mobile-author-swipe-preview" :style="mobileAuthorPreviewStyle" aria-hidden="true">
-      <header><img :src="postAvatar(masonryDetailPost)" alt=""><div><strong>{{ masonryDetailPost.author }}</strong><small>{{ sourceMeta[masonryDetailPost.source].label }} · {{ authorProfile?.count || mobileAuthorPreviewPosts.length }} 条已拉取动态</small></div><span :class="['source-pill', sourceMeta[masonryDetailPost.source].color]"><img class="source-icon" :src="sourceIconFor(masonryDetailPost.source)" alt="">{{ sourceMeta[masonryDetailPost.source].label }}</span></header>
-      <div class="mobile-author-preview-toolbar"><span>全部</span><i></i><i></i><label><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><b>搜索</b></label></div>
+    <aside v-if="phonePortrait && mobileAuthorPreviewDisplayPost" class="mobile-author-swipe-preview" :style="mobileAuthorPreviewStyle" aria-hidden="true">
+      <header class="topbar author-page-header mobile-author-preview-head"><div class="author-profile-main"><img :src="postAvatar(mobileAuthorPreviewDisplayPost)" alt=""><div><p class="eyebrow">AUTHOR TIMELINE · {{ sourceMeta[mobileAuthorPreviewDisplayPost.source].label }}</p><h1>{{ mobileAuthorPreviewDisplayPost.author }}</h1><p class="subtitle">共 {{ mobileAuthorTimelinePosts.length }} 条已拉取动态</p></div></div></header>
+      <div class="section-heading mobile-author-preview-heading"><div class="filters"><span class="timeline-sort-button"><span class="timeline-sort-symbol" :style="{ '--nav-mask': `url(${timelineSort === 'newest' ? newestSortIcon : oldestSortIcon})` }"></span></span><span class="timeline-view-button"><span :class="['timeline-view-symbol', { 'list-view-symbol': !isMasonryView }]" :style="{ '--nav-mask': `url(${isMasonryView ? masonryViewIcon : listViewIcon})` }"></span></span><span class="timeline-refresh-button"><span class="timeline-refresh-symbol" :style="{ '--nav-mask': `url(${refreshIcon})` }"></span></span></div><div class="timeline-tools"><label class="timeline-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><span>搜索</span></label></div></div>
       <div class="mobile-author-preview-grid"><article v-for="post in mobileAuthorPreviewPosts" :key="post.id"><img v-if="mobileDetailPreviewCover(post)" :src="previewMedia(mobileDetailPreviewCover(post))" alt="" loading="eager" decoding="async" fetchpriority="low"><p v-else>{{ post.caption || '动态内容' }}</p></article></div>
     </aside>
-    <aside v-if="phonePortrait && masonryDetailPost" class="mobile-return-swipe-preview" :style="mobileReturnPreviewStyle" aria-hidden="true">
-      <header><div><small>SAVED MOMENTS</small><strong>{{ mobileTimelineTitle }}</strong></div><span :class="['source-pill', sourceMeta[masonryDetailPost.source].color]"><img class="source-icon" :src="sourceIconFor(masonryDetailPost.source)" alt="">{{ sourceMeta[masonryDetailPost.source].label }}</span></header>
+    <aside v-if="phonePortrait && mobileReturnPreviewDisplayPost" class="mobile-return-swipe-preview" :style="mobileReturnPreviewStyle" aria-hidden="true">
+      <header><div><small>SAVED MOMENTS</small><strong>{{ mobileTimelineTitle }}</strong></div><span :class="['source-pill', sourceMeta[mobileReturnPreviewDisplayPost.source].color]"><img class="source-icon" :src="sourceIconFor(mobileReturnPreviewDisplayPost.source)" alt="">{{ sourceMeta[mobileReturnPreviewDisplayPost.source].label }}</span></header>
       <div class="mobile-author-preview-toolbar"><span>全部</span><i></i><i></i><label><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><b>搜索</b></label></div>
       <div class="mobile-author-preview-grid"><article v-for="post in mobileReturnPreviewPosts" :key="post.id"><img v-if="mobileDetailPreviewCover(post)" :src="previewMedia(mobileDetailPreviewCover(post))" alt="" loading="eager" decoding="async" fetchpriority="low"><p v-else>{{ post.caption || '动态内容' }}</p></article></div>
     </aside>
