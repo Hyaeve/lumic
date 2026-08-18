@@ -1575,6 +1575,37 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle) { transition: opacity .3s ease, transform .34s cubic-bezier(.16,.88,.22,1), color .22s ease, background .22s ease, border-color .22s ease, box-shadow .28s ease; }
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-control-hidden { opacity: 0; pointer-events: none; transform: translateY(-12px) scale(.86); filter: blur(.4px); }
   .phone-ui .scroll-top-button.mobile-control-hidden { transform: translateY(16px) scale(.86); }
+  /* Keep the three floating controls on one glass surface without a drawn outline. */
+  .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control {
+    --mobile-frosted-surface: linear-gradient(135deg, rgba(255, 255, 255, .48) 0%, rgba(255, 240, 214, .34) 54%, rgba(226, 198, 159, .38) 100%);
+    background: rgba(255, 248, 232, .26)!important;
+    border: 1px solid transparent!important;
+    box-shadow: 0 12px 30px #3e2e1d2b, inset 0 1px 0 #ffffff8c, inset 0 -1px 0 #80603920!important;
+    backdrop-filter: blur(44px) saturate(175%) brightness(1.08);
+    -webkit-backdrop-filter: blur(44px) saturate(175%) brightness(1.08);
+  }
+  .phone-ui.dark :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control {
+    --mobile-frosted-surface: linear-gradient(135deg, rgba(68, 78, 108, .62) 0%, rgba(29, 36, 54, .58) 52%, rgba(12, 16, 28, .64) 100%);
+    background: rgba(14, 18, 30, .44)!important;
+    border: 1px solid transparent!important;
+    box-shadow: 0 14px 34px #000a, 0 0 16px #7189cd30, inset 0 1px 0 #eef3ff3d, inset 0 -1px 0 #01020758!important;
+    backdrop-filter: blur(48px) saturate(170%) brightness(1.13);
+    -webkit-backdrop-filter: blur(48px) saturate(170%) brightness(1.13);
+  }
+  .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control::before {
+    background: var(--mobile-frosted-surface)!important;
+    backdrop-filter: blur(44px) saturate(175%) brightness(1.08);
+    -webkit-backdrop-filter: blur(44px) saturate(175%) brightness(1.08);
+  }
+  .phone-ui.dark :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control::before {
+    backdrop-filter: blur(48px) saturate(170%) brightness(1.13);
+    -webkit-backdrop-filter: blur(48px) saturate(170%) brightness(1.13);
+  }
+  .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control::after,
+  .phone-ui.dark :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control::after {
+    background: linear-gradient(145deg, #ffffff32 0%, #ffffff0d 42%, transparent 68%)!important;
+    border: 0!important;
+  }
 }
 
 @keyframes mobile-menu-enter {
