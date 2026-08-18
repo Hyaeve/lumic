@@ -165,6 +165,7 @@ const lightboxImageElement = ref(null)
 const lightboxScalePercent = ref(100)
 const lightboxAtOriginalSize = ref(false)
 const lightboxDockVisible = ref(true)
+const desktopLightboxHoverTarget = ref('')
 const lightboxClosing = ref(false)
 const lightboxTransitioning = ref(false)
 const lightboxDisplaySource = ref('')
@@ -1301,6 +1302,7 @@ function resetLightboxState() {
   lightboxDisplaySource.value = ''
   lightboxOriginalLoaded.value = false
   lightboxClosing.value = false
+  desktopLightboxHoverTarget.value = ''
   lightboxTransitioning.value = false
   mobileLightboxExitY.value = 0
   mobileLightboxExitDragging.value = false
@@ -1333,6 +1335,19 @@ function closeLightbox(fromHistory = false, delay = 320) {
       window.history.back()
     }
   }, delay)
+}
+function updateDesktopLightboxHover(event) {
+  if (phonePortrait.value || !lightbox.value.open) return
+  const layer = event.currentTarget
+  const width = layer?.clientWidth || window.innerWidth
+  const edgeWidth = Math.min(118, Math.max(72, width * .085))
+  if (event.clientX >= width - 92 && event.clientY <= 92) desktopLightboxHoverTarget.value = 'close'
+  else if (event.clientX <= edgeWidth) desktopLightboxHoverTarget.value = 'previous'
+  else if (event.clientX >= width - edgeWidth) desktopLightboxHoverTarget.value = 'next'
+  else desktopLightboxHoverTarget.value = ''
+}
+function clearDesktopLightboxHover() {
+  if (!phonePortrait.value) desktopLightboxHoverTarget.value = ''
 }
 function showMobileLightboxDots(duration = 1500) {
   if (!phonePortrait.value || lightbox.value.media.length < 2) return
@@ -3217,10 +3232,10 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
       <button v-if="selectionAction === 'unfavorite'" type="button" class="selection-delete-button selection-unfavorite-button" :disabled="!selectedPostCount || postActionBusy === 'batch-unfavorite'" title="取消收藏所选动态" aria-label="取消收藏所选动态" @click="unfavoriteSelectedPosts"><svg viewBox="0 0 24 24"><path d="M12 20.5S4.5 16.2 4.5 10.2A4.2 4.2 0 0 1 12 7.6a4.2 4.2 0 0 1 7.5 2.6c0 6-7.5 10.3-7.5 10.3Z"/><path d="M8.5 11.5h7"/></svg><b>取消收藏</b></button>
       <button v-else type="button" class="selection-delete-button" :disabled="!selectedPostCount || postActionBusy === 'batch-delete'" title="删除所选动态" aria-label="删除所选动态" @click="deleteSelectedPosts"><span class="action-icon-mask" :style="{ '--action-icon-mask': `url(${deleteIcon})` }" aria-hidden="true"></span><b>删除</b></button>
     </div>
-    <div v-if="lightbox.open" :class="['lightbox-layer', { closing: lightboxClosing, 'mobile-entering': mobileLightboxEntering, 'mobile-exit-dragging': mobileLightboxExitDragging, 'mobile-gesture-exiting': mobileLightboxExitAnimating }]" :style="phonePortrait ? mobileLightboxLayerStyle : undefined" role="dialog" aria-modal="true" :aria-label="`${lightbox.author} 的动态媒体`" @click.self="closeLightbox" @wheel.prevent="zoomLightbox">
-      <button v-if="!phonePortrait" class="lightbox-close" type="button" aria-label="关闭大图" @click="closeLightbox"><span class="lightbox-tool-mask lightbox-close-symbol" :style="{ '--lightbox-tool-mask': `url(${closeLightboxIcon})` }" aria-hidden="true"></span></button>
-      <button v-if="!phonePortrait" class="lightbox-edge-nav previous" type="button" :disabled="lightbox.media.length < 2" aria-label="上一张" @click.stop="moveLightbox(-1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 5-7 7 7 7"/></svg></button>
-      <button v-if="!phonePortrait" class="lightbox-edge-nav next" type="button" :disabled="lightbox.media.length < 2" aria-label="下一张" @click.stop="moveLightbox(1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"/></svg></button>
+    <div v-if="lightbox.open" :class="['lightbox-layer', { closing: lightboxClosing, 'mobile-entering': mobileLightboxEntering, 'mobile-exit-dragging': mobileLightboxExitDragging, 'mobile-gesture-exiting': mobileLightboxExitAnimating }]" :style="phonePortrait ? mobileLightboxLayerStyle : undefined" role="dialog" aria-modal="true" :aria-label="`${lightbox.author} 的动态媒体`" @click.self="closeLightbox" @pointermove="updateDesktopLightboxHover" @pointerleave="clearDesktopLightboxHover" @wheel.prevent="zoomLightbox">
+      <button v-if="!phonePortrait" :class="['lightbox-close', { 'pointer-visible': desktopLightboxHoverTarget === 'close' }]" type="button" aria-label="关闭大图" @click="closeLightbox"><span class="lightbox-tool-mask lightbox-close-symbol" :style="{ '--lightbox-tool-mask': `url(${closeLightboxIcon})` }" aria-hidden="true"></span></button>
+      <button v-if="!phonePortrait" :class="['lightbox-edge-nav', 'previous', { 'edge-visible': desktopLightboxHoverTarget === 'previous', disabled: lightbox.media.length < 2 }]" type="button" :aria-disabled="lightbox.media.length < 2" aria-label="上一张" @click.stop="moveLightbox(-1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 5-7 7 7 7"/></svg></button>
+      <button v-if="!phonePortrait" :class="['lightbox-edge-nav', 'next', { 'edge-visible': desktopLightboxHoverTarget === 'next', disabled: lightbox.media.length < 2 }]" type="button" :aria-disabled="lightbox.media.length < 2" aria-label="下一张" @click.stop="moveLightbox(1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"/></svg></button>
       <div :class="['lightbox-image-stage', `motion-${lightbox.motion}`, { 'mobile-original-size': phonePortrait && lightboxAtOriginalSize }]" @click.self="closeLightbox" @contextmenu.prevent>
         <figure v-if="phonePortrait" class="mobile-lightbox-carousel" @click.stop @pointerdown.prevent="startLightboxGesture" @pointermove.prevent="moveLightboxGesture" @pointerup.prevent="stopLightboxGesture" @pointercancel.prevent="stopLightboxGesture">
           <div class="mobile-lightbox-track" :style="mobileLightboxTrackStyle">
