@@ -129,6 +129,7 @@ const masonryHeights = ref({})
 const masonryColumnCount = ref(3)
 const masonryColumnWidth = ref(260)
 const masonryGap = ref(14)
+const masonryMetricsReady = ref(false)
 const masonryViewportTop = ref(0)
 const masonryViewportBottom = ref(900)
 const masonryDetailPost = ref(null)
@@ -170,6 +171,9 @@ let mobileAuthorScrollY = 0
 let mobileControlsLastActivity = 0
 let masonryAssignmentColumnCount = 0
 let postResizeObserver = null
+let feedListResizeObserver = null
+let masonryMetricsFrame = 0
+let pendingMasonryWidth = 0
 let sessionPollTimer = null
 const observedPostElements = new Map()
 const masonryColumnAssignments = new Map()
@@ -226,6 +230,9 @@ let mobileAuthorPageTimer = 0
 let mobileAuthorHandoffTimer = 0
 let mobileDetailReturnHandoffTimer = 0
 let mobileTimelineReturnHandoffTimer = 0
+let mobilePostOriginVisual = null
+let mobileDetailRouteExitLayer = null
+let mobileDetailRouteExitTarget = null
 let mobileLightboxAnimationTimer = 0
 let mobileLightboxAnimationFrame = 0
 let mobileLightboxTransitionStep = 0
@@ -550,12 +557,13 @@ const masonryLayout = computed(() => {
   return { items, height: Math.max(0, ...heights) - (items.length ? masonryGap.value : 0) }
 })
 const visibleMasonryItems = computed(() => {
+  if (!masonryMetricsReady.value) return []
   const overscan = phonePortrait.value ? 700 : 1000
   const top = Math.max(0, masonryViewportTop.value - overscan)
   const bottom = masonryViewportBottom.value + overscan
   return masonryLayout.value.items.filter(item => item.y + item.height >= top && item.y <= bottom)
 })
-const masonryFeedStyle = computed(() => isMasonryView.value && filteredPosts.value.length ? { height: `${Math.ceil(masonryLayout.value.height)}px` } : undefined)
+const masonryFeedStyle = computed(() => isMasonryView.value && filteredPosts.value.length && masonryMetricsReady.value ? { height: `${Math.ceil(masonryLayout.value.height)}px` } : undefined)
 const loadedSelectionPosts = computed(() => isMasonryView.value ? visibleMasonryItems.value.map(item => item.post) : visiblePosts.value)
 const allLoadedPostsSelected = computed(() => loadedSelectionPosts.value.length > 0 && loadedSelectionPosts.value.every(post => selectedPostIds.value.includes(post.id)))
 const timelineOffsets = computed(() => {
@@ -2037,7 +2045,8 @@ function releaseTimelineSearchFocus() {
 }
 function handleWindowResize() {
   feedListTopValid = false
-  nextTick(() => { updateFeedListDocumentTop(); updateMasonryMetrics(); scheduleTimelineWindow() })
+  if (isMasonryView.value) masonryMetricsReady.value = false
+  nextTick(() => { updateFeedListDocumentTop(); scheduleMasonryMetrics(); scheduleTimelineWindow() })
   if (lightbox.value.open) scheduleLightboxScaleUpdate()
 }
 function handleGlobalKeydown(event) {
@@ -2318,14 +2327,25 @@ function postVideoFrameStyle(post) {
   return { '--post-video-ratio': String(ratio) }
 }
 function toggleTimelineView(event) {
+  if (timelineView.value !== 'masonry') masonryMetricsReady.value = false
   timelineView.value = timelineView.value === 'list' ? 'masonry' : 'list'
   if (event?.detail > 0) event.currentTarget?.blur()
 }
-function openMasonryPost(post) {
+function openMasonryPost(post, event) {
   if (selectionMode.value) return
   resetMobileDetailPageSwipe()
   mobileMenuOpen.value = false
   mobileSourcesOpen.value = false
+  if (phonePortrait.value) {
+    const card = event?.currentTarget?.closest?.('.masonry-card') || event?.currentTarget
+    const origin = card?.querySelector?.('.masonry-cover') || card
+    const rect = origin?.getBoundingClientRect?.()
+    mobilePostOriginVisual = rect?.width && rect?.height ? {
+      postId: String(post.id),
+      rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+      borderRadius: window.getComputedStyle(origin).borderRadius || '9px'
+    } : null
+  }
   masonryDetailPost.value = post
   mobileDetailIndex.value = 0
   resetMobileDetailTrack()
@@ -2345,6 +2365,122 @@ function restoreMobileScroll(top = 0) {
       window.requestAnimationFrame(() => window.scrollTo({ top: target, behavior: 'auto' }))
     })
   })
+}
+function cleanupMobileDetailRouteExit() {
+  if (mobileDetailRouteExitTarget) mobileDetailRouteExitTarget.style.visibility = ''
+  mobileDetailRouteExitTarget = null
+  mobileDetailRouteExitLayer?.remove()
+  mobileDetailRouteExitLayer = null
+}
+function captureMobileDetailRouteExit(post) {
+  if (!phonePortrait.value || !post) return null
+  const page = document.querySelector('.mobile-post-detail-page')
+  const stage = page?.querySelector('.mobile-post-media-stage')
+  const mediaElement = stage?.querySelector('.mobile-post-media-slide.current img, .mobile-post-media-slide.current video')
+  if (!page || !stage || !mediaElement) return null
+  cleanupMobileDetailRouteExit()
+  const pageRect = page.getBoundingClientRect()
+  const stageRect = stage.getBoundingClientRect()
+  const offsetX = mobileDetailPageDragX.value || 0
+  const offsetY = mobileDetailPageDragY.value || 0
+  const sourceRect = {
+    left: stageRect.left - offsetX,
+    top: stageRect.top - offsetY,
+    width: stageRect.width,
+    height: stageRect.height
+  }
+  const layer = document.createElement('div')
+  layer.className = `mobile-detail-route-exit-layer phone-ui${isDark.value ? ' dark' : ''}`
+  layer.setAttribute('aria-hidden', 'true')
+  layer.inert = true
+  const shell = document.createElement('div')
+  shell.className = 'mobile-detail-route-exit-shell'
+  shell.style.setProperty('--mobile-detail-exit-page-top', `${pageRect.top - offsetY}px`)
+  const pageClone = page.cloneNode(true)
+  pageClone.style.transform = 'none'
+  pageClone.style.opacity = '1'
+  pageClone.style.transition = 'none'
+  const clonedStage = pageClone.querySelector('.mobile-post-media-stage')
+  if (clonedStage) clonedStage.style.visibility = 'hidden'
+  pageClone.querySelectorAll('video').forEach(video => { video.autoplay = false; video.controls = false; video.removeAttribute('src') })
+  shell.appendChild(pageClone)
+  const media = document.createElement('div')
+  media.className = 'mobile-detail-route-exit-media'
+  Object.assign(media.style, {
+    left: `${sourceRect.left}px`,
+    top: `${sourceRect.top}px`,
+    width: `${sourceRect.width}px`,
+    height: `${sourceRect.height}px`,
+    background: window.getComputedStyle(stage).backgroundColor
+  })
+  let mediaClone
+  if (mediaElement.tagName === 'VIDEO' && mediaElement.poster) {
+    mediaClone = document.createElement('img')
+    mediaClone.src = mediaElement.poster
+    mediaClone.alt = ''
+  } else {
+    mediaClone = mediaElement.cloneNode(true)
+    if (mediaClone.tagName === 'VIDEO') {
+      mediaClone.autoplay = false
+      mediaClone.controls = false
+      mediaClone.muted = true
+    }
+  }
+  media.appendChild(mediaClone)
+  layer.append(shell, media)
+  document.body.appendChild(layer)
+  mobileDetailRouteExitLayer = layer
+  return { layer, shell, media, postId: String(post.id), sourceRect }
+}
+function findMobileDetailReturnTarget(postId) {
+  const card = [...document.querySelectorAll('.masonry-card[data-post-id], .post-card[data-post-id]')].find(element => element.dataset.postId === String(postId))
+  if (!card) return null
+  const element = card.querySelector('.masonry-cover, .media-grid') || card
+  const rect = element.getBoundingClientRect()
+  if (!rect.width || !rect.height) return null
+  return { element, rect, borderRadius: window.getComputedStyle(element).borderRadius || '9px' }
+}
+function runMobileDetailRouteExit(snapshot) {
+  if (!snapshot?.layer?.isConnected) return
+  let attempts = 0
+  const animate = () => {
+    if (!snapshot.layer.isConnected) return
+    const foundTarget = findMobileDetailReturnTarget(snapshot.postId)
+    const storedTarget = mobilePostOriginVisual?.postId === snapshot.postId ? mobilePostOriginVisual : null
+    if (!foundTarget && !storedTarget && attempts < 14) {
+      attempts += 1
+      window.requestAnimationFrame(animate)
+      return
+    }
+    const targetRect = foundTarget?.rect || storedTarget?.rect || snapshot.sourceRect
+    const targetRadius = foundTarget?.borderRadius || storedTarget?.borderRadius || '9px'
+    const translateX = targetRect.left - snapshot.sourceRect.left
+    const translateY = targetRect.top - snapshot.sourceRect.top
+    const scaleX = targetRect.width / Math.max(1, snapshot.sourceRect.width)
+    const scaleY = targetRect.height / Math.max(1, snapshot.sourceRect.height)
+    if (foundTarget?.element) {
+      mobileDetailRouteExitTarget = foundTarget.element
+      foundTarget.element.style.visibility = 'hidden'
+    }
+    if (typeof snapshot.media.animate !== 'function' || typeof snapshot.shell.animate !== 'function') {
+      cleanupMobileDetailRouteExit()
+      return
+    }
+    const easing = 'cubic-bezier(.18,.82,.22,1)'
+    const shellAnimation = snapshot.shell.animate([
+      { opacity: 1, transform: 'scale(1)' },
+      { opacity: .88, transform: 'scale(.997)', offset: .22 },
+      { opacity: 0, transform: 'scale(.992)' }
+    ], { duration: 300, easing, fill: 'forwards' })
+    const mediaAnimation = snapshot.media.animate([
+      { transform: 'translate3d(0,0,0) scale(1,1)', borderRadius: '0px', boxShadow: '0 0 0 rgba(0,0,0,0)' },
+      { transform: `translate3d(${translateX}px,${translateY}px,0) scale(${scaleX},${scaleY})`, borderRadius: targetRadius, boxShadow: '0 10px 28px rgba(0,0,0,.18)' }
+    ], { duration: 420, easing, fill: 'forwards' })
+    Promise.allSettled([shellAnimation.finished, mediaAnimation.finished]).then(() => {
+      cleanupMobileDetailRouteExit()
+    })
+  }
+  nextTick(() => window.requestAnimationFrame(() => window.requestAnimationFrame(animate)))
 }
 function closePostDetail() {
   if (phonePortrait.value && window.location.pathname.startsWith('/post/') && window.history.state?.lumicMobileDetail) {
@@ -2963,16 +3099,45 @@ function setPostCard(post, element, layout = 'list') {
   measurePostElement(post, element, layout)
   postResizeObserver?.observe(element)
 }
-function updateMasonryMetrics() {
+function updateMasonryMetrics(measuredWidth = 0) {
   if (!isMasonryView.value || !feedListElement.value) return
-  const availableWidth = Math.max(0, feedListElement.value.clientWidth)
+  const availableWidth = Math.max(0, Number(measuredWidth) || feedListElement.value.getBoundingClientRect().width || feedListElement.value.clientWidth)
   if (!availableWidth) return
   const gap = phonePortrait.value ? 8 : 14
   const count = phonePortrait.value ? 2 : Math.min(5, Math.max(3, Math.floor((availableWidth + gap) / (252 + gap))))
   const width = Math.max(0, (availableWidth - gap * (count - 1)) / count)
+  const widthChanged = Math.abs(masonryColumnWidth.value - width) > 0.5
+  const countChanged = masonryColumnCount.value !== count
+  if (widthChanged || countChanged) {
+    masonryHeights.value = {}
+    masonryColumnAssignments.clear()
+  }
   if (masonryGap.value !== gap) masonryGap.value = gap
-  if (masonryColumnCount.value !== count) masonryColumnCount.value = count
-  if (Math.abs(masonryColumnWidth.value - width) > 0.5) masonryColumnWidth.value = width
+  if (countChanged) masonryColumnCount.value = count
+  if (widthChanged) masonryColumnWidth.value = width
+  masonryMetricsReady.value = true
+}
+function scheduleMasonryMetrics(measuredWidth = 0) {
+  if (measuredWidth > 0) pendingMasonryWidth = measuredWidth
+  if (masonryMetricsFrame) return
+  masonryMetricsFrame = window.requestAnimationFrame(() => {
+    masonryMetricsFrame = 0
+    const width = pendingMasonryWidth
+    pendingMasonryWidth = 0
+    updateMasonryMetrics(width)
+  })
+}
+function initializeFeedListResizeObserver() {
+  feedListResizeObserver = new ResizeObserver(entries => {
+    const current = feedListElement.value
+    for (const entry of entries) {
+      if (entry.target === current) scheduleMasonryMetrics(entry.contentRect.width)
+    }
+  })
+  if (feedListElement.value) {
+    feedListResizeObserver.observe(feedListElement.value)
+    scheduleMasonryMetrics()
+  }
 }
 function updateFeedListDocumentTop() {
   if (!feedListElement.value) {
@@ -3046,7 +3211,7 @@ function resetTimelineWindow() {
   masonryColumnAssignments.clear()
   masonryAssignmentColumnCount = 0
   feedListTopValid = false
-  nextTick(() => { updateFeedListDocumentTop(); updateMasonryMetrics(); scheduleTimelineWindow() })
+  nextTick(() => { updateFeedListDocumentTop(); scheduleMasonryMetrics(); scheduleTimelineWindow() })
 }
 function isPhonePortraitScreen() {
   return window.matchMedia('(max-width: 760px)').matches
@@ -3054,6 +3219,7 @@ function isPhonePortraitScreen() {
 function updatePhonePortrait() {
   const nextPhonePortrait = isPhonePortraitScreen()
   if (phonePortrait.value === nextPhonePortrait) return
+  masonryMetricsReady.value = false
   phonePortrait.value = nextPhonePortrait
   mobileControlsVisible.value = true
   mobileMenuOpen.value = false
@@ -3137,13 +3303,18 @@ function handlePopState() {
   const returningFromAuthor = phonePortrait.value && Boolean(authorProfile.value && mobileAuthorDetailState.value)
   const leavingDetail = phonePortrait.value && Boolean(masonryDetailPost.value)
   const departingDetailPost = masonryDetailPost.value
+  const returningToTimeline = leavingDetail && !window.location.pathname.startsWith('/post/') && !window.location.pathname.startsWith('/author/')
+  const detailRouteExit = returningToTimeline ? captureMobileDetailRouteExit(departingDetailPost) : null
   if (returningFromAuthor) mobileAuthorDetailState.value.authorScrollY = mobileAuthorScrollY
   if (returningFromAuthor && window.location.pathname.startsWith('/post/')) startMobileDetailReturnHandoff()
-  if (leavingDetail && !window.location.pathname.startsWith('/post/') && !window.location.pathname.startsWith('/author/')) startMobileTimelineReturnHandoff(departingDetailPost)
+  if (returningToTimeline && !detailRouteExit) startMobileTimelineReturnHandoff(departingDetailPost)
   applyRoute()
   resetMobileAuthorPageSwipe()
   if (returningFromAuthor && window.location.pathname.startsWith('/post/') && mobileAuthorDetailState.value) restoreMobileScroll(mobileAuthorDetailState.value.detailScrollY)
-  else if (leavingDetail && !window.location.pathname.startsWith('/post/') && !window.location.pathname.startsWith('/author/')) restoreMobileScroll(mobilePostReturnScrollY.value)
+  else if (returningToTimeline) {
+    restoreMobileScroll(mobilePostReturnScrollY.value)
+    if (detailRouteExit) runMobileDetailRouteExit(detailRouteExit)
+  }
 }
 function applyRoute() {
   resetMobileDetailPageSwipe()
@@ -3225,6 +3396,16 @@ async function checkSession(refreshData = true) {
 }
 watch(filteredPosts, resetTimelineWindow)
 watch(posts, prunePostCaches)
+watch(feedListElement, (element, previous) => {
+  if (previous) feedListResizeObserver?.unobserve(previous)
+  if (!element) {
+    masonryMetricsReady.value = false
+    return
+  }
+  feedListResizeObserver?.observe(element)
+  if (isMasonryView.value) masonryMetricsReady.value = false
+  nextTick(() => scheduleMasonryMetrics())
+}, { flush: 'post' })
 watch(feeds, () => { subscriptionPage.value = Math.min(Math.max(1, subscriptionPage.value), subscriptionPageCount.value) })
 watch(subscriptionPageCount, count => { subscriptionPage.value = Math.min(Math.max(1, subscriptionPage.value), count) })
 watch(phoneOverlayKey, next => {
@@ -3252,8 +3433,8 @@ watch(platformCards, cards => {
   if (!selectedPlatform.value) return
   selectedPlatform.value = cards.find(platform => platform.key === selectedPlatform.value.key) || null
 })
-onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; timelineView.value = localStorage.getItem('lumic-timeline-view') === 'masonry' ? 'masonry' : 'list'; loadRememberedLogin(); document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#080a0e' : '#fbf7ea'); phonePortraitQuery = window.matchMedia('(max-width: 760px)'); phonePortrait.value = isPhonePortraitScreen(); phonePortraitQuery.addEventListener('change', updatePhonePortrait); window.addEventListener('orientationchange', updatePhonePortrait); document.addEventListener('pointerover', useRoundedTooltip, true); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = postById.value.get(String(entry.target.dataset.postId)); const borderBox = Array.isArray(entry.borderBoxSize) ? entry.borderBoxSize[0] : entry.borderBoxSize; if (post) measurePostElement(post, entry.target, entry.target.dataset.layout || 'list', borderBox?.blockSize || entry.contentRect.height) }; scheduleTimelineWindow() }); applyRoute(); if (phonePortrait.value && window.location.pathname === '/') openPhoneDefaultTimeline(); ensurePhoneExitBoundary(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', handlePopState); window.addEventListener('scroll', handleWindowScroll, { passive: true }); window.addEventListener('resize', handleWindowResize); scheduleTimelineWindow(); if (phonePortrait.value) showMobileControls() })
-onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLoop(); if (sessionPollTimer) window.clearInterval(sessionPollTimer); if (mobileControlsTimer) window.clearTimeout(mobileControlsTimer); if (mobileAuthorHandoffTimer) window.clearTimeout(mobileAuthorHandoffTimer); if (mobileDetailReturnHandoffTimer) window.clearTimeout(mobileDetailReturnHandoffTimer); if (mobileTimelineReturnHandoffTimer) window.clearTimeout(mobileTimelineReturnHandoffTimer); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); window.removeEventListener('orientationchange', updatePhonePortrait); document.removeEventListener('pointerover', useRoundedTooltip, true); postResizeObserver?.disconnect(); observedPostElements.clear(); preloadedPreviewUrls.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); clearMobileDetailAnimation(); resetMobileDetailPageSwipe(); lightboxHistoryActive = false; resetLightboxState(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', handlePopState); window.removeEventListener('scroll', handleWindowScroll); window.removeEventListener('resize', handleWindowResize); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
+onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; timelineView.value = localStorage.getItem('lumic-timeline-view') === 'masonry' ? 'masonry' : 'list'; loadRememberedLogin(); document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#080a0e' : '#fbf7ea'); phonePortraitQuery = window.matchMedia('(max-width: 760px)'); phonePortrait.value = isPhonePortraitScreen(); phonePortraitQuery.addEventListener('change', updatePhonePortrait); window.addEventListener('orientationchange', updatePhonePortrait); document.addEventListener('pointerover', useRoundedTooltip, true); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = postById.value.get(String(entry.target.dataset.postId)); const borderBox = Array.isArray(entry.borderBoxSize) ? entry.borderBoxSize[0] : entry.borderBoxSize; if (post) measurePostElement(post, entry.target, entry.target.dataset.layout || 'list', borderBox?.blockSize || entry.contentRect.height) }; scheduleTimelineWindow() }); initializeFeedListResizeObserver(); applyRoute(); if (phonePortrait.value && window.location.pathname === '/') openPhoneDefaultTimeline(); ensurePhoneExitBoundary(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', handlePopState); window.addEventListener('scroll', handleWindowScroll, { passive: true }); window.addEventListener('resize', handleWindowResize); scheduleTimelineWindow(); if (phonePortrait.value) showMobileControls() })
+onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLoop(); if (sessionPollTimer) window.clearInterval(sessionPollTimer); if (mobileControlsTimer) window.clearTimeout(mobileControlsTimer); if (mobileAuthorHandoffTimer) window.clearTimeout(mobileAuthorHandoffTimer); if (mobileDetailReturnHandoffTimer) window.clearTimeout(mobileDetailReturnHandoffTimer); if (mobileTimelineReturnHandoffTimer) window.clearTimeout(mobileTimelineReturnHandoffTimer); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); window.removeEventListener('orientationchange', updatePhonePortrait); document.removeEventListener('pointerover', useRoundedTooltip, true); postResizeObserver?.disconnect(); feedListResizeObserver?.disconnect(); observedPostElements.clear(); preloadedPreviewUrls.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); clearMobileDetailAnimation(); resetMobileDetailPageSwipe(); cleanupMobileDetailRouteExit(); lightboxHistoryActive = false; resetLightboxState(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', handlePopState); window.removeEventListener('scroll', handleWindowScroll); window.removeEventListener('resize', handleWindowResize); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (masonryMetricsFrame) window.cancelAnimationFrame(masonryMetricsFrame); if (confirmResolver) closeConfirmDialog(false) })
 </script>
 
 <template>
@@ -3434,7 +3615,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
 <div v-if="timelineBottomSpace" class="timeline-spacer" :style="{ height: `${timelineBottomSpace}px` }" aria-hidden="true"></div>
 </template>
 <template v-else>
-<article v-for="item in visibleMasonryItems" :key="item.post.id" :ref="element => setPostCard(item.post, element, 'masonry')" :class="['masonry-card', { selected: selectedPostIds.includes(item.post.id), selectable: selectionMode, 'text-only': !masonryCover(item.post) && !item.post.videos?.length }]" :style="masonryItemStyle(item)" :data-post-id="item.post.id" tabindex="0" @click.capture="handlePostSelectionClick($event, item.post)" @click="openMasonryPost(item.post)" @keydown.enter.prevent="openMasonryPost(item.post)" @contextmenu.stop.prevent="openContextMenu($event, item.post)">
+<article v-for="item in visibleMasonryItems" :key="item.post.id" :ref="element => setPostCard(item.post, element, 'masonry')" :class="['masonry-card', { selected: selectedPostIds.includes(item.post.id), selectable: selectionMode, 'text-only': !masonryCover(item.post) && !item.post.videos?.length }]" :style="masonryItemStyle(item)" :data-post-id="item.post.id" tabindex="0" @click.capture="handlePostSelectionClick($event, item.post)" @click="openMasonryPost(item.post, $event)" @keydown.enter.prevent="openMasonryPost(item.post, $event)" @contextmenu.stop.prevent="openContextMenu($event, item.post)">
   <label v-if="selectionMode" class="post-select-control masonry-select-control" :title="`选择 ${item.post.author} 的这条动态`" @click.prevent><input type="checkbox" :checked="selectedPostIds.includes(item.post.id)" tabindex="-1"><span></span></label>
   <div v-if="masonryCover(item.post)" class="masonry-cover">
     <img :src="previewMedia(masonryCover(item.post))" alt="" loading="lazy" decoding="async" fetchpriority="low" @load="setMasonryCoverRatio(item.post, $event, masonryCoverIsVideo(item.post))">
