@@ -101,6 +101,7 @@ a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color
 .lightbox-dock > i { width: 1px; height: 32px; margin: 0 7px; background: #ffffff24; }
 .lightbox-counter, .lightbox-scale { min-width: 47px; color: #edf2ee; font-size: 14px; text-align: center; white-space: nowrap; }
 .lightbox-scale { min-width: 52px; }
+.mobile-lightbox-menu-scrim { position: fixed; inset: 0; z-index: 6; display: block; width: 100%; height: 100%; padding: 0; background: transparent; border: 0; }
 .mobile-lightbox-menu { position: fixed; right: auto; bottom: max(14px, env(safe-area-inset-bottom)); left: 50%; z-index: 7; width: min(360px, calc(100vw - 24px)); padding: 8px; background: #17191ef2; border: 1px solid #ffffff1c; border-radius: 12px; box-shadow: 0 18px 48px #000b; transform: translateX(-50%); backdrop-filter: blur(18px); animation: mobile-lightbox-menu-in .2s cubic-bezier(.2,.8,.25,1); }
 .mobile-lightbox-menu::before { display: block; width: 34px; height: 3px; margin: 1px auto 7px; background: #ffffff38; border-radius: 999px; content: ''; }
 .mobile-lightbox-menu button { display: flex; align-items: center; justify-content: flex-start; gap: 10px; width: 100%; min-height: 50px; padding: 0 14px; color: #f3f5f7; background: transparent; border-radius: 8px; font-size: 14px; }

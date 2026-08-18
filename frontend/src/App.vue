@@ -1685,6 +1685,10 @@ function saveMobileLightboxImage() {
   mobileLightboxMenu.value = { open: false, x: 0, y: 0 }
   downloadLightboxImage()
 }
+function dismissMobileLightboxMenu() {
+  clearLightboxSingleTap()
+  mobileLightboxMenu.value = { open: false, x: 0, y: 0 }
+}
 function scheduleLightboxScaleUpdate() {
   if (typeof window === 'undefined') return
   if (lightboxScaleFrame) window.cancelAnimationFrame(lightboxScaleFrame)
@@ -3833,6 +3837,7 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
         <button type="button" title="下载原图" aria-label="下载原图" @click="downloadLightboxImage"><span class="lightbox-tool-mask lightbox-download-symbol" :style="{ '--lightbox-tool-mask': `url(${downloadLightboxIcon})` }" aria-hidden="true"></span></button>
       </div>
       </div>
+      <button v-if="phonePortrait && mobileLightboxMenu.open" class="mobile-lightbox-menu-scrim" type="button" aria-label="关闭图片操作菜单" @pointerdown.stop @pointerup.stop @click.stop="dismissMobileLightboxMenu"></button>
       <div v-if="phonePortrait && mobileLightboxMenu.open" class="mobile-lightbox-menu" role="menu" aria-label="图片操作" @pointerdown.stop @click.stop>
         <button type="button" role="menuitem" @click="saveMobileLightboxImage"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7.5 10.5 12 15l4.5-4.5M5 19v2h14v-2"/></svg><span>保存图片</span></button>
       </div>
