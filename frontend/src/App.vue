@@ -2398,10 +2398,10 @@ function resetMobileDetailPageSwipe() {
 function beginMobileDetailPageSwipe(event) {
   const touch = event.touches?.[0]
   const target = event.target
-  if (!touch || !masonryDetailPost.value || target?.closest?.('.mobile-post-media-stage, button, a, input, textarea, select, label')) return
+  if (!touch || !masonryDetailPost.value || target?.closest?.('button, a, input, textarea, select, label')) return
   if (mobileDetailPageTimer) window.clearTimeout(mobileDetailPageTimer)
   mobileDetailPageTimer = 0
-  mobileDetailPageTouch = { x: touch.clientX, y: touch.clientY, time: event.timeStamp, axis: '', prevX: touch.clientX, prevTime: event.timeStamp, lastX: touch.clientX, lastTime: event.timeStamp }
+  mobileDetailPageTouch = { x: touch.clientX, y: touch.clientY, time: event.timeStamp, axis: '', targetIsMedia: Boolean(target?.closest?.('.mobile-post-media-stage')), prevX: touch.clientX, prevTime: event.timeStamp, lastX: touch.clientX, lastTime: event.timeStamp }
   mobileDetailPageDragging.value = false
   mobileDetailPageAnimating.value = false
 }
@@ -2413,6 +2413,7 @@ function updateMobileDetailPageSwipe(event) {
   if (!mobileDetailPageTouch.axis && Math.max(Math.abs(dx), Math.abs(dy)) > 9) {
     mobileDetailPageTouch.axis = Math.abs(dx) > Math.abs(dy) * 1.12 ? 'horizontal' : 'vertical'
   }
+  if (mobileDetailPageTouch.targetIsMedia && mobileDetailPageTouch.axis === 'horizontal') return
   if (mobileDetailPageTouch.axis !== 'horizontal') return
   event.preventDefault()
   mobileDetailPageDragging.value = true
@@ -2432,6 +2433,12 @@ function finishMobileDetailPageSwipe(event) {
   const velocityDuration = Math.max(1, mobileDetailPageTouch.lastTime - mobileDetailPageTouch.prevTime)
   const velocityX = (mobileDetailPageTouch.lastX - mobileDetailPageTouch.prevX) / velocityDuration
   mobileDetailPageTouch = null
+  if (touchState.targetIsMedia && horizontal) {
+    mobileDetailPageDragging.value = false
+    mobileDetailPageAnimating.value = false
+    mobileDetailPageDragX.value = 0
+    return
+  }
   mobileDetailPageDragging.value = false
   mobileDetailPageAnimating.value = true
   const threshold = Math.min(112, window.innerWidth * .28)
