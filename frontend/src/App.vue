@@ -1573,7 +1573,10 @@ function scheduleLightboxScaleUpdate() {
 }
 function currentLightboxImage() {
   const candidates = Array.isArray(lightboxImageElement.value) ? lightboxImageElement.value : [lightboxImageElement.value]
-  return candidates.find(image => image?.closest?.('.mobile-lightbox-slide.current')) || candidates.find(Boolean) || null
+  return candidates.find(image => image?.closest?.('.mobile-lightbox-slide.current'))
+    || candidates.find(Boolean)
+    || document.querySelector('.mobile-lightbox-slide.current .mobile-lightbox-preview')
+    || null
 }
 function lightboxBaseScale() {
   const image = currentLightboxImage()
@@ -1644,13 +1647,25 @@ function startMobileLightboxInertia(velocityX, velocityY) {
     const bounds = mobileLightboxBounds()
     lightbox.value.x += vx * elapsed
     lightbox.value.y += vy * elapsed
-    if (lightbox.value.x > bounds.x || lightbox.value.x < -bounds.x) vx *= .62
-    if (lightbox.value.y > bounds.y || lightbox.value.y < -bounds.y) vy *= .62
-    lightbox.value.x = dampBeyond(lightbox.value.x, bounds.x, .2)
-    lightbox.value.y = dampBeyond(lightbox.value.y, bounds.y, .2)
-    vx *= .92
-    vy *= .92
-    if (Math.hypot(vx, vy) < .035) {
+    const settleAxis = (value, velocity, limit) => {
+      if (limit <= 0) return { value: value * .72, velocity: velocity * .72 }
+      if (value > limit) {
+        const excess = value - limit
+        return { value: limit + excess * .22, velocity: -Math.abs(velocity) * .12 - excess * .018 }
+      }
+      if (value < -limit) {
+        const excess = value + limit
+        return { value: -limit + excess * .22, velocity: Math.abs(velocity) * .12 - excess * .018 }
+      }
+      return { value, velocity }
+    }
+    const settledX = settleAxis(lightbox.value.x, vx, bounds.x)
+    const settledY = settleAxis(lightbox.value.y, vy, bounds.y)
+    lightbox.value.x = settledX.value
+    lightbox.value.y = settledY.value
+    vx = settledX.velocity * Math.pow(.91, elapsed / 16)
+    vy = settledY.velocity * Math.pow(.91, elapsed / 16)
+    if (Math.hypot(vx, vy) < .025 && Math.abs(lightbox.value.x) <= bounds.x + .8 && Math.abs(lightbox.value.y) <= bounds.y + .8) {
       mobileLightboxInertiaFrame = 0
       settleMobileLightboxPan()
       return
@@ -1866,7 +1881,7 @@ function stopLightboxGesture(event) {
     mobileLightboxExitY.value = 0
     scheduleTransient(() => { mobileLightboxExitAnimating.value = false }, 280)
   } else if (phonePortrait.value && wasSinglePan && !lightboxGestureHadPinch) {
-    snapMobileLightboxTrack()
+    if (mobileLightboxDragX.value) snapMobileLightboxTrack()
     startMobileLightboxInertia(velocityX, velocityY)
   }
 
