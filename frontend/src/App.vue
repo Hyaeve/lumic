@@ -156,11 +156,16 @@ const estimatedPostHeight = 560
 const timelineOverscan = 5
 let phonePortraitQuery = null
 let timelineFrame = 0
+let feedListDocumentTop = 0
+let feedListTopValid = false
+let mobileAuthorScrollY = 0
+let mobileControlsLastActivity = 0
 let masonryAssignmentColumnCount = 0
 let postResizeObserver = null
 let sessionPollTimer = null
 const observedPostElements = new Map()
 const masonryColumnAssignments = new Map()
+const preloadedPreviewUrls = new Set()
 const transientTimers = new Set()
 const lightbox = ref({ open: false, media: [], index: 0, author: '', scale: 1, rotation: 0, fit: true, x: 0, y: 0, dragging: false, motion: 'enter' })
 const lightboxImageElement = ref(null)
@@ -432,6 +437,7 @@ const filteredPosts = computed(() => {
     return timelineSort.value === 'newest' ? difference : -difference
   })
 })
+const postById = computed(() => new Map(posts.value.map(post => [String(post.id), post])))
 const effectiveTimelineView = computed(() => timelineView.value)
 const isMasonryView = computed(() => effectiveTimelineView.value === 'masonry')
 const mobileDetailTimelineIndex = computed(() => {
@@ -520,8 +526,16 @@ const visibleMasonryItems = computed(() => {
 const masonryFeedStyle = computed(() => isMasonryView.value && filteredPosts.value.length ? { height: `${Math.ceil(masonryLayout.value.height)}px` } : undefined)
 const loadedSelectionPosts = computed(() => isMasonryView.value ? visibleMasonryItems.value.map(item => item.post) : visiblePosts.value)
 const allLoadedPostsSelected = computed(() => loadedSelectionPosts.value.length > 0 && loadedSelectionPosts.value.every(post => selectedPostIds.value.includes(post.id)))
-const timelineTopSpace = computed(() => filteredPosts.value.slice(0, timelineStart.value).reduce((height, post) => height + (timelineHeights.value[post.id] || estimatedPostHeight) + 15, 0))
-const timelineBottomSpace = computed(() => filteredPosts.value.slice(timelineEnd.value).reduce((height, post) => height + (timelineHeights.value[post.id] || estimatedPostHeight) + 15, 0))
+const timelineOffsets = computed(() => {
+  const offsets = [0]
+  for (const post of filteredPosts.value) offsets.push(offsets[offsets.length - 1] + (timelineHeights.value[post.id] || estimatedPostHeight) + 15)
+  return offsets
+})
+const timelineTopSpace = computed(() => timelineOffsets.value[Math.min(timelineStart.value, timelineOffsets.value.length - 1)] || 0)
+const timelineBottomSpace = computed(() => {
+  const offsets = timelineOffsets.value
+  return Math.max(0, offsets[offsets.length - 1] - (offsets[Math.min(timelineEnd.value, offsets.length - 1)] || 0))
+})
 const authorProfile = computed(() => {
   if (!selectedAuthor.value) return null
   const authorPosts = selectedAuthor.value.feedId
@@ -1990,7 +2004,8 @@ function releaseTimelineSearchFocus() {
   timelineSearchFocused.value = false
 }
 function handleWindowResize() {
-  scheduleTimelineWindow()
+  feedListTopValid = false
+  nextTick(() => { updateFeedListDocumentTop(); updateMasonryMetrics(); scheduleTimelineWindow() })
   if (lightbox.value.open) scheduleLightboxScaleUpdate()
 }
 function handleGlobalKeydown(event) {
@@ -2320,6 +2335,7 @@ function openMobileDetailAuthor(post) {
     : { post, authorPath, authorScrollY: 0, detailScrollY: 0 }
   state.detailScrollY = window.scrollY
   mobileAuthorDetailState.value = state
+  mobileAuthorScrollY = state.authorScrollY
   openAuthorPage(post.author, post.source, post.avatar, '', true)
   restoreMobileScroll(state.authorScrollY)
 }
@@ -2485,9 +2501,14 @@ function preloadMobileDetailPost(post) {
   if (!post) return
   const cover = masonryCover(post) || primaryVideo(post)?.poster
   if (!cover) return
+  const url = previewMedia(cover)
+  if (!url || preloadedPreviewUrls.has(url)) return
+  if (preloadedPreviewUrls.size >= 240) preloadedPreviewUrls.clear()
+  preloadedPreviewUrls.add(url)
   const image = new Image()
   image.decoding = 'async'
-  image.src = previewMedia(cover)
+  image.fetchPriority = 'low'
+  image.src = url
 }
 function mobileDetailPreviewMedia(post) {
   return postDetailMedia(post)[0] || null
@@ -2719,7 +2740,7 @@ function finishMobileAuthorPageSwipe(event) {
   const threshold = Math.min(112, window.innerWidth * .28)
   const fastReturn = dx > 36 && velocityX > .78
   if (!cancelled && horizontal && (dx > threshold || fastReturn)) {
-    if (mobileAuthorDetailState.value) mobileAuthorDetailState.value.authorScrollY = window.scrollY
+    if (mobileAuthorDetailState.value) mobileAuthorDetailState.value.authorScrollY = mobileAuthorScrollY
     mobileAuthorPageDragX.value = window.innerWidth
     mobileAuthorPageTimer = window.setTimeout(() => {
       mobileAuthorPageTimer = 0
@@ -2831,9 +2852,9 @@ function masonryMediaPending(element) {
   const video = element.querySelector('.masonry-cover video')
   return Boolean(video && video.readyState < 1)
 }
-function measurePostElement(post, element, layout = element?.dataset.layout || 'list') {
+function measurePostElement(post, element, layout = element?.dataset.layout || 'list', measuredHeight = 0) {
   if (layout === 'masonry' && masonryMediaPending(element)) return
-  const height = Math.ceil(element.getBoundingClientRect().height)
+  const height = Math.ceil(measuredHeight || element.getBoundingClientRect().height)
   const heights = layout === 'masonry' ? masonryHeights : timelineHeights
   const previousHeight = heights.value[post.id]
   if (height > 0 && (!previousHeight || Math.abs(previousHeight - height) > 1)) heights.value[post.id] = height
@@ -2865,33 +2886,40 @@ function updateMasonryMetrics() {
   if (masonryColumnCount.value !== count) masonryColumnCount.value = count
   if (Math.abs(masonryColumnWidth.value - width) > 0.5) masonryColumnWidth.value = width
 }
+function updateFeedListDocumentTop() {
+  if (!feedListElement.value) {
+    feedListDocumentTop = 0
+    feedListTopValid = false
+    return
+  }
+  feedListDocumentTop = feedListElement.value.getBoundingClientRect().top + window.scrollY
+  feedListTopValid = true
+}
+function timelineOffsetIndex(offsets, target) {
+  let low = 0
+  let high = offsets.length
+  while (low < high) {
+    const middle = (low + high) >>> 1
+    if (offsets[middle] < target) low = middle + 1
+    else high = middle
+  }
+  return low
+}
 function updateTimelineWindow() {
   timelineFrame = 0
   showScrollTop.value = isTimelinePage.value && window.scrollY > Math.min(360, Math.max(150, window.innerHeight * .32))
   if (!filteredPosts.value.length || showSettings.value || activeNav.value === 'pulls') return
+  if (!feedListTopValid) updateFeedListDocumentTop()
   if (isMasonryView.value) {
-    updateMasonryMetrics()
-    const listTop = feedListElement.value?.getBoundingClientRect().top + window.scrollY || 0
-    masonryViewportTop.value = Math.max(0, window.scrollY - listTop)
+    masonryViewportTop.value = Math.max(0, window.scrollY - feedListDocumentTop)
     masonryViewportBottom.value = masonryViewportTop.value + window.innerHeight
     return
   }
-  const listTop = feedListElement.value?.getBoundingClientRect().top + window.scrollY || 0
-  const viewportTop = Math.max(0, window.scrollY - listTop)
+  const viewportTop = Math.max(0, window.scrollY - feedListDocumentTop)
   const viewportBottom = viewportTop + window.innerHeight
-  let offset = 0
-  let first = 0
-  let last = filteredPosts.value.length
-  for (let index = 0; index < filteredPosts.value.length; index++) {
-    const height = (timelineHeights.value[filteredPosts.value[index].id] || estimatedPostHeight) + 15
-    if (offset + height >= viewportTop) { first = index; break }
-    offset += height
-  }
-  let visibleOffset = offset
-  for (let index = first; index < filteredPosts.value.length; index++) {
-    visibleOffset += (timelineHeights.value[filteredPosts.value[index].id] || estimatedPostHeight) + 15
-    if (visibleOffset >= viewportBottom) { last = index + 1; break }
-  }
+  const offsets = timelineOffsets.value
+  const first = Math.max(0, Math.min(filteredPosts.value.length - 1, timelineOffsetIndex(offsets, viewportTop) - 1))
+  const last = Math.max(first + 1, Math.min(filteredPosts.value.length, timelineOffsetIndex(offsets, viewportBottom)))
   const overscan = phonePortrait.value ? 2 : timelineOverscan
   timelineStart.value = Math.max(0, first - overscan)
   timelineEnd.value = Math.min(filteredPosts.value.length, last + overscan)
@@ -2899,17 +2927,23 @@ function updateTimelineWindow() {
 function scheduleTimelineWindow() {
   if (!timelineFrame) timelineFrame = window.requestAnimationFrame(updateTimelineWindow)
 }
+function hideMobileControlsAfterIdle() {
+  mobileControlsTimer = 0
+  const remaining = 2200 - (performance.now() - mobileControlsLastActivity)
+  if (remaining > 0) {
+    mobileControlsTimer = window.setTimeout(hideMobileControlsAfterIdle, remaining)
+    return
+  }
+  if (!mobileMenuOpen.value && !mobileSourcesOpen.value) mobileControlsVisible.value = false
+}
 function showMobileControls() {
   if (!phonePortrait.value || lightbox.value.open || masonryDetailPost.value) return
+  mobileControlsLastActivity = performance.now()
   mobileControlsVisible.value = true
-  if (mobileControlsTimer) window.clearTimeout(mobileControlsTimer)
-  mobileControlsTimer = window.setTimeout(() => {
-    mobileControlsTimer = 0
-    if (!mobileMenuOpen.value && !mobileSourcesOpen.value) mobileControlsVisible.value = false
-  }, 2200)
+  if (!mobileControlsTimer) mobileControlsTimer = window.setTimeout(hideMobileControlsAfterIdle, 2200)
 }
 function handleWindowScroll() {
-  if (phonePortrait.value && authorProfile.value && mobileAuthorDetailState.value) mobileAuthorDetailState.value.authorScrollY = window.scrollY
+  if (phonePortrait.value && authorProfile.value && mobileAuthorDetailState.value) mobileAuthorScrollY = window.scrollY
   showMobileControls()
   scheduleTimelineWindow()
 }
@@ -2923,7 +2957,8 @@ function resetTimelineWindow() {
   masonryViewportBottom.value = typeof window === 'undefined' ? 900 : window.innerHeight
   masonryColumnAssignments.clear()
   masonryAssignmentColumnCount = 0
-  nextTick(() => { updateMasonryMetrics(); scheduleTimelineWindow() })
+  feedListTopValid = false
+  nextTick(() => { updateFeedListDocumentTop(); updateMasonryMetrics(); scheduleTimelineWindow() })
 }
 function isPhonePortraitScreen() {
   return window.matchMedia('(max-width: 760px)').matches
@@ -3009,6 +3044,7 @@ function handlePopState() {
     closeLightbox(true)
     return
   }
+  if (phonePortrait.value && authorProfile.value && mobileAuthorDetailState.value) mobileAuthorDetailState.value.authorScrollY = mobileAuthorScrollY
   applyRoute()
 }
 function applyRoute() {
@@ -3118,8 +3154,8 @@ watch(platformCards, cards => {
   if (!selectedPlatform.value) return
   selectedPlatform.value = cards.find(platform => platform.key === selectedPlatform.value.key) || null
 })
-onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; timelineView.value = localStorage.getItem('lumic-timeline-view') === 'masonry' ? 'masonry' : 'list'; loadRememberedLogin(); document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#080a0e' : '#fbf7ea'); phonePortraitQuery = window.matchMedia('(max-width: 760px)'); phonePortrait.value = isPhonePortraitScreen(); phonePortraitQuery.addEventListener('change', updatePhonePortrait); window.addEventListener('orientationchange', updatePhonePortrait); document.addEventListener('pointerover', useRoundedTooltip, true); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = filteredPosts.value.find(item => String(item.id) === entry.target.dataset.postId); if (post) measurePostElement(post, entry.target) }; scheduleTimelineWindow() }); applyRoute(); if (phonePortrait.value && window.location.pathname === '/') openPhoneDefaultTimeline(); ensurePhoneExitBoundary(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', handlePopState); window.addEventListener('scroll', handleWindowScroll, { passive: true }); window.addEventListener('resize', handleWindowResize); scheduleTimelineWindow(); if (phonePortrait.value) showMobileControls() })
-onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLoop(); if (sessionPollTimer) window.clearInterval(sessionPollTimer); if (mobileControlsTimer) window.clearTimeout(mobileControlsTimer); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); window.removeEventListener('orientationchange', updatePhonePortrait); document.removeEventListener('pointerover', useRoundedTooltip, true); postResizeObserver?.disconnect(); observedPostElements.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); clearMobileDetailAnimation(); resetMobileDetailPageSwipe(); lightboxHistoryActive = false; resetLightboxState(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', handlePopState); window.removeEventListener('scroll', handleWindowScroll); window.removeEventListener('resize', handleWindowResize); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
+onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; timelineView.value = localStorage.getItem('lumic-timeline-view') === 'masonry' ? 'masonry' : 'list'; loadRememberedLogin(); document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#080a0e' : '#fbf7ea'); phonePortraitQuery = window.matchMedia('(max-width: 760px)'); phonePortrait.value = isPhonePortraitScreen(); phonePortraitQuery.addEventListener('change', updatePhonePortrait); window.addEventListener('orientationchange', updatePhonePortrait); document.addEventListener('pointerover', useRoundedTooltip, true); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = postById.value.get(String(entry.target.dataset.postId)); const borderBox = Array.isArray(entry.borderBoxSize) ? entry.borderBoxSize[0] : entry.borderBoxSize; if (post) measurePostElement(post, entry.target, entry.target.dataset.layout || 'list', borderBox?.blockSize || entry.contentRect.height) }; scheduleTimelineWindow() }); applyRoute(); if (phonePortrait.value && window.location.pathname === '/') openPhoneDefaultTimeline(); ensurePhoneExitBoundary(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', handlePopState); window.addEventListener('scroll', handleWindowScroll, { passive: true }); window.addEventListener('resize', handleWindowResize); scheduleTimelineWindow(); if (phonePortrait.value) showMobileControls() })
+onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLoop(); if (sessionPollTimer) window.clearInterval(sessionPollTimer); if (mobileControlsTimer) window.clearTimeout(mobileControlsTimer); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); window.removeEventListener('orientationchange', updatePhonePortrait); document.removeEventListener('pointerover', useRoundedTooltip, true); postResizeObserver?.disconnect(); observedPostElements.clear(); preloadedPreviewUrls.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); clearMobileDetailAnimation(); resetMobileDetailPageSwipe(); lightboxHistoryActive = false; resetLightboxState(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', handlePopState); window.removeEventListener('scroll', handleWindowScroll); window.removeEventListener('resize', handleWindowResize); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (confirmResolver) closeConfirmDialog(false) })
 </script>
 
 <template>
@@ -3307,7 +3343,8 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
     <span v-if="masonryPostHasVideo(item.post)" class="masonry-video-mark" aria-label="视频动态"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 7 8 5-8 5Z"/></svg></span>
   </div>
   <div v-else-if="primaryVideo(item.post)" class="masonry-cover masonry-video-cover">
-    <video :src="videoPreviewSource(primaryVideo(item.post))" muted playsinline preload="metadata" aria-label="视频封面" @loadedmetadata="setMasonryCoverRatio(item.post, $event, true)"></video>
+    <img v-if="primaryVideo(item.post).poster" :src="previewMedia(primaryVideo(item.post).poster)" alt="视频封面" loading="lazy" decoding="async" fetchpriority="low" @load="setMasonryCoverRatio(item.post, $event, true)">
+    <video v-else :src="videoPreviewSource(primaryVideo(item.post))" muted playsinline preload="metadata" aria-label="视频封面" @loadedmetadata="setMasonryCoverRatio(item.post, $event, true)"></video>
     <span class="masonry-video-mark" aria-label="视频动态"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 7 8 5-8 5Z"/></svg></span>
   </div>
   <div class="masonry-card-body">
@@ -3355,12 +3392,12 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
     <aside v-if="phonePortrait && masonryDetailPost" class="mobile-author-swipe-preview" :style="mobileAuthorPreviewStyle" aria-hidden="true">
       <header><img :src="postAvatar(masonryDetailPost)" alt=""><div><strong>{{ masonryDetailPost.author }}</strong><small>{{ sourceMeta[masonryDetailPost.source].label }} · {{ authorProfile?.count || mobileAuthorPreviewPosts.length }} 条已拉取动态</small></div><span :class="['source-pill', sourceMeta[masonryDetailPost.source].color]"><img class="source-icon" :src="sourceIconFor(masonryDetailPost.source)" alt="">{{ sourceMeta[masonryDetailPost.source].label }}</span></header>
       <div class="mobile-author-preview-toolbar"><span>全部</span><i></i><i></i><label><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><b>搜索</b></label></div>
-      <div class="mobile-author-preview-grid"><article v-for="post in mobileAuthorPreviewPosts" :key="post.id"><img v-if="mobileDetailPreviewCover(post)" :src="previewMedia(mobileDetailPreviewCover(post))" alt=""><p v-else>{{ post.caption || '动态内容' }}</p></article></div>
+      <div class="mobile-author-preview-grid"><article v-for="post in mobileAuthorPreviewPosts" :key="post.id"><img v-if="mobileDetailPreviewCover(post)" :src="previewMedia(mobileDetailPreviewCover(post))" alt="" loading="eager" decoding="async" fetchpriority="low"><p v-else>{{ post.caption || '动态内容' }}</p></article></div>
     </aside>
     <aside v-if="phonePortrait && masonryDetailPost" class="mobile-return-swipe-preview" :style="mobileReturnPreviewStyle" aria-hidden="true">
       <header><div><small>SAVED MOMENTS</small><strong>{{ mobileTimelineTitle }}</strong></div><span :class="['source-pill', sourceMeta[masonryDetailPost.source].color]"><img class="source-icon" :src="sourceIconFor(masonryDetailPost.source)" alt="">{{ sourceMeta[masonryDetailPost.source].label }}</span></header>
       <div class="mobile-author-preview-toolbar"><span>全部</span><i></i><i></i><label><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><b>搜索</b></label></div>
-      <div class="mobile-author-preview-grid"><article v-for="post in mobileReturnPreviewPosts" :key="post.id"><img v-if="mobileDetailPreviewCover(post)" :src="previewMedia(mobileDetailPreviewCover(post))" alt=""><p v-else>{{ post.caption || '动态内容' }}</p></article></div>
+      <div class="mobile-author-preview-grid"><article v-for="post in mobileReturnPreviewPosts" :key="post.id"><img v-if="mobileDetailPreviewCover(post)" :src="previewMedia(mobileDetailPreviewCover(post))" alt="" loading="eager" decoding="async" fetchpriority="low"><p v-else>{{ post.caption || '动态内容' }}</p></article></div>
     </aside>
     <aside v-if="phonePortrait && masonryDetailPost && mobileDetailPreviousPost" class="mobile-detail-vertical-preview previous" :style="mobilePreviousDetailPreviewStyle" aria-hidden="true">
       <header class="mobile-post-detail-head">
@@ -3369,8 +3406,8 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
         <span :class="['source-pill', 'mobile-post-source', sourceMeta[mobileDetailPreviousPost.source].color]"><img class="source-icon" :src="sourceIconFor(mobileDetailPreviousPost.source)" alt="">{{ sourceMeta[mobileDetailPreviousPost.source].label }}</span>
       </header>
       <section v-if="mobileDetailPreviewMedia(mobileDetailPreviousPost)" :class="['mobile-detail-preview-media', { 'video-media': mobileDetailPreviewMedia(mobileDetailPreviousPost).type === 'video' }]" :style="mobileDetailPreviewMedia(mobileDetailPreviousPost).type === 'video' ? postVideoFrameStyle(mobileDetailPreviousPost) : undefined">
-        <img v-if="mobileDetailPreviewMedia(mobileDetailPreviousPost).type === 'image'" :src="previewMedia(mobileDetailPreviewMedia(mobileDetailPreviousPost).src)" alt="" decoding="async">
-        <img v-else-if="mobileDetailPreviewMedia(mobileDetailPreviousPost).poster" :src="previewMedia(mobileDetailPreviewMedia(mobileDetailPreviousPost).poster)" alt="" decoding="async">
+        <img v-if="mobileDetailPreviewMedia(mobileDetailPreviousPost).type === 'image'" :src="previewMedia(mobileDetailPreviewMedia(mobileDetailPreviousPost).src)" alt="" loading="eager" decoding="async" fetchpriority="low">
+        <img v-else-if="mobileDetailPreviewMedia(mobileDetailPreviousPost).poster" :src="previewMedia(mobileDetailPreviewMedia(mobileDetailPreviousPost).poster)" alt="" loading="eager" decoding="async" fetchpriority="low">
         <span v-else class="mobile-detail-preview-video-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m9 7 8 5-8 5Z"/></svg></span>
       </section>
       <section class="mobile-post-copy"><p v-if="mobileDetailPreviousPost.caption" class="caption">{{ mobileDetailPreviousPost.caption }}</p><div v-if="mobileDetailPreviousPost.tags?.length" class="tag-row"><span v-for="tag in mobileDetailPreviousPost.tags" :key="tag">#{{ tag }}</span></div></section>
@@ -3383,8 +3420,8 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
         <span :class="['source-pill', 'mobile-post-source', sourceMeta[mobileDetailNextPost.source].color]"><img class="source-icon" :src="sourceIconFor(mobileDetailNextPost.source)" alt="">{{ sourceMeta[mobileDetailNextPost.source].label }}</span>
       </header>
       <section v-if="mobileDetailPreviewMedia(mobileDetailNextPost)" :class="['mobile-detail-preview-media', { 'video-media': mobileDetailPreviewMedia(mobileDetailNextPost).type === 'video' }]" :style="mobileDetailPreviewMedia(mobileDetailNextPost).type === 'video' ? postVideoFrameStyle(mobileDetailNextPost) : undefined">
-        <img v-if="mobileDetailPreviewMedia(mobileDetailNextPost).type === 'image'" :src="previewMedia(mobileDetailPreviewMedia(mobileDetailNextPost).src)" alt="" decoding="async">
-        <img v-else-if="mobileDetailPreviewMedia(mobileDetailNextPost).poster" :src="previewMedia(mobileDetailPreviewMedia(mobileDetailNextPost).poster)" alt="" decoding="async">
+        <img v-if="mobileDetailPreviewMedia(mobileDetailNextPost).type === 'image'" :src="previewMedia(mobileDetailPreviewMedia(mobileDetailNextPost).src)" alt="" loading="eager" decoding="async" fetchpriority="low">
+        <img v-else-if="mobileDetailPreviewMedia(mobileDetailNextPost).poster" :src="previewMedia(mobileDetailPreviewMedia(mobileDetailNextPost).poster)" alt="" loading="eager" decoding="async" fetchpriority="low">
         <span v-else class="mobile-detail-preview-video-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m9 7 8 5-8 5Z"/></svg></span>
       </section>
       <section class="mobile-post-copy"><p v-if="mobileDetailNextPost.caption" class="caption">{{ mobileDetailNextPost.caption }}</p><div v-if="mobileDetailNextPost.tags?.length" class="tag-row"><span v-for="tag in mobileDetailNextPost.tags" :key="tag">#{{ tag }}</span></div></section>
@@ -3399,8 +3436,8 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
       <section v-if="mobileDetailCurrentMedia" :class="['mobile-post-media-stage', { 'video-media': mobileDetailCurrentMedia.type === 'video' }, mobileDetailCurrentMedia.type === 'video' ? postVideoFrameClass(masonryDetailPost) : '']" :style="mobileDetailCurrentMedia.type === 'video' ? postVideoFrameStyle(masonryDetailPost) : undefined" @pointerdown.stop="beginMobileDetailSwipe" @pointermove.stop="updateMobileDetailSwipe" @pointerup.stop="finishMobileDetailSwipe" @pointercancel.stop="cancelMobileDetailSwipe">
         <div class="mobile-post-media-track" :style="mobileDetailTrackStyle">
           <div v-for="slide in mobileDetailSlides" :key="`${slide.position}:${slide.media.key}`" :class="['mobile-post-media-slide', { current: slide.position === 0 }]">
-            <img v-if="slide.media.type === 'image'" :src="previewMedia(slide.media.src)" :alt="`${masonryDetailPost.author} 的第 ${slide.index + 1} 张图片`" loading="eager" decoding="async" @click="slide.position === 0 && openMobileDetailImage()">
-            <video v-else :src="slide.media.src" :poster="slide.media.poster ? previewMedia(slide.media.poster) : undefined" :controls="slide.position === 0" playsinline :autoplay="slide.position === 0" muted preload="auto" @loadedmetadata="slide.position === 0 && setPostVideoRatio(masonryDetailPost, $event)"></video>
+            <img v-if="slide.media.type === 'image'" :src="previewMedia(slide.media.src)" :alt="`${masonryDetailPost.author} 的第 ${slide.index + 1} 张图片`" :loading="slide.position === 0 ? 'eager' : 'lazy'" decoding="async" :fetchpriority="slide.position === 0 ? 'high' : 'low'" @click="slide.position === 0 && openMobileDetailImage()">
+            <video v-else :src="slide.media.src" :poster="slide.media.poster ? previewMedia(slide.media.poster) : undefined" :controls="slide.position === 0" playsinline :autoplay="slide.position === 0" muted :preload="slide.position === 0 ? 'metadata' : 'none'" @loadedmetadata="slide.position === 0 && setPostVideoRatio(masonryDetailPost, $event)"></video>
           </div>
         </div>
         <div v-if="mobileDetailMedia.length > 1" class="mobile-post-media-dots" aria-label="媒体分页"><button v-for="(media, index) in mobileDetailMedia" :key="media.key" type="button" :class="{ active: index === mobileDetailIndex }" :aria-label="`查看第 ${index + 1} 项媒体`" @click="selectMobileDetailMedia(index)"></button></div>
