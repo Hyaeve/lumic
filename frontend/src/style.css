@@ -1568,20 +1568,20 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control {
     --mobile-frosted-surface: linear-gradient(145deg, rgba(255, 255, 255, .22), rgba(255, 244, 220, .08) 55%, rgba(155, 125, 81, .10));
     color: #52606c;
-    background: rgba(245, 236, 218, .52)!important;
+    background: rgba(241, 233, 219, .66)!important;
     border: 0!important;
     box-shadow: 0 9px 24px rgba(70, 52, 31, .18), inset 0 0 16px rgba(255, 255, 255, .10)!important;
-    backdrop-filter: blur(28px) saturate(138%) contrast(.94);
-    -webkit-backdrop-filter: blur(28px) saturate(138%) contrast(.94);
+    backdrop-filter: blur(34px) saturate(138%) contrast(.94);
+    -webkit-backdrop-filter: blur(34px) saturate(138%) contrast(.94);
   }
   .phone-ui.dark :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control {
     --mobile-frosted-surface: linear-gradient(145deg, rgba(190, 204, 238, .14), rgba(86, 98, 132, .07) 50%, rgba(4, 7, 14, .15));
     color: #e9effd;
-    background: rgba(25, 30, 43, .62)!important;
+    background: rgba(22, 27, 40, .72)!important;
     border: 0!important;
     box-shadow: 0 11px 28px rgba(0, 0, 0, .46), 0 0 18px rgba(102, 126, 192, .13), inset 0 0 16px rgba(188, 202, 238, .07)!important;
-    backdrop-filter: blur(30px) saturate(132%) contrast(.96);
-    -webkit-backdrop-filter: blur(30px) saturate(132%) contrast(.96);
+    backdrop-filter: blur(36px) saturate(132%) contrast(.96);
+    -webkit-backdrop-filter: blur(36px) saturate(132%) contrast(.96);
   }
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control::before {
     background: var(--mobile-frosted-surface)!important;
@@ -1594,6 +1594,20 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
     background: radial-gradient(circle at 24% 12%, rgba(255, 255, 255, .22), transparent 44%)!important;
     border: 0!important;
     border-radius: inherit;
+  }
+  .phone-ui :is(.mobile-timeline-toggle.mobile-frosted-control, .mobile-source-shortcuts) .sidebar-source-icon {
+    filter: grayscale(1) brightness(0) invert(1) opacity(.94) drop-shadow(0 1px 2px rgba(39, 43, 52, .34))!important;
+  }
+  .phone-ui :is(.mobile-timeline-toggle.mobile-frosted-control, .mobile-source-shortcuts) .nav-mask-symbol {
+    color: #f4f6fb!important;
+    filter: drop-shadow(0 1px 2px rgba(39, 43, 52, .34));
+  }
+  .phone-ui.dark :is(.mobile-timeline-toggle.mobile-frosted-control, .mobile-source-shortcuts) .sidebar-source-icon {
+    filter: grayscale(1) brightness(0) invert(1) opacity(.98) drop-shadow(0 0 4px rgba(211, 224, 255, .56))!important;
+  }
+  .phone-ui.dark :is(.mobile-timeline-toggle.mobile-frosted-control, .mobile-source-shortcuts) .nav-mask-symbol {
+    color: #f4f7ff!important;
+    filter: drop-shadow(0 0 4px rgba(211, 224, 255, .56));
   }
 }
 
