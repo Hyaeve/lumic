@@ -370,6 +370,26 @@ const mobileReturnPreviewStyle = computed(() => {
     transition: mobileDetailPageDragging.value ? 'none' : mobileDetailPageAnimating.value ? 'transform .32s cubic-bezier(.16,.88,.22,1)' : 'none'
   }
 })
+const mobilePreviousDetailPreviewStyle = computed(() => {
+  const height = typeof window === 'undefined' ? 844 : Math.max(1, window.innerHeight)
+  const dragY = Math.max(0, mobileDetailPageDragY.value)
+  const progress = Math.min(1, dragY / height)
+  return {
+    opacity: String(.82 + progress * .18),
+    transform: `translate3d(0, ${-height + dragY}px, 0) scale(${.985 + progress * .015})`,
+    transition: mobileDetailPageDragging.value ? 'none' : mobileDetailPageAnimating.value ? `transform ${mobileDetailPageTransitionMs.value}ms cubic-bezier(.16,.86,.2,1), opacity ${Math.min(280, mobileDetailPageTransitionMs.value)}ms ease` : 'none'
+  }
+})
+const mobileNextDetailPreviewStyle = computed(() => {
+  const height = typeof window === 'undefined' ? 844 : Math.max(1, window.innerHeight)
+  const dragY = Math.min(0, mobileDetailPageDragY.value)
+  const progress = Math.min(1, Math.abs(dragY) / height)
+  return {
+    opacity: String(.82 + progress * .18),
+    transform: `translate3d(0, ${height + dragY}px, 0) scale(${.985 + progress * .015})`,
+    transition: mobileDetailPageDragging.value ? 'none' : mobileDetailPageAnimating.value ? `transform ${mobileDetailPageTransitionMs.value}ms cubic-bezier(.16,.86,.2,1), opacity ${Math.min(280, mobileDetailPageTransitionMs.value)}ms ease` : 'none'
+  }
+})
 const mobileAuthorPageStyle = computed(() => {
   const width = typeof window === 'undefined' ? 390 : Math.max(1, window.innerWidth)
   const progress = Math.min(1, Math.max(0, mobileAuthorPageDragX.value) / width)
@@ -2469,30 +2489,29 @@ function preloadMobileDetailPost(post) {
   image.decoding = 'async'
   image.src = previewMedia(cover)
 }
+function mobileDetailPreviewMedia(post) {
+  return postDetailMedia(post)[0] || null
+}
+function mobileDetailPreviewCover(post) {
+  const media = mobileDetailPreviewMedia(post)
+  return media?.type === 'image' ? media.src : (media?.poster || '')
+}
 function switchMobileDetailPost(post, step) {
   if (!post) return
+  mobileDetailPageAnimating.value = false
+  mobileDetailPageDragging.value = false
   masonryDetailPost.value = post
   mobileDetailIndex.value = 0
   resetMobileDetailTrack()
   pendingPostId.value = ''
   updateRoute(`/post/${encodeURIComponent(post.id)}`, true)
   window.scrollTo({ top: 0, behavior: 'auto' })
-  mobileDetailPageDragging.value = false
-  mobileDetailPageAnimating.value = false
   mobileDetailPageDragX.value = 0
-  mobileDetailPageDragY.value = step > 0 ? window.innerHeight : -window.innerHeight
-  mobileDetailPageTransitionMs.value = 340
+  mobileDetailPageDragY.value = 0
   nextTick(() => {
     window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        mobileDetailPageAnimating.value = true
-        mobileDetailPageDragY.value = 0
-        mobileDetailPageTimer = window.setTimeout(() => {
-          mobileDetailPageTimer = 0
-          resetMobileDetailPageSwipe()
-          mobileDetailSwipeClickBlocked = false
-        }, 340)
-      })
+      resetMobileDetailPageSwipe()
+      mobileDetailSwipeClickBlocked = false
     })
   })
 }
@@ -2540,6 +2559,8 @@ function beginMobileDetailPageSwipe(event) {
   mobileDetailPageTransitionMs.value = 320
   preloadMobileDetailPost(mobileDetailPreviousPost.value)
   preloadMobileDetailPost(mobileDetailNextPost.value)
+  mobileAuthorPreviewPosts.value.forEach(preloadMobileDetailPost)
+  mobileReturnPreviewPosts.value.forEach(preloadMobileDetailPost)
 }
 function updateMobileDetailPageSwipe(event) {
   const touch = mobileGesturePoint(event)
@@ -2610,8 +2631,8 @@ function finishMobileDetailPageSwipe(event) {
   mobileDetailPageDragging.value = false
   mobileDetailPageAnimating.value = true
   if (!cancelled && touchState.verticalActive) {
-    const threshold = Math.min(138, window.innerHeight * .17)
-    const fastVertical = Math.abs(dy) > 38 && Math.abs(velocityY) > .68
+    const threshold = Math.min(196, window.innerHeight * .24)
+    const fastVertical = Math.abs(dy) > 64 && Math.abs(velocityY) > .82
     const step = dy < 0 ? 1 : -1
     if ((Math.abs(dy) >= threshold || fastVertical) && commitMobileDetailVerticalSwipe(step, velocityY)) return
     mobileDetailPageDragY.value = 0
@@ -3334,12 +3355,40 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
     <aside v-if="phonePortrait && masonryDetailPost" class="mobile-author-swipe-preview" :style="mobileAuthorPreviewStyle" aria-hidden="true">
       <header><img :src="postAvatar(masonryDetailPost)" alt=""><div><strong>{{ masonryDetailPost.author }}</strong><small>{{ sourceMeta[masonryDetailPost.source].label }} · {{ authorProfile?.count || mobileAuthorPreviewPosts.length }} 条已拉取动态</small></div><span :class="['source-pill', sourceMeta[masonryDetailPost.source].color]"><img class="source-icon" :src="sourceIconFor(masonryDetailPost.source)" alt="">{{ sourceMeta[masonryDetailPost.source].label }}</span></header>
       <div class="mobile-author-preview-toolbar"><span>全部</span><i></i><i></i><label><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><b>搜索</b></label></div>
-      <div class="mobile-author-preview-grid"><article v-for="post in mobileAuthorPreviewPosts" :key="post.id"><img v-if="masonryCover(post)" :src="previewMedia(masonryCover(post))" alt=""><p v-else>{{ post.caption || '动态内容' }}</p></article></div>
+      <div class="mobile-author-preview-grid"><article v-for="post in mobileAuthorPreviewPosts" :key="post.id"><img v-if="mobileDetailPreviewCover(post)" :src="previewMedia(mobileDetailPreviewCover(post))" alt=""><p v-else>{{ post.caption || '动态内容' }}</p></article></div>
     </aside>
     <aside v-if="phonePortrait && masonryDetailPost" class="mobile-return-swipe-preview" :style="mobileReturnPreviewStyle" aria-hidden="true">
       <header><div><small>SAVED MOMENTS</small><strong>{{ mobileTimelineTitle }}</strong></div><span :class="['source-pill', sourceMeta[masonryDetailPost.source].color]"><img class="source-icon" :src="sourceIconFor(masonryDetailPost.source)" alt="">{{ sourceMeta[masonryDetailPost.source].label }}</span></header>
       <div class="mobile-author-preview-toolbar"><span>全部</span><i></i><i></i><label><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><b>搜索</b></label></div>
-      <div class="mobile-author-preview-grid"><article v-for="post in mobileReturnPreviewPosts" :key="post.id"><img v-if="masonryCover(post)" :src="previewMedia(masonryCover(post))" alt=""><p v-else>{{ post.caption || '动态内容' }}</p></article></div>
+      <div class="mobile-author-preview-grid"><article v-for="post in mobileReturnPreviewPosts" :key="post.id"><img v-if="mobileDetailPreviewCover(post)" :src="previewMedia(mobileDetailPreviewCover(post))" alt=""><p v-else>{{ post.caption || '动态内容' }}</p></article></div>
+    </aside>
+    <aside v-if="phonePortrait && masonryDetailPost && mobileDetailPreviousPost" class="mobile-detail-vertical-preview previous" :style="mobilePreviousDetailPreviewStyle" aria-hidden="true">
+      <header class="mobile-post-detail-head">
+        <span class="mobile-detail-preview-back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg></span>
+        <div class="mobile-post-author"><img :src="postAvatar(mobileDetailPreviousPost)" alt="" referrerpolicy="no-referrer"><strong>{{ mobileDetailPreviousPost.author }}</strong></div>
+        <span :class="['source-pill', 'mobile-post-source', sourceMeta[mobileDetailPreviousPost.source].color]"><img class="source-icon" :src="sourceIconFor(mobileDetailPreviousPost.source)" alt="">{{ sourceMeta[mobileDetailPreviousPost.source].label }}</span>
+      </header>
+      <section v-if="mobileDetailPreviewMedia(mobileDetailPreviousPost)" :class="['mobile-detail-preview-media', { 'video-media': mobileDetailPreviewMedia(mobileDetailPreviousPost).type === 'video' }]" :style="mobileDetailPreviewMedia(mobileDetailPreviousPost).type === 'video' ? postVideoFrameStyle(mobileDetailPreviousPost) : undefined">
+        <img v-if="mobileDetailPreviewMedia(mobileDetailPreviousPost).type === 'image'" :src="previewMedia(mobileDetailPreviewMedia(mobileDetailPreviousPost).src)" alt="" decoding="async">
+        <img v-else-if="mobileDetailPreviewMedia(mobileDetailPreviousPost).poster" :src="previewMedia(mobileDetailPreviewMedia(mobileDetailPreviousPost).poster)" alt="" decoding="async">
+        <span v-else class="mobile-detail-preview-video-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m9 7 8 5-8 5Z"/></svg></span>
+      </section>
+      <section class="mobile-post-copy"><p v-if="mobileDetailPreviousPost.caption" class="caption">{{ mobileDetailPreviousPost.caption }}</p><div v-if="mobileDetailPreviousPost.tags?.length" class="tag-row"><span v-for="tag in mobileDetailPreviousPost.tags" :key="tag">#{{ tag }}</span></div></section>
+      <footer class="mobile-post-detail-foot"><time :datetime="mobileDetailPreviousPost.published">{{ postDateTime(mobileDetailPreviousPost.published) }}</time><div class="mobile-detail-preview-actions"><i></i><i></i></div></footer>
+    </aside>
+    <aside v-if="phonePortrait && masonryDetailPost && mobileDetailNextPost" class="mobile-detail-vertical-preview next" :style="mobileNextDetailPreviewStyle" aria-hidden="true">
+      <header class="mobile-post-detail-head">
+        <span class="mobile-detail-preview-back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg></span>
+        <div class="mobile-post-author"><img :src="postAvatar(mobileDetailNextPost)" alt="" referrerpolicy="no-referrer"><strong>{{ mobileDetailNextPost.author }}</strong></div>
+        <span :class="['source-pill', 'mobile-post-source', sourceMeta[mobileDetailNextPost.source].color]"><img class="source-icon" :src="sourceIconFor(mobileDetailNextPost.source)" alt="">{{ sourceMeta[mobileDetailNextPost.source].label }}</span>
+      </header>
+      <section v-if="mobileDetailPreviewMedia(mobileDetailNextPost)" :class="['mobile-detail-preview-media', { 'video-media': mobileDetailPreviewMedia(mobileDetailNextPost).type === 'video' }]" :style="mobileDetailPreviewMedia(mobileDetailNextPost).type === 'video' ? postVideoFrameStyle(mobileDetailNextPost) : undefined">
+        <img v-if="mobileDetailPreviewMedia(mobileDetailNextPost).type === 'image'" :src="previewMedia(mobileDetailPreviewMedia(mobileDetailNextPost).src)" alt="" decoding="async">
+        <img v-else-if="mobileDetailPreviewMedia(mobileDetailNextPost).poster" :src="previewMedia(mobileDetailPreviewMedia(mobileDetailNextPost).poster)" alt="" decoding="async">
+        <span v-else class="mobile-detail-preview-video-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m9 7 8 5-8 5Z"/></svg></span>
+      </section>
+      <section class="mobile-post-copy"><p v-if="mobileDetailNextPost.caption" class="caption">{{ mobileDetailNextPost.caption }}</p><div v-if="mobileDetailNextPost.tags?.length" class="tag-row"><span v-for="tag in mobileDetailNextPost.tags" :key="tag">#{{ tag }}</span></div></section>
+      <footer class="mobile-post-detail-foot"><time :datetime="mobileDetailNextPost.published">{{ postDateTime(mobileDetailNextPost.published) }}</time><div class="mobile-detail-preview-actions"><i></i><i></i></div></footer>
     </aside>
     <main v-if="phonePortrait && masonryDetailPost" :class="['content', 'mobile-post-detail-page', { 'page-dragging': mobileDetailPageDragging }]" :style="mobileDetailPageStyle" @touchstart="beginMobileDetailPageSwipe" @touchmove="updateMobileDetailPageSwipe" @touchend="finishMobileDetailPageSwipe" @touchcancel="finishMobileDetailPageSwipe">
       <header class="mobile-post-detail-head">
