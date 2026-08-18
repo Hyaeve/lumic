@@ -1623,18 +1623,28 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
     -webkit-backdrop-filter: blur(16px) saturate(116%) contrast(.99);
   }
   .phone-ui .mobile-timeline-toggle.mobile-frosted-control {
-    --mobile-frosted-surface: linear-gradient(145deg, rgba(255, 255, 255, .20), rgba(255, 255, 255, .07) 56%, rgba(255, 255, 255, .02));
-    background: rgba(255, 255, 255, .16)!important;
-    box-shadow: 0 11px 28px rgba(38, 40, 45, .18), inset 0 0 18px rgba(255, 255, 255, .12)!important;
-    backdrop-filter: blur(72px) saturate(138%) contrast(.88);
-    -webkit-backdrop-filter: blur(72px) saturate(138%) contrast(.88);
+    --mobile-frosted-surface: linear-gradient(145deg, rgba(255, 255, 255, .27), rgba(255, 255, 255, .12) 56%, rgba(255, 255, 255, .05));
+    background: rgba(255, 255, 255, .20)!important;
+    box-shadow: 0 11px 28px rgba(38, 40, 45, .18), inset 0 0 20px rgba(255, 255, 255, .15)!important;
+    backdrop-filter: blur(96px) saturate(122%) brightness(1.05) contrast(.86);
+    -webkit-backdrop-filter: blur(96px) saturate(122%) brightness(1.05) contrast(.86);
   }
   .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control {
-    --mobile-frosted-surface: linear-gradient(145deg, rgba(255, 255, 255, .16), rgba(255, 255, 255, .055) 54%, rgba(255, 255, 255, .015));
-    background: rgba(255, 255, 255, .10)!important;
-    box-shadow: 0 13px 32px rgba(0, 0, 0, .38), inset 0 0 18px rgba(255, 255, 255, .08)!important;
-    backdrop-filter: blur(76px) saturate(136%) contrast(.89);
-    -webkit-backdrop-filter: blur(76px) saturate(136%) contrast(.89);
+    --mobile-frosted-surface: linear-gradient(145deg, rgba(255, 255, 255, .22), rgba(255, 255, 255, .10) 54%, rgba(255, 255, 255, .04));
+    background: rgba(255, 255, 255, .16)!important;
+    box-shadow: 0 13px 32px rgba(0, 0, 0, .38), inset 0 0 20px rgba(255, 255, 255, .12)!important;
+    backdrop-filter: blur(104px) saturate(120%) brightness(1.08) contrast(.86);
+    -webkit-backdrop-filter: blur(104px) saturate(120%) brightness(1.08) contrast(.86);
+  }
+  .phone-ui .mobile-timeline-toggle.mobile-frosted-control::before {
+    inset: -14px;
+    border-radius: 18px;
+    backdrop-filter: blur(96px) saturate(122%) brightness(1.05) contrast(.86)!important;
+    -webkit-backdrop-filter: blur(96px) saturate(122%) brightness(1.05) contrast(.86)!important;
+  }
+  .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control::before {
+    backdrop-filter: blur(104px) saturate(120%) brightness(1.08) contrast(.86)!important;
+    -webkit-backdrop-filter: blur(104px) saturate(120%) brightness(1.08) contrast(.86)!important;
   }
 }
 
