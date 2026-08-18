@@ -63,8 +63,8 @@ a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color
 .mobile-lightbox-track { position: absolute; inset: 0; display: flex; width: 100%; min-width: 0; max-width: 100%; height: 100%; align-items: stretch; will-change: transform; }
 .mobile-lightbox-slide { position: relative; display: grid; width: 100%; height: 100%; min-width: 100%; flex: 0 0 100%; place-items: center; overflow: hidden; }
 .mobile-lightbox-slide img { max-width: 96vw; max-height: 96dvh; }
-.mobile-lightbox-media-frame { position: relative; width: 96vw; height: 96dvh; transform-origin: center; }
-.mobile-lightbox-media-frame :is(.mobile-lightbox-preview, .mobile-lightbox-original) { position: absolute; inset: 0; z-index: 0; display: block; width: auto; height: auto; max-width: 100%; max-height: 100%; margin: auto; }
+.mobile-lightbox-media-frame { position: relative; width: 96vw; height: 96dvh; contain: layout paint; transform-origin: center; }
+.mobile-lightbox-media-frame :is(.mobile-lightbox-preview, .mobile-lightbox-original) { position: absolute; inset: 0; z-index: 0; display: block; width: 100%!important; height: 100%!important; max-width: 100%; max-height: 100%; margin: 0; object-fit: contain; object-position: center; backface-visibility: hidden; transform: translateZ(0); }
 .mobile-lightbox-media-frame .mobile-lightbox-original { z-index: 1!important; opacity: 0; pointer-events: none; }
 .mobile-lightbox-original.original-loaded { opacity: 1; }
 .mobile-lightbox-slide:not(.current) img { opacity: .92; transform: scale(.985); }
@@ -72,9 +72,10 @@ a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color
 .mobile-lightbox-dots.visible { opacity: 1; transform: translate(-50%, 0); }
 .mobile-lightbox-dots i { width: 5px; height: 5px; background: #ffffff70; border-radius: 50%; transition: width .18s ease, background .18s ease; }
 .mobile-lightbox-dots i.active { width: 14px; background: #f2d483; border-radius: 999px; box-shadow: 0 0 7px #f2d48380; }
-.lightbox-close { position: fixed; top: 8px; right: 8px; z-index: 20; display: grid; place-items: center; width: 70px; height: 70px; padding: 0; color: #fff; background: transparent; border: 0; border-radius: 0; opacity: 0; pointer-events: auto; transition: opacity .18s ease; }
-.lightbox-close-symbol { width: 21px; height: 21px; filter: drop-shadow(0 2px 8px #000b); transition: transform .18s ease, opacity .18s ease; }
-.lightbox-close.pointer-visible, .lightbox-close:focus-visible, .lightbox-close:hover { opacity: 1; }
+.lightbox-close-hotspot { position: fixed; top: 0; right: 0; z-index: 20; display: grid; width: 76px; height: 76px; place-items: center; }
+.lightbox-close { display: grid; width: 48px; height: 48px; place-items: center; padding: 0; color: #fff; background: transparent; border: 0; border-radius: 50%; opacity: 0; pointer-events: none; transition: opacity .16s ease; }
+.lightbox-close-symbol { width: 19px; height: 19px; filter: drop-shadow(0 2px 8px #000b); transition: transform .18s ease, opacity .18s ease; }
+.lightbox-close-hotspot:hover .lightbox-close, .lightbox-close.pointer-visible, .lightbox-close:focus-visible { opacity: 1; pointer-events: auto; }
 .lightbox-close:hover .lightbox-close-symbol, .lightbox-close:focus-visible .lightbox-close-symbol { opacity: .88; transform: scale(1.08); }
 .lightbox-edge-nav { position: fixed; top: 0; bottom: 0; z-index: 6; display: grid; width: clamp(54px, 7vw, 108px); place-items: center; padding: 0; color: #f6f8fb; background: transparent; border: 0; opacity: 0; transition: opacity .18s ease, background .18s ease; }
 .lightbox-edge-nav.previous { left: 0; }
@@ -120,6 +121,7 @@ a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color
 @keyframes mobile-lightbox-content-in { from { opacity: .96; } to { opacity: 1; } }
 @keyframes mobile-lightbox-content-out { from { opacity: 1; transform: translate3d(0, 0, 0) scale(1); filter: blur(0); } 38% { opacity: .92; transform: translate3d(0, 5px, 0) scale(.97); filter: blur(0); } to { opacity: 0; transform: translate3d(0, 22px, 0) scale(.89); filter: blur(1.4px); } }
 .phone-ui .lightbox-layer { padding: 0; background: #090c1292; backdrop-filter: blur(14px) saturate(.92); -webkit-backdrop-filter: blur(14px) saturate(.92); }
+.phone-ui.lightbox-active > :is(.sidebar, .content, .settings-page, .add-fab, .masonry-detail-backdrop) { filter: none; }
 .phone-ui .lightbox-layer.mobile-entering { animation: none; }
 .phone-ui .lightbox-layer.closing { animation: mobile-lightbox-layer-out .3s cubic-bezier(.28,.76,.26,1) both; }
 .phone-ui .lightbox-layer.mobile-entering:not(.mobile-exit-dragging) .mobile-lightbox-carousel { animation: none; }
@@ -1560,10 +1562,16 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
   .phone-ui.dark .mobile-frosted-control::after { background: linear-gradient(145deg, #f2f5ff36 0%, #dfe7ff12 43%, transparent 68%)!important; border-color: #edf2ff24; }
   .phone-ui .mobile-frosted-control.open { box-shadow: 0 10px 28px #3e2e1d2b, inset 0 1px 0 #ffffffad, inset 0 -1px 0 #8060391f!important; }
   .phone-ui.dark .mobile-frosted-control.open { box-shadow: 0 12px 30px #0008, inset 0 1px 0 #eff3ff4d, inset 0 -1px 0 #0102074d!important; }
-  .phone-ui .mobile-timeline-toggle.mobile-frosted-control { --mobile-frosted-surface: linear-gradient(135deg, rgba(255, 255, 255, .18) 0%, rgba(255, 240, 218, .12) 54%, rgba(229, 198, 164, .16) 100%); background: rgba(255, 247, 232, .12)!important; backdrop-filter: blur(90px) saturate(195%) brightness(1.14); -webkit-backdrop-filter: blur(90px) saturate(195%) brightness(1.14); }
-  .phone-ui .mobile-timeline-toggle.mobile-frosted-control::before { background: linear-gradient(135deg, rgba(255, 255, 255, .22) 0%, rgba(255, 240, 218, .14) 54%, rgba(229, 198, 164, .18) 100%)!important; backdrop-filter: blur(90px) saturate(195%) brightness(1.14); -webkit-backdrop-filter: blur(90px) saturate(195%) brightness(1.14); }
-  .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control { --mobile-frosted-surface: linear-gradient(135deg, rgba(68, 77, 102, .24) 0%, rgba(28, 34, 49, .20) 52%, rgba(14, 18, 29, .24) 100%); background: rgba(13, 17, 28, .24)!important; backdrop-filter: blur(90px) saturate(185%) brightness(1.18); -webkit-backdrop-filter: blur(90px) saturate(185%) brightness(1.18); }
-  .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control::before { background: linear-gradient(135deg, rgba(68, 77, 102, .28) 0%, rgba(28, 34, 49, .24) 52%, rgba(14, 18, 29, .28) 100%)!important; backdrop-filter: blur(90px) saturate(185%) brightness(1.18); -webkit-backdrop-filter: blur(90px) saturate(185%) brightness(1.18); }
+  .phone-ui .mobile-timeline-toggle.mobile-frosted-control { --mobile-frosted-surface: linear-gradient(135deg, rgba(255, 255, 255, .62) 0%, rgba(255, 241, 214, .48) 54%, rgba(226, 198, 159, .50) 100%); color: #4d5d70; background: rgba(255, 249, 236, .36)!important; border-color: rgba(255, 255, 255, .88)!important; box-shadow: 0 12px 30px #3e2e1d30, inset 0 1px 0 #ffffffe6, inset 0 -1px 0 #8060392c!important; backdrop-filter: blur(48px) saturate(185%) brightness(1.10); -webkit-backdrop-filter: blur(48px) saturate(185%) brightness(1.10); }
+  .phone-ui .mobile-timeline-toggle.mobile-frosted-control::before { background: linear-gradient(135deg, rgba(255, 255, 255, .66) 0%, rgba(255, 239, 211, .50) 54%, rgba(226, 198, 159, .52) 100%)!important; backdrop-filter: blur(48px) saturate(185%) brightness(1.10); -webkit-backdrop-filter: blur(48px) saturate(185%) brightness(1.10); }
+  .phone-ui .mobile-timeline-toggle.mobile-frosted-control > .sidebar-source-icon { opacity: 1; filter: grayscale(.2) saturate(1.22) contrast(1.15) brightness(.82) drop-shadow(0 1px 2px #ffffff8a); }
+  .phone-ui .mobile-timeline-toggle.mobile-frosted-control > .nav-mask-symbol { color: #4d5d70; filter: drop-shadow(0 1px 2px #ffffffa8); }
+  .phone-ui .mobile-timeline-toggle.mobile-frosted-control.active { color: #795f24; }
+  .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control { --mobile-frosted-surface: linear-gradient(135deg, rgba(74, 85, 116, .66) 0%, rgba(31, 38, 57, .62) 52%, rgba(13, 17, 28, .68) 100%); color: #edf2ff; background: rgba(14, 18, 30, .52)!important; border-color: rgba(229, 237, 255, .58)!important; box-shadow: 0 14px 34px #000b, 0 0 17px #7a93d142, inset 0 1px 0 #eff4ff66, inset 0 -1px 0 #01020778!important; backdrop-filter: blur(52px) saturate(175%) brightness(1.16); -webkit-backdrop-filter: blur(52px) saturate(175%) brightness(1.16); }
+  .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control::before { background: linear-gradient(135deg, rgba(84, 96, 132, .70) 0%, rgba(34, 43, 65, .66) 52%, rgba(12, 16, 29, .72) 100%)!important; backdrop-filter: blur(52px) saturate(175%) brightness(1.16); -webkit-backdrop-filter: blur(52px) saturate(175%) brightness(1.16); }
+  .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control > .sidebar-source-icon { opacity: 1; filter: grayscale(.12) saturate(1.28) contrast(1.22) brightness(1.46) drop-shadow(0 0 4px #cbd8ff9c); }
+  .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control > .nav-mask-symbol { color: #edf2ff; filter: drop-shadow(0 0 4px #cbd8ffb8); }
+  .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control.active { color: #f5e4a4; }
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle) { transition: opacity .3s ease, transform .34s cubic-bezier(.16,.88,.22,1), color .22s ease, background .22s ease, border-color .22s ease, box-shadow .28s ease; }
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-control-hidden { opacity: 0; pointer-events: none; transform: translateY(-12px) scale(.86); filter: blur(.4px); }
   .phone-ui .scroll-top-button.mobile-control-hidden { transform: translateY(16px) scale(.86); }
@@ -1903,7 +1911,7 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
 .mobile-post-author img { width: 38px; height: 38px; flex: none; border-radius: 50%; object-fit: cover; }
 .mobile-post-author strong { overflow: hidden; font-size: 14px; font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
 .mobile-post-source { margin-left: auto; flex: none; max-width: 108px; }
-.mobile-post-media-stage { position: relative; display: grid; place-items: center; overflow: hidden; width: 100%; min-height: 240px; max-height: 72dvh; background: #050607; overscroll-behavior: contain; touch-action: pan-y; }
+.mobile-post-media-stage { position: relative; display: grid; place-items: center; overflow: hidden; width: 100%; min-height: 240px; max-height: 72dvh; background: #050607; touch-action: pan-y; }
 .mobile-post-media-stage.video-media { aspect-ratio: var(--post-video-ratio, 16 / 9); }
 .mobile-post-media-track { display: flex; align-items: center; width: 100%; min-height: inherit; will-change: transform; backface-visibility: hidden; }
 .mobile-post-media-slide { display: grid; place-items: center; min-width: 0; flex: 0 0 100%; min-height: inherit; background: #050607; }
@@ -1956,7 +1964,7 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
   .phone-ui .masonry-media-count { top: 6px; right: 6px; min-width: 31px; height: 20px; padding: 0 5px; }
   .phone-ui .masonry-video-mark { right: 6px; bottom: 6px; width: 25px; height: 25px; }
   .phone-ui .masonry-select-control { top: 6px; right: 6px; }
-  .phone-ui .mobile-post-detail-page { width: 100%; margin: 0; padding: env(safe-area-inset-top) 0 0; overflow-x: hidden; overscroll-behavior-x: contain; touch-action: pan-y; will-change: transform, opacity; }
+  .phone-ui .mobile-post-detail-page { width: 100%; margin: 0; padding: env(safe-area-inset-top) 0 0; overflow-x: clip; overflow-y: visible; overscroll-behavior-x: contain; touch-action: pan-y; will-change: transform, opacity; }
   .phone-ui .mobile-author-detail-page { position: relative; z-index: 1; overscroll-behavior-x: contain; touch-action: pan-y; will-change: transform; }
   .phone-ui .mobile-post-detail-page.page-dragging { user-select: none; }
   .phone-ui .mobile-post-detail-head { position: sticky; top: 0; z-index: 5; gap: 4px; padding: 8px 7px 8px 4px; }

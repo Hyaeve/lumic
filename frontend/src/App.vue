@@ -1346,6 +1346,12 @@ function updateDesktopLightboxHover(event) {
   else if (event.clientX >= width - edgeWidth) desktopLightboxHoverTarget.value = 'next'
   else desktopLightboxHoverTarget.value = ''
 }
+function showDesktopLightboxClose() {
+  if (!phonePortrait.value && lightbox.value.open) desktopLightboxHoverTarget.value = 'close'
+}
+function hideDesktopLightboxClose() {
+  if (!phonePortrait.value && desktopLightboxHoverTarget.value === 'close') desktopLightboxHoverTarget.value = ''
+}
 function clearDesktopLightboxHover() {
   if (!phonePortrait.value) desktopLightboxHoverTarget.value = ''
 }
@@ -1466,7 +1472,13 @@ function prepareLightboxSource() {
 }
 function handleLightboxImageLoad() {
   if (phonePortrait.value) {
-    lightboxOriginalLoaded.value = true
+    const sequence = lightboxLoadSequence
+    // Keep one painted frame of the preview before the original fades over it.
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        if (sequence === lightboxLoadSequence && lightbox.value.open) lightboxOriginalLoaded.value = true
+      })
+    })
     return
   }
   lightboxOriginalLoaded.value = lightboxDisplaySource.value === lightbox.value.media[lightbox.value.index]
@@ -2352,8 +2364,13 @@ function openMobileDetailImage() {
   }
   openLightbox(masonryDetailPost.value, mobileDetailIndex.value)
 }
-function beginMobileDetailSwipe(event) {
+function mobileGesturePoint(event) {
   const touch = event.touches?.[0] || event.changedTouches?.[0]
+  if (touch) return touch
+  return event.pointerType === 'touch' ? event : null
+}
+function beginMobileDetailSwipe(event) {
+  const touch = mobileGesturePoint(event)
   if (!touch || mobileDetailMedia.value.length < 2) return
   if (mobileDetailAnimating.value) finishMobileDetailTransition(true)
   mobileDetailSwipeClickBlocked = false
@@ -2363,7 +2380,7 @@ function beginMobileDetailSwipe(event) {
   mobileDetailTouch = { x: touch.clientX, y: touch.clientY, time: event.timeStamp, prevX: touch.clientX, prevTime: event.timeStamp, lastX: touch.clientX, lastTime: event.timeStamp, axis: '' }
 }
 function updateMobileDetailSwipe(event) {
-  const touch = event.touches?.[0]
+  const touch = mobileGesturePoint(event)
   if (!touch || !mobileDetailTouch) return
   const deltaX = touch.clientX - mobileDetailTouch.x
   const deltaY = touch.clientY - mobileDetailTouch.y
@@ -2371,7 +2388,6 @@ function updateMobileDetailSwipe(event) {
     mobileDetailTouch.axis = Math.abs(deltaX) > Math.abs(deltaY) * 1.08 ? 'horizontal' : 'vertical'
   }
   if (mobileDetailTouch.axis !== 'horizontal') return
-  event.preventDefault()
   mobileDetailTouch.prevX = mobileDetailTouch.lastX
   mobileDetailTouch.prevTime = mobileDetailTouch.lastTime
   mobileDetailTouch.lastX = touch.clientX
@@ -2381,7 +2397,7 @@ function updateMobileDetailSwipe(event) {
   mobileDetailDragX.value = Math.max(-limit, Math.min(limit, deltaX))
 }
 function finishMobileDetailSwipe(event) {
-  const touch = event.changedTouches?.[0]
+  const touch = mobileGesturePoint(event)
   if (!touch || !mobileDetailTouch) return
   const deltaX = touch.clientX - mobileDetailTouch.x
   const deltaY = touch.clientY - mobileDetailTouch.y
@@ -2426,7 +2442,7 @@ function resetMobileDetailPageSwipe() {
   mobileDetailPageAnimating.value = false
 }
 function beginMobileDetailPageSwipe(event) {
-  const touch = event.touches?.[0]
+  const touch = mobileGesturePoint(event)
   const target = event.target
   if (!touch || !masonryDetailPost.value || target?.closest?.('button, a, input, textarea, select, label')) return
   if (mobileDetailPageTimer) window.clearTimeout(mobileDetailPageTimer)
@@ -2436,7 +2452,7 @@ function beginMobileDetailPageSwipe(event) {
   mobileDetailPageAnimating.value = false
 }
 function updateMobileDetailPageSwipe(event) {
-  const touch = event.touches?.[0]
+  const touch = mobileGesturePoint(event)
   if (!touch || !mobileDetailPageTouch) return
   const dx = touch.clientX - mobileDetailPageTouch.x
   const dy = touch.clientY - mobileDetailPageTouch.y
@@ -2445,7 +2461,6 @@ function updateMobileDetailPageSwipe(event) {
   }
   if (mobileDetailPageTouch.targetIsMedia && mobileDetailPageTouch.axis === 'horizontal') return
   if (mobileDetailPageTouch.axis !== 'horizontal') return
-  event.preventDefault()
   mobileDetailPageDragging.value = true
   mobileDetailPageTouch.prevX = mobileDetailPageTouch.lastX
   mobileDetailPageTouch.prevTime = mobileDetailPageTouch.lastTime
@@ -2454,11 +2469,11 @@ function updateMobileDetailPageSwipe(event) {
   mobileDetailPageDragX.value = dampBeyond(dx, window.innerWidth, .18)
 }
 function finishMobileDetailPageSwipe(event) {
-  const touch = event.changedTouches?.[0]
+  const touch = mobileGesturePoint(event)
   if (!touch || !mobileDetailPageTouch) return
   const touchState = mobileDetailPageTouch
   const dx = touch.clientX - touchState.x
-  const cancelled = event.type === 'touchcancel'
+  const cancelled = event.type === 'touchcancel' || event.type === 'pointercancel'
   const horizontal = mobileDetailPageTouch.axis === 'horizontal'
   const velocityDuration = Math.max(1, mobileDetailPageTouch.lastTime - mobileDetailPageTouch.prevTime)
   const velocityX = (mobileDetailPageTouch.lastX - mobileDetailPageTouch.prevX) / velocityDuration
@@ -3178,13 +3193,13 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
       <div class="mobile-author-preview-toolbar"><span>全部</span><i></i><i></i><label><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><b>搜索</b></label></div>
       <div class="mobile-author-preview-grid"><article v-for="post in mobileReturnPreviewPosts" :key="post.id"><img v-if="masonryCover(post)" :src="previewMedia(masonryCover(post))" alt=""><p v-else>{{ post.caption || '动态内容' }}</p></article></div>
     </aside>
-    <main v-if="phonePortrait && masonryDetailPost" :class="['content', 'mobile-post-detail-page', { 'page-dragging': mobileDetailPageDragging }]" :style="mobileDetailPageStyle" @touchstart.passive="beginMobileDetailPageSwipe" @touchmove="updateMobileDetailPageSwipe" @touchend.passive="finishMobileDetailPageSwipe" @touchcancel.passive="finishMobileDetailPageSwipe">
+    <main v-if="phonePortrait && masonryDetailPost" :class="['content', 'mobile-post-detail-page', { 'page-dragging': mobileDetailPageDragging }]" :style="mobileDetailPageStyle" @pointerdown="beginMobileDetailPageSwipe" @pointermove="updateMobileDetailPageSwipe" @pointerup="finishMobileDetailPageSwipe" @pointercancel="finishMobileDetailPageSwipe">
       <header class="mobile-post-detail-head">
         <button class="mobile-post-back" type="button" title="返回动态页" aria-label="返回动态页" @click="closePostDetail"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg></button>
         <button class="mobile-post-author" type="button" @click="openAuthor(masonryDetailPost)"><img :src="postAvatar(masonryDetailPost)" data-fallback-index="0" :alt="masonryDetailPost.author" referrerpolicy="no-referrer" @error="handlePostAvatarError($event, masonryDetailPost)"><strong>{{ masonryDetailPost.author }}</strong></button>
         <span :class="['source-pill', 'mobile-post-source', sourceMeta[masonryDetailPost.source].color]"><img :class="['source-icon', { 'twitter-night-icon': masonryDetailPost.source === 'twitter' && isDark }]" :src="sourceIconFor(masonryDetailPost.source)" :alt="`${sourceMeta[masonryDetailPost.source].label}图标`">{{ sourceMeta[masonryDetailPost.source].label }}</span>
       </header>
-      <section v-if="mobileDetailCurrentMedia" :class="['mobile-post-media-stage', { 'video-media': mobileDetailCurrentMedia.type === 'video' }, mobileDetailCurrentMedia.type === 'video' ? postVideoFrameClass(masonryDetailPost) : '']" :style="mobileDetailCurrentMedia.type === 'video' ? postVideoFrameStyle(masonryDetailPost) : undefined" @touchstart.passive="beginMobileDetailSwipe" @touchmove="updateMobileDetailSwipe" @touchend.passive="finishMobileDetailSwipe" @touchcancel.passive="cancelMobileDetailSwipe">
+      <section v-if="mobileDetailCurrentMedia" :class="['mobile-post-media-stage', { 'video-media': mobileDetailCurrentMedia.type === 'video' }, mobileDetailCurrentMedia.type === 'video' ? postVideoFrameClass(masonryDetailPost) : '']" :style="mobileDetailCurrentMedia.type === 'video' ? postVideoFrameStyle(masonryDetailPost) : undefined" @pointerdown.stop="beginMobileDetailSwipe" @pointermove.stop="updateMobileDetailSwipe" @pointerup.stop="finishMobileDetailSwipe" @pointercancel.stop="cancelMobileDetailSwipe">
         <div class="mobile-post-media-track" :style="mobileDetailTrackStyle">
           <div v-for="slide in mobileDetailSlides" :key="`${slide.position}:${slide.media.key}`" :class="['mobile-post-media-slide', { current: slide.position === 0 }]">
             <img v-if="slide.media.type === 'image'" :src="previewMedia(slide.media.src)" :alt="`${masonryDetailPost.author} 的第 ${slide.index + 1} 张图片`" loading="eager" decoding="async" @click="slide.position === 0 && openMobileDetailImage()">
@@ -3233,7 +3248,9 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
       <button v-else type="button" class="selection-delete-button" :disabled="!selectedPostCount || postActionBusy === 'batch-delete'" title="删除所选动态" aria-label="删除所选动态" @click="deleteSelectedPosts"><span class="action-icon-mask" :style="{ '--action-icon-mask': `url(${deleteIcon})` }" aria-hidden="true"></span><b>删除</b></button>
     </div>
     <div v-if="lightbox.open" :class="['lightbox-layer', { closing: lightboxClosing, 'mobile-entering': mobileLightboxEntering, 'mobile-exit-dragging': mobileLightboxExitDragging, 'mobile-gesture-exiting': mobileLightboxExitAnimating }]" :style="phonePortrait ? mobileLightboxLayerStyle : undefined" role="dialog" aria-modal="true" :aria-label="`${lightbox.author} 的动态媒体`" @click.self="closeLightbox" @pointermove="updateDesktopLightboxHover" @pointerleave="clearDesktopLightboxHover" @wheel.prevent="zoomLightbox">
-      <button v-if="!phonePortrait" :class="['lightbox-close', { 'pointer-visible': desktopLightboxHoverTarget === 'close' }]" type="button" aria-label="关闭大图" @click="closeLightbox"><span class="lightbox-tool-mask lightbox-close-symbol" :style="{ '--lightbox-tool-mask': `url(${closeLightboxIcon})` }" aria-hidden="true"></span></button>
+      <div v-if="!phonePortrait" class="lightbox-close-hotspot" @pointerenter="showDesktopLightboxClose" @pointerleave="hideDesktopLightboxClose">
+        <button :class="['lightbox-close', { 'pointer-visible': desktopLightboxHoverTarget === 'close' }]" type="button" aria-label="关闭大图" @click="closeLightbox"><span class="lightbox-tool-mask lightbox-close-symbol" :style="{ '--lightbox-tool-mask': `url(${closeLightboxIcon})` }" aria-hidden="true"></span></button>
+      </div>
       <button v-if="!phonePortrait" :class="['lightbox-edge-nav', 'previous', { 'edge-visible': desktopLightboxHoverTarget === 'previous', disabled: lightbox.media.length < 2 }]" type="button" :aria-disabled="lightbox.media.length < 2" aria-label="上一张" @click.stop="moveLightbox(-1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 5-7 7 7 7"/></svg></button>
       <button v-if="!phonePortrait" :class="['lightbox-edge-nav', 'next', { 'edge-visible': desktopLightboxHoverTarget === 'next', disabled: lightbox.media.length < 2 }]" type="button" :aria-disabled="lightbox.media.length < 2" aria-label="下一张" @click.stop="moveLightbox(1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"/></svg></button>
       <div :class="['lightbox-image-stage', `motion-${lightbox.motion}`, { 'mobile-original-size': phonePortrait && lightboxAtOriginalSize }]" @click.self="closeLightbox" @contextmenu.prevent>
@@ -3242,8 +3259,8 @@ onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLo
             <div v-for="slide in mobileLightboxSlides" :key="`${slide.position}:${slide.media}`" :class="['mobile-lightbox-slide', { current: slide.position === 0 }]">
               <template v-if="slide.position === 0">
                 <div :class="['mobile-lightbox-media-frame', { dragging: lightbox.dragging, 'zoom-animating': lightboxZoomAnimating, 'original-size': !lightbox.fit }]" :style="{ transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) rotate(${lightbox.rotation}deg) scale(${lightbox.scale})` }">
-                  <img class="mobile-lightbox-preview" :src="previewMedia(slide.media)" :alt="`${lightbox.author} 的动态图片 ${slide.index + 1}`" draggable="false">
-                  <img ref="lightboxImageElement" class="mobile-lightbox-original" :src="slide.media" :alt="`${lightbox.author} 的动态图片 ${slide.index + 1}`" :class="{ 'original-loaded': lightboxOriginalLoaded }" draggable="false" @load="handleLightboxImageLoad">
+                  <img class="mobile-lightbox-preview" :src="previewMedia(slide.media)" :alt="`${lightbox.author} 的动态图片 ${slide.index + 1}`" decoding="async" draggable="false">
+                  <img ref="lightboxImageElement" class="mobile-lightbox-original" :src="slide.media" :alt="`${lightbox.author} 的动态图片 ${slide.index + 1}`" :class="{ 'original-loaded': lightboxOriginalLoaded }" decoding="async" fetchpriority="high" draggable="false" @load="handleLightboxImageLoad">
                 </div>
               </template>
               <img v-else :src="slide.source" alt="" draggable="false">
