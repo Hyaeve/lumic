@@ -1384,6 +1384,12 @@ func loadStoreFile(path string) (*Store, error) {
 		if content.Feeds == nil {
 			content.Feeds = []SourceConfig{}
 		}
+		sort.SliceStable(content.Posts, func(i, j int) bool {
+			if content.Posts[i].Published.Equal(content.Posts[j].Published) {
+				return content.Posts[i].ID < content.Posts[j].ID
+			}
+			return content.Posts[i].Published.After(content.Posts[j].Published)
+		})
 		store := &Store{posts: content.Posts, feeds: content.Feeds, file: path}
 		changed, cleanupErr := store.removeLegacyEmojiImages()
 		if cleanupErr != nil {
@@ -1590,7 +1596,12 @@ func (s *Store) mergePosts(incoming []Post) (int, error) {
 	if !changed {
 		return 0, nil
 	}
-	sort.SliceStable(s.posts, func(i, j int) bool { return s.posts[i].Published.After(s.posts[j].Published) })
+	sort.SliceStable(s.posts, func(i, j int) bool {
+		if s.posts[i].Published.Equal(s.posts[j].Published) {
+			return s.posts[i].ID < s.posts[j].ID
+		}
+		return s.posts[i].Published.After(s.posts[j].Published)
+	})
 	if _, err := s.reconcileTextArchivesFor(affectedArchives); err != nil {
 		s.posts = previous
 		return 0, err

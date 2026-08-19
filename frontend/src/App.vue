@@ -234,6 +234,7 @@ let mobilePostOriginVisual = null
 let mobileDetailRouteExitLayer = null
 let mobileDetailRouteExitTarget = null
 let mobileDetailGestureReturnPending = false
+let postLoadGeneration = 0
 let mobileLightboxAnimationTimer = 0
 let mobileLightboxAnimationFrame = 0
 let mobileLightboxTransitionStep = 0
@@ -730,14 +731,63 @@ function loadRememberedLogin() {
     localStorage.removeItem('lumic-remembered-login')
   }
 }
-async function loadData() {
-  try {
-    const postResponse = await fetch('/api/posts', { cache: 'no-store' })
-    if (!postResponse.ok) throw new Error('api unavailable')
-    const payload = await postResponse.json()
-    posts.value = Array.isArray(payload) ? payload : []
+function publishPostPage(items, preserveLocalState = true) {
+  if (!preserveLocalState) {
+    posts.value = items
     resolveRoutedPost()
-  } catch { posts.value = [] }
+    return
+  }
+  const current = new Map(posts.value.map(post => [String(post.id), post]))
+  posts.value = items.map(post => {
+    const existing = current.get(String(post.id))
+    return existing ? { ...post, liked: existing.liked, favoriteExplicit: existing.favoriteExplicit ?? post.favoriteExplicit } : post
+  })
+  resolveRoutedPost()
+}
+async function loadRemainingPostPages(generation, firstPage) {
+  const loaded = [...firstPage.items]
+  let cursor = firstPage.nextCursor || ''
+  let hasMore = Boolean(firstPage.hasMore && cursor)
+  let pagesSincePublish = 0
+  while (hasMore && generation === postLoadGeneration) {
+    await new Promise(resolve => window.setTimeout(resolve, 70))
+    if (generation !== postLoadGeneration) return
+    try {
+      const response = await fetch(`/api/v1/posts?limit=100&order=newest&cursor=${encodeURIComponent(cursor)}`, { cache: 'no-store' })
+      if (!response.ok) return
+      const page = await response.json()
+      if (generation !== postLoadGeneration || !Array.isArray(page.items)) return
+      loaded.push(...page.items)
+      cursor = page.nextCursor || ''
+      hasMore = Boolean(page.hasMore && cursor)
+      pagesSincePublish += 1
+      if (pagesSincePublish >= 4 || !hasMore) {
+        publishPostPage(loaded)
+        pagesSincePublish = 0
+      }
+    } catch {
+      return
+    }
+  }
+}
+async function loadPostsIncrementally() {
+  const generation = ++postLoadGeneration
+  try {
+    const response = await fetch('/api/v1/posts?limit=100&order=newest', { cache: 'no-store' })
+    if (!response.ok) throw new Error('api unavailable')
+    const page = await response.json()
+    if (generation !== postLoadGeneration) return false
+    const items = Array.isArray(page.items) ? page.items : []
+    publishPostPage(items, false)
+    if (page.hasMore && page.nextCursor) void loadRemainingPostPages(generation, { ...page, items })
+    return true
+  } catch {
+    if (generation === postLoadGeneration) posts.value = []
+    return false
+  }
+}
+async function loadData() {
+  await loadPostsIncrementally()
   await Promise.all([loadFeeds(), loadProjectSettings()])
 }
 async function loadProjectSettings() {
@@ -1328,6 +1378,7 @@ async function syncSource(feed, full = false) {
       const platformIndex = selectedPlatform.value.feeds.findIndex(item => item.id === feed.id)
       if (platformIndex >= 0) selectedPlatform.value.feeds[platformIndex] = updated
     }
+    if (result.status !== 'failed') void loadPostsIncrementally()
   } catch (error) { settingsError.value = error.message } finally { sourceActionBusy.value = '' }
 }
 function closeConfirmDialog(result = false) {
@@ -2957,7 +3008,7 @@ function resetMobileAuthorPageSwipe() {
 function beginMobileAuthorPageSwipe(event) {
   const touch = event.touches?.[0]
   const target = event.target
-  if (!phonePortrait.value || !touch || !mobileAuthorDetailState.value || !authorProfile.value || target?.closest?.('.masonry-cover, .media-grid, video, input, textarea, select, label')) return
+  if (!phonePortrait.value || !touch || !mobileAuthorDetailState.value || !authorProfile.value || target?.closest?.('input, textarea, select, label')) return
   if (mobileAuthorPageTimer) window.clearTimeout(mobileAuthorPageTimer)
   mobileAuthorPageTimer = 0
   mobileAuthorPageTouch = { x: touch.clientX, y: touch.clientY, time: event.timeStamp, axis: '', prevX: touch.clientX, prevTime: event.timeStamp, lastX: touch.clientX, lastTime: event.timeStamp }
@@ -3467,7 +3518,7 @@ watch(platformCards, cards => {
   selectedPlatform.value = cards.find(platform => platform.key === selectedPlatform.value.key) || null
 })
 onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; timelineView.value = localStorage.getItem('lumic-timeline-view') === 'masonry' ? 'masonry' : 'list'; loadRememberedLogin(); document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#080a0e' : '#fbf7ea'); phonePortraitQuery = window.matchMedia('(max-width: 760px)'); phonePortrait.value = isPhonePortraitScreen(); phonePortraitQuery.addEventListener('change', updatePhonePortrait); window.addEventListener('orientationchange', updatePhonePortrait); document.addEventListener('pointerover', useRoundedTooltip, true); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = postById.value.get(String(entry.target.dataset.postId)); const borderBox = Array.isArray(entry.borderBoxSize) ? entry.borderBoxSize[0] : entry.borderBoxSize; if (post) measurePostElement(post, entry.target, entry.target.dataset.layout || 'list', borderBox?.blockSize || entry.contentRect.height) }; scheduleTimelineWindow() }); initializeFeedListResizeObserver(); applyRoute(); if (phonePortrait.value && window.location.pathname === '/') openPhoneDefaultTimeline(); ensurePhoneExitBoundary(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', handlePopState); window.addEventListener('scroll', handleWindowScroll, { passive: true }); window.addEventListener('resize', handleWindowResize); scheduleTimelineWindow(); if (phonePortrait.value) showMobileControls() })
-onUnmounted(() => { stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLoop(); if (sessionPollTimer) window.clearInterval(sessionPollTimer); if (mobileControlsTimer) window.clearTimeout(mobileControlsTimer); if (mobileAuthorHandoffTimer) window.clearTimeout(mobileAuthorHandoffTimer); if (mobileDetailReturnHandoffTimer) window.clearTimeout(mobileDetailReturnHandoffTimer); if (mobileTimelineReturnHandoffTimer) window.clearTimeout(mobileTimelineReturnHandoffTimer); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); window.removeEventListener('orientationchange', updatePhonePortrait); document.removeEventListener('pointerover', useRoundedTooltip, true); postResizeObserver?.disconnect(); feedListResizeObserver?.disconnect(); observedPostElements.clear(); preloadedPreviewUrls.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); clearMobileDetailAnimation(); resetMobileDetailPageSwipe(); cleanupMobileDetailRouteExit(); lightboxHistoryActive = false; resetLightboxState(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', handlePopState); window.removeEventListener('scroll', handleWindowScroll); window.removeEventListener('resize', handleWindowResize); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (masonryMetricsFrame) window.cancelAnimationFrame(masonryMetricsFrame); if (confirmResolver) closeConfirmDialog(false) })
+onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLoop(); if (sessionPollTimer) window.clearInterval(sessionPollTimer); if (mobileControlsTimer) window.clearTimeout(mobileControlsTimer); if (mobileAuthorHandoffTimer) window.clearTimeout(mobileAuthorHandoffTimer); if (mobileDetailReturnHandoffTimer) window.clearTimeout(mobileDetailReturnHandoffTimer); if (mobileTimelineReturnHandoffTimer) window.clearTimeout(mobileTimelineReturnHandoffTimer); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); window.removeEventListener('orientationchange', updatePhonePortrait); document.removeEventListener('pointerover', useRoundedTooltip, true); postResizeObserver?.disconnect(); feedListResizeObserver?.disconnect(); observedPostElements.clear(); preloadedPreviewUrls.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); clearMobileDetailAnimation(); resetMobileDetailPageSwipe(); cleanupMobileDetailRouteExit(); lightboxHistoryActive = false; resetLightboxState(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', handlePopState); window.removeEventListener('scroll', handleWindowScroll); window.removeEventListener('resize', handleWindowResize); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (masonryMetricsFrame) window.cancelAnimationFrame(masonryMetricsFrame); if (confirmResolver) closeConfirmDialog(false) })
 </script>
 
 <template>

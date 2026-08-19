@@ -250,6 +250,10 @@ func apiV1PostsHandler(store *Store) http.HandlerFunc {
 			writeAPIError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		if apiV1QueryUsesStoredOrder(query) {
+			writeAPIV1StoredPostPage(w, store, query)
+			return
+		}
 		store.RLock()
 		posts := append([]Post(nil), store.posts...)
 		store.RUnlock()
@@ -282,6 +286,45 @@ func apiV1PostsHandler(store *Store) http.HandlerFunc {
 		}
 		writeJSON(w, page)
 	}
+}
+
+func apiV1QueryUsesStoredOrder(query apiV1PostQuery) bool {
+	return query.Order == "newest" && query.Source == "all" && query.Liked == nil && query.Author == "" && query.Tag == "" && query.Search == ""
+}
+
+func writeAPIV1StoredPostPage(w http.ResponseWriter, store *Store, query apiV1PostQuery) {
+	store.RLock()
+	posts := make([]Post, 0, query.Limit+1)
+	for _, post := range store.posts {
+		if query.Cursor != nil && !apiV1PostAfterCursor(post, *query.Cursor, query.Order) {
+			continue
+		}
+		posts = append(posts, post)
+		if len(posts) > query.Limit {
+			break
+		}
+	}
+	store.RUnlock()
+
+	hasMore := len(posts) > query.Limit
+	if hasMore {
+		posts = posts[:query.Limit]
+	}
+	items := make([]apiV1Post, 0, len(posts))
+	for _, post := range posts {
+		items = append(items, toAPIV1Post(post))
+	}
+	page := apiV1PostPage{Items: items, HasMore: hasMore, Limit: query.Limit}
+	if hasMore && len(posts) > 0 {
+		last := posts[len(posts)-1]
+		cursor, err := encodeAPIV1PostCursor(apiV1PostCursor{Version: 1, Published: last.Published, ID: last.ID, Order: query.Order, FilterHash: query.FilterHash})
+		if err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "无法生成下一页游标")
+			return
+		}
+		page.NextCursor = cursor
+	}
+	writeJSON(w, page)
 }
 
 func parseAPIV1PostQuery(r *http.Request) (apiV1PostQuery, error) {
