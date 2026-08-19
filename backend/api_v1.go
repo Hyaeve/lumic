@@ -58,10 +58,22 @@ type apiV1Feed struct {
 }
 
 type apiV1PostPage struct {
-	Items      []apiV1Post `json:"items"`
-	NextCursor string      `json:"nextCursor,omitempty"`
-	HasMore    bool        `json:"hasMore"`
-	Limit      int         `json:"limit"`
+	Items      []apiV1Post     `json:"items"`
+	NextCursor string          `json:"nextCursor,omitempty"`
+	HasMore    bool            `json:"hasMore"`
+	Limit      int             `json:"limit"`
+	Stats      *apiV1PostStats `json:"stats,omitempty"`
+}
+
+type apiV1PostStat struct {
+	Total     int `json:"total"`
+	Today     int `json:"today"`
+	Favorites int `json:"favorites"`
+}
+
+type apiV1PostStats struct {
+	All      apiV1PostStat            `json:"all"`
+	BySource map[Source]apiV1PostStat `json:"bySource"`
 }
 
 type apiV1PostCursor struct {
@@ -251,12 +263,16 @@ func apiV1PostsHandler(store *Store) http.HandlerFunc {
 			return
 		}
 		if apiV1QueryUsesStoredOrder(query) {
-			writeAPIV1StoredPostPage(w, store, query)
+			writeAPIV1StoredPostPage(w, r, store, query)
 			return
 		}
 		store.RLock()
 		posts := append([]Post(nil), store.posts...)
 		store.RUnlock()
+		var stats *apiV1PostStats
+		if query.Cursor == nil {
+			stats = buildAPIV1PostStats(posts, r)
+		}
 		posts = filterAndSortAPIV1Posts(posts, query)
 		if query.Cursor != nil {
 			remaining := posts[:0]
@@ -275,7 +291,7 @@ func apiV1PostsHandler(store *Store) http.HandlerFunc {
 		for _, post := range posts {
 			items = append(items, toAPIV1Post(post))
 		}
-		page := apiV1PostPage{Items: items, HasMore: hasMore, Limit: query.Limit}
+		page := apiV1PostPage{Items: items, HasMore: hasMore, Limit: query.Limit, Stats: stats}
 		if hasMore && len(posts) > 0 {
 			last := posts[len(posts)-1]
 			page.NextCursor, err = encodeAPIV1PostCursor(apiV1PostCursor{Version: 1, Published: last.Published, ID: last.ID, Order: query.Order, FilterHash: query.FilterHash})
@@ -292,9 +308,13 @@ func apiV1QueryUsesStoredOrder(query apiV1PostQuery) bool {
 	return query.Order == "newest" && query.Source == "all" && query.Liked == nil && query.Author == "" && query.Tag == "" && query.Search == ""
 }
 
-func writeAPIV1StoredPostPage(w http.ResponseWriter, store *Store, query apiV1PostQuery) {
+func writeAPIV1StoredPostPage(w http.ResponseWriter, r *http.Request, store *Store, query apiV1PostQuery) {
 	store.RLock()
 	posts := make([]Post, 0, query.Limit+1)
+	var stats *apiV1PostStats
+	if query.Cursor == nil {
+		stats = buildAPIV1PostStats(store.posts, r)
+	}
 	for _, post := range store.posts {
 		if query.Cursor != nil && !apiV1PostAfterCursor(post, *query.Cursor, query.Order) {
 			continue
@@ -314,7 +334,7 @@ func writeAPIV1StoredPostPage(w http.ResponseWriter, store *Store, query apiV1Po
 	for _, post := range posts {
 		items = append(items, toAPIV1Post(post))
 	}
-	page := apiV1PostPage{Items: items, HasMore: hasMore, Limit: query.Limit}
+	page := apiV1PostPage{Items: items, HasMore: hasMore, Limit: query.Limit, Stats: stats}
 	if hasMore && len(posts) > 0 {
 		last := posts[len(posts)-1]
 		cursor, err := encodeAPIV1PostCursor(apiV1PostCursor{Version: 1, Published: last.Published, ID: last.ID, Order: query.Order, FilterHash: query.FilterHash})
@@ -325,6 +345,40 @@ func writeAPIV1StoredPostPage(w http.ResponseWriter, store *Store, query apiV1Po
 		page.NextCursor = cursor
 	}
 	writeJSON(w, page)
+}
+
+func buildAPIV1PostStats(posts []Post, r *http.Request) *apiV1PostStats {
+	location := time.Local
+	if offset, err := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("tzOffset"))); err == nil && offset >= -14*60 && offset <= 14*60 {
+		location = time.FixedZone("client", -offset*60)
+	}
+	now := time.Now().In(location)
+	day := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, location)
+	if value := strings.TrimSpace(r.URL.Query().Get("statsDate")); value != "" {
+		if parsed, err := time.ParseInLocation("2006-01-02", value, location); err == nil {
+			day = parsed
+		}
+	}
+	nextDay := day.AddDate(0, 0, 1)
+	stats := &apiV1PostStats{BySource: make(map[Source]apiV1PostStat)}
+	for _, post := range posts {
+		all := stats.All
+		source := stats.BySource[post.Source]
+		all.Total++
+		source.Total++
+		published := post.Published.In(location)
+		if !published.Before(day) && published.Before(nextDay) {
+			all.Today++
+			source.Today++
+		}
+		if post.Liked {
+			all.Favorites++
+			source.Favorites++
+		}
+		stats.All = all
+		stats.BySource[post.Source] = source
+	}
+	return stats
 }
 
 func parseAPIV1PostQuery(r *http.Request) (apiV1PostQuery, error) {

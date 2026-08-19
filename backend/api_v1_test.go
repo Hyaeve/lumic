@@ -88,7 +88,7 @@ func TestAPIV1PostCursorPaginationIsStable(t *testing.T) {
 	handler := apiV1PostsHandler(store)
 
 	firstResponse := httptest.NewRecorder()
-	handler(firstResponse, httptest.NewRequest(http.MethodGet, "/api/v1/posts?limit=2", nil))
+	handler(firstResponse, httptest.NewRequest(http.MethodGet, "/api/v1/posts?limit=2&statsDate=2026-08-15&tzOffset=0", nil))
 	if firstResponse.Code != http.StatusOK {
 		t.Fatalf("first page failed: status=%d body=%s", firstResponse.Code, firstResponse.Body.String())
 	}
@@ -98,6 +98,12 @@ func TestAPIV1PostCursorPaginationIsStable(t *testing.T) {
 	}
 	if len(first.Items) != 2 || first.Items[0].ID != "post-a" || first.Items[1].ID != "post-b" || !first.HasMore || first.NextCursor == "" {
 		t.Fatalf("unexpected first page: %#v", first)
+	}
+	if first.Stats == nil || first.Stats.All.Total != 4 || first.Stats.All.Today != 4 || first.Stats.All.Favorites != 0 {
+		t.Fatalf("first page did not expose complete timeline statistics: %#v", first.Stats)
+	}
+	if first.Stats.BySource[SourceWeibo].Total != 2 || first.Stats.BySource[SourcePixiv].Total != 1 || first.Stats.BySource[SourceBilibili].Total != 1 {
+		t.Fatalf("first page source statistics are incorrect: %#v", first.Stats.BySource)
 	}
 	if len(first.Items[0].PreviewMedia) != 1 || first.Items[0].PreviewMedia[0] != "/preview/weibo/Alice/a.jpg" {
 		t.Fatalf("preview media was not exposed correctly: %#v", first.Items[0].PreviewMedia)

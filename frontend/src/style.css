@@ -1,6 +1,7 @@
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Noto+Serif+SC:wght@500;600;700&display=swap');
 
 :root { font-family: 'DM Sans', 'Noto Sans SC', 'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', sans-serif; color: #34433f; background: #f4f7f3; font-synthesis: none; }
+html, body, .app-shell { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 1080px; }
 button { border: 0; font: inherit; cursor: pointer; color: inherit; -webkit-tap-highlight-color: transparent; }
@@ -1385,7 +1386,7 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
     border-color: rgba(218, 228, 255, .56);
     box-shadow: 0 0 18px #758de34a, 0 12px 32px #0007, inset 0 1px 0 #edf1ff4a;
   }
-  .phone-ui .mobile-timeline-toggle.icon-switching > :is(.nav-mask-symbol, .sidebar-source-icon) { animation: mobile-timeline-icon-switch .34s cubic-bezier(.16,.88,.22,1) both; }
+  .phone-ui .mobile-timeline-toggle.icon-switching > :is(.nav-mask-symbol, .sidebar-source-icon, .mobile-platform-mask) { animation: mobile-timeline-icon-switch .34s cubic-bezier(.16,.88,.22,1) both; }
   .phone-ui .mobile-menu-scrim {
     background: #07090db8;
     backdrop-filter: blur(5px);
@@ -1590,24 +1591,24 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
   .phone-ui.dark .scroll-top-button { --mobile-glass-background: linear-gradient(142deg, rgba(67, 76, 100, .62) 0%, rgba(18, 24, 38, .58) 50%, rgba(11, 15, 25, .66) 100%); color: #dfe7f8; background: transparent; border-color: rgba(225, 233, 255, .34); box-shadow: 0 12px 32px #0009, 0 0 16px #7189cd30, inset 0 1px 0 #eef3ff45, inset 0 -1px 0 #02050a45; backdrop-filter: blur(26px) saturate(155%); -webkit-backdrop-filter: blur(26px) saturate(155%); }
   /* One real frosted material for all three mobile floating controls. */
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control {
-    --mobile-frosted-surface: linear-gradient(145deg, rgba(255, 255, 255, .18), rgba(255, 247, 226, .07) 56%, rgba(169, 137, 91, .08));
+    --mobile-frosted-surface: linear-gradient(145deg, rgba(255, 255, 255, .46), rgba(255, 250, 237, .25) 56%, rgba(211, 196, 164, .19));
     position: fixed;
     overflow: hidden;
-    isolation: isolate;
+    isolation: auto;
     color: #52606c;
-    background: rgba(244, 238, 225, .20)!important;
+    background: transparent!important;
     border: 0!important;
     box-shadow: 0 10px 25px rgba(70, 52, 31, .17), inset 0 1px 0 rgba(255, 255, 255, .34), inset 0 -1px 0 rgba(101, 78, 44, .08)!important;
-    backdrop-filter: blur(30px) saturate(138%) contrast(.96)!important;
-    -webkit-backdrop-filter: blur(30px) saturate(138%) contrast(.96)!important;
+    backdrop-filter: none!important;
+    -webkit-backdrop-filter: none!important;
   }
   .phone-ui.dark :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control {
-    --mobile-frosted-surface: linear-gradient(145deg, rgba(199, 211, 242, .13), rgba(91, 105, 143, .045) 52%, rgba(4, 7, 14, .09));
+    --mobile-frosted-surface: linear-gradient(145deg, rgba(205, 217, 246, .22), rgba(78, 91, 124, .15) 52%, rgba(8, 12, 22, .24));
     color: #e9effd;
-    background: rgba(17, 22, 34, .23)!important;
+    background: transparent!important;
     box-shadow: 0 11px 28px rgba(0, 0, 0, .38), 0 0 17px rgba(102, 126, 192, .12), inset 0 1px 0 rgba(220, 229, 255, .18), inset 0 -1px 0 rgba(1, 3, 8, .20)!important;
-    backdrop-filter: blur(32px) saturate(136%) contrast(.97)!important;
-    -webkit-backdrop-filter: blur(32px) saturate(136%) contrast(.97)!important;
+    backdrop-filter: none!important;
+    -webkit-backdrop-filter: none!important;
   }
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control::before,
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control::after {
@@ -1618,7 +1619,7 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
     content: '';
     pointer-events: none;
   }
-  .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control::before { z-index: 0; background: var(--mobile-frosted-surface); }
+  .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control::before { z-index: 0; background: var(--mobile-frosted-surface); backdrop-filter: blur(36px) saturate(148%) contrast(.96); -webkit-backdrop-filter: blur(36px) saturate(148%) contrast(.96); transform: translateZ(0); }
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control::after { z-index: 1; background: radial-gradient(circle at 24% 12%, rgba(255, 255, 255, .20), transparent 46%); }
   .phone-ui.dark :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control::after { background: radial-gradient(circle at 24% 12%, rgba(224, 232, 255, .14), transparent 46%); }
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control > * { position: relative; z-index: 2; }
@@ -1628,9 +1629,11 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
      the menu and scroll-top controls. Only the platform icon is specialized. */
   .phone-ui .mobile-timeline-toggle.mobile-frosted-control > .sidebar-source-icon { opacity: 1; filter: grayscale(1) brightness(0) invert(.38) opacity(.96) drop-shadow(0 1px 2px rgba(255, 255, 255, .44))!important; }
   .phone-ui .mobile-timeline-toggle.mobile-frosted-control > .nav-mask-symbol { color: #52606c!important; filter: drop-shadow(0 1px 2px rgba(255, 255, 255, .44)); }
+  .phone-ui .mobile-timeline-toggle.mobile-frosted-control > .mobile-platform-mask { display: block; width: 24px; height: 24px; color: #52606c; background: currentColor; filter: drop-shadow(0 1px 2px rgba(255, 255, 255, .44)); -webkit-mask: var(--mobile-platform-mask) center / contain no-repeat; mask: var(--mobile-platform-mask) center / contain no-repeat; }
   .phone-ui .mobile-timeline-toggle.mobile-frosted-control.active { color: #795f24; }
   .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control > .sidebar-source-icon { filter: grayscale(1) brightness(0) invert(.94) opacity(.98) drop-shadow(0 0 4px rgba(211, 224, 255, .46))!important; }
   .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control > .nav-mask-symbol { color: #e9effd!important; filter: drop-shadow(0 0 4px rgba(211, 224, 255, .46)); }
+  .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control > .mobile-platform-mask { color: #eef3ff; filter: drop-shadow(0 0 4px rgba(211, 224, 255, .46)); }
   .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control.active { color: #f5e4a4; }
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle) { transition: opacity .3s ease, transform .34s cubic-bezier(.16,.88,.22,1), color .22s ease, background .22s ease, box-shadow .28s ease; }
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-control-hidden { opacity: 0; pointer-events: none; transform: translateY(-12px) scale(.86); filter: blur(.4px); }
@@ -1936,14 +1939,15 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
 .dark .masonry-detail-modal { background: #15171ded; border-color: #30343e; box-shadow: 0 30px 90px #000c; }
 
 .mobile-author-swipe-preview { position: fixed; inset: 0; z-index: 0; overflow: hidden; padding: calc(max(12px, env(safe-area-inset-top)) + 20px) 12px 20px; background: #fbf7ea; pointer-events: none; content-visibility: visible; contain: layout paint style; will-change: transform, opacity; }
-.mobile-author-swipe-preview > header { display: flex; align-items: center; gap: 10px; min-height: 58px; padding: 7px 4px 12px; border-bottom: 1px solid var(--line); }
-.mobile-author-swipe-preview > header img { width: 42px; height: 42px; border-radius: 50%; object-fit: cover; }
-.mobile-author-swipe-preview > header > div { min-width: 0; flex: 1; }
-.mobile-author-swipe-preview > header .source-pill { flex: none; max-width: 94px; margin-left: auto; }
-.mobile-author-swipe-preview > header strong, .mobile-author-swipe-preview > header small { display: block; }
-.mobile-author-swipe-preview > header strong { color: var(--ink); font-size: 15px; }
-.mobile-author-swipe-preview > header small { margin-top: 4px; color: var(--muted); font-size: 9px; }
-.mobile-author-swipe-preview > .mobile-author-preview-head { min-height: 58px; padding: 0; border-bottom: 0; }
+.mobile-transition-page-content { min-height: 100dvh; will-change: transform; }
+.mobile-transition-page-content > header { display: flex; align-items: center; gap: 10px; min-height: 58px; padding: 7px 4px 12px; border-bottom: 1px solid var(--line); }
+.mobile-transition-page-content > header img { width: 42px; height: 42px; border-radius: 50%; object-fit: cover; }
+.mobile-transition-page-content > header > div { min-width: 0; flex: 1; }
+.mobile-transition-page-content > header .source-pill { flex: none; max-width: 94px; margin-left: auto; }
+.mobile-transition-page-content > header strong, .mobile-transition-page-content > header small { display: block; }
+.mobile-transition-page-content > header strong { color: var(--ink); font-size: 15px; }
+.mobile-transition-page-content > header small { margin-top: 4px; color: var(--muted); font-size: 9px; }
+.mobile-transition-page-content > .mobile-author-preview-head { min-height: 58px; padding: 0; border-bottom: 0; }
 .mobile-author-preview-head .author-profile-main > img { width: 44px; height: 44px; }
 .mobile-author-preview-head .author-profile-main h1 { max-width: calc(100vw - 122px); margin: 0; color: var(--ink); font-family: 'Noto Serif SC', serif; font-size: 18px; line-height: 1.3; }
 .mobile-author-preview-head .author-profile-main .eyebrow { margin: 0 0 3px; font-size: 8px; letter-spacing: 1px; }
@@ -2008,7 +2012,8 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
 .mobile-detail-preview-actions i { width: 22px; height: 22px; background: color-mix(in srgb, var(--muted) 32%, transparent); border-radius: 50%; }
 .dark .mobile-detail-vertical-preview { background: #0e1015; box-shadow: 0 -16px 42px #0008; }
 .mobile-detail-return-preview { position: fixed; inset: 0; z-index: 0; overflow: hidden; min-height: 100dvh; padding: env(safe-area-inset-top) 0 0; background: #fbf7ea; pointer-events: none; content-visibility: visible; contain: layout paint style; will-change: transform, opacity; }
-.mobile-detail-return-preview > header { position: relative; top: auto; display: flex; align-items: center; gap: 4px; min-height: 58px; padding: 8px 7px 8px 4px; background: color-mix(in srgb, var(--card) 96%, transparent); border-bottom: 1px solid var(--line); }
+.mobile-detail-return-content { min-height: 100dvh; will-change: transform; }
+.mobile-detail-return-content > header { position: relative; top: auto; display: flex; align-items: center; gap: 4px; min-height: 58px; padding: 8px 7px 8px 4px; background: color-mix(in srgb, var(--card) 96%, transparent); border-bottom: 1px solid var(--line); }
 .mobile-detail-return-preview .mobile-post-author { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
 .mobile-detail-return-preview .mobile-post-author img { width: 38px; height: 38px; border-radius: 50%; object-fit: cover; }
 .mobile-detail-return-preview .mobile-post-author strong { overflow: hidden; color: var(--ink); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }

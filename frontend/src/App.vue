@@ -107,6 +107,8 @@ const twitterBusy = ref(false)
 const twitterError = ref('')
 const syncing = ref(false)
 const posts = ref([])
+const postStats = ref(null)
+const postsFullyLoaded = ref(false)
 const feeds = ref([])
 const postActionBusy = ref('')
 const timelineMessage = ref('')
@@ -152,6 +154,7 @@ const mobileAuthorPageDragX = ref(0)
 const mobileAuthorPageDragging = ref(false)
 const mobileAuthorPageAnimating = ref(false)
 const mobileAuthorPreviewPost = ref(null)
+const mobileAuthorPreviewSnapshot = ref({ active: false, items: [], height: 0, scrollY: 0 })
 const mobileAuthorPreviewHandoff = ref(false)
 const mobileAuthorPreviewFading = ref(false)
 const mobileDetailReturnHandoff = ref(false)
@@ -316,15 +319,20 @@ const statsPosts = computed(() => {
   const allPosts = Array.isArray(posts.value) ? posts.value : []
   return activeSource.value === 'all' ? allPosts : allPosts.filter(post => post.source === activeSource.value)
 })
-const totalStatsCount = computed(() => statsPosts.value.length)
+const serverStats = computed(() => {
+  if (!postStats.value) return null
+  return activeSource.value === 'all' ? postStats.value.all : postStats.value.bySource?.[activeSource.value]
+})
+const totalStatsCount = computed(() => !postsFullyLoaded.value && serverStats.value ? serverStats.value.total : statsPosts.value.length)
 const todayStatsCount = computed(() => {
+  if (!postsFullyLoaded.value && serverStats.value) return serverStats.value.today
   const today = new Date()
   return statsPosts.value.filter(post => {
     const published = new Date(post.published)
     return !Number.isNaN(published.getTime()) && published.getFullYear() === today.getFullYear() && published.getMonth() === today.getMonth() && published.getDate() === today.getDate()
   }).length
 })
-const favoriteStatsCount = computed(() => statsPosts.value.filter(post => post.liked).length)
+const favoriteStatsCount = computed(() => !postsFullyLoaded.value && serverStats.value ? serverStats.value.favorites : statsPosts.value.filter(post => post.liked).length)
 const selectedPostCount = computed(() => selectedPostIds.value.length)
 const mobileDetailMedia = computed(() => postDetailMedia(masonryDetailPost.value))
 const mobileDetailCurrentMedia = computed(() => mobileDetailMedia.value[mobileDetailIndex.value] || null)
@@ -391,30 +399,41 @@ const mobileAuthorTimelinePosts = computed(() => {
     return timelineSort.value === 'newest' ? difference : -difference
   })
 })
-function buildMobilePreviewMasonry(items, limit = 8) {
+function buildMobilePreviewMasonrySnapshot(items, scrollY = 0) {
   const gap = 8
   const viewportWidth = typeof window === 'undefined' ? 390 : Math.max(1, window.innerWidth)
-  // The transition surface has the same horizontal inset as the real mobile content.
   const columnWidth = Math.max(1, (viewportWidth - 24 - gap) / 2)
   const heights = [0, 0]
-  return items.slice(0, limit).map((post, index) => {
+  const allItems = items.map((post, index) => {
     const column = heights[1] < heights[0] ? 1 : 0
     const height = masonryHeights.value[post.id] || estimateMasonryPostHeight(post)
     const item = { post, index, column, x: column * (columnWidth + gap), y: heights[column], height, width: columnWidth }
     heights[column] += height + gap
     return item
   })
+  const height = Math.max(0, ...heights) - (allItems.length ? gap : 0)
+  const feedOffset = 142
+  const viewportTop = Math.max(0, scrollY - feedOffset - 720)
+  const viewportBottom = scrollY - feedOffset + (typeof window === 'undefined' ? 844 : window.innerHeight) + 720
+  return {
+    active: true,
+    items: allItems.filter(item => item.y + item.height >= viewportTop && item.y <= viewportBottom),
+    height,
+    scrollY: Math.max(0, scrollY)
+  }
 }
-function mobilePreviewFeedStyle(items) {
-  const height = Math.max(0, ...items.map(item => item.y + item.height))
-  return { height: `${Math.ceil(height)}px` }
+function captureMobileAuthorPreviewSnapshot(scrollY = 0) {
+  mobileAuthorPreviewSnapshot.value = buildMobilePreviewMasonrySnapshot(mobileAuthorTimelinePosts.value, scrollY)
 }
 function mobilePreviewMasonryItemStyle(item) {
   return { left: `${item.x}px`, top: `${item.y}px`, width: `${item.width}px` }
 }
 const mobileAuthorPreviewPosts = computed(() => mobileAuthorTimelinePosts.value.slice(0, 8))
-const mobileAuthorPreviewItems = computed(() => buildMobilePreviewMasonry(mobileAuthorTimelinePosts.value))
-const mobileAuthorPreviewFeedStyle = computed(() => mobilePreviewFeedStyle(mobileAuthorPreviewItems.value))
+const mobileAuthorPreviewFallback = computed(() => buildMobilePreviewMasonrySnapshot(mobileAuthorTimelinePosts.value, mobileAuthorDetailState.value?.authorScrollY || 0))
+const mobileAuthorPreviewLayout = computed(() => mobileAuthorPreviewSnapshot.value.active ? mobileAuthorPreviewSnapshot.value : mobileAuthorPreviewFallback.value)
+const mobileAuthorPreviewItems = computed(() => mobileAuthorPreviewLayout.value.items)
+const mobileAuthorPreviewFeedStyle = computed(() => ({ height: `${Math.ceil(mobileAuthorPreviewLayout.value.height)}px` }))
+const mobileAuthorPreviewContentStyle = computed(() => ({ transform: `translate3d(0, ${-mobileAuthorPreviewLayout.value.scrollY}px, 0)` }))
 const mobileAuthorPreviewStyle = computed(() => {
   if (mobileAuthorPreviewHandoff.value) return {
     zIndex: 70,
@@ -431,9 +450,11 @@ const mobileAuthorPreviewStyle = computed(() => {
   }
 })
 const mobileReturnPreviewPosts = computed(() => filteredPosts.value.slice(0, 8))
-const mobileReturnPreviewItems = computed(() => buildMobilePreviewMasonry(filteredPosts.value))
-const mobileReturnPreviewFeedStyle = computed(() => mobilePreviewFeedStyle(mobileReturnPreviewItems.value))
+const mobileReturnPreviewLayout = computed(() => buildMobilePreviewMasonrySnapshot(filteredPosts.value, mobilePostReturnScrollY.value))
+const mobileReturnPreviewItems = computed(() => mobileReturnPreviewLayout.value.items)
+const mobileReturnPreviewFeedStyle = computed(() => ({ height: `${Math.ceil(mobileReturnPreviewLayout.value.height)}px` }))
 const mobileReturnPreviewDisplayPost = computed(() => masonryDetailPost.value || mobileTimelineReturnPreviewPost.value)
+const mobileDetailReturnContentStyle = computed(() => ({ transform: `translate3d(0, ${-(mobileAuthorDetailState.value?.detailScrollY || 0)}px, 0)` }))
 const mobileReturnPreviewStyle = computed(() => {
   if (mobileTimelineReturnHandoff.value) return {
     zIndex: 70,
@@ -742,6 +763,8 @@ async function logout() {
     mobileSourcesOpen.value = false
     authenticated.value = false
     posts.value = []
+    postStats.value = null
+    postsFullyLoaded.value = false
     feeds.value = []
     selectedPlatform.value = null
     credentialPlatform.value = null
@@ -796,20 +819,30 @@ async function loadRemainingPostPages(generation, firstPage) {
       return
     }
   }
+  if (generation === postLoadGeneration) postsFullyLoaded.value = true
 }
 async function loadPostsIncrementally() {
   const generation = ++postLoadGeneration
+  postsFullyLoaded.value = false
   try {
-    const response = await fetch('/api/v1/posts?limit=100&order=newest', { cache: 'no-store' })
+    const statsDate = startDateTodayKey()
+    const timezoneOffset = new Date().getTimezoneOffset()
+    const response = await fetch(`/api/v1/posts?limit=100&order=newest&statsDate=${encodeURIComponent(statsDate)}&tzOffset=${timezoneOffset}`, { cache: 'no-store' })
     if (!response.ok) throw new Error('api unavailable')
     const page = await response.json()
     if (generation !== postLoadGeneration) return false
     const items = Array.isArray(page.items) ? page.items : []
+    postStats.value = page.stats || null
     publishPostPage(items, false)
     if (page.hasMore && page.nextCursor) void loadRemainingPostPages(generation, { ...page, items })
+    else postsFullyLoaded.value = true
     return true
   } catch {
-    if (generation === postLoadGeneration) posts.value = []
+    if (generation === postLoadGeneration) {
+      posts.value = []
+      postStats.value = null
+      postsFullyLoaded.value = true
+    }
     return false
   }
 }
@@ -2600,29 +2633,37 @@ function startMobileAuthorPreviewHandoff(post) {
   mobileAuthorPreviewHandoff.value = true
   mobileAuthorPreviewFading.value = false
   let attempts = 0
+  let stableFrames = 0
+  let previousSignature = ''
+  const targetScrollY = Math.max(0, mobileAuthorDetailState.value?.authorScrollY || 0)
   const waitForAuthorPage = () => {
     const cards = [...document.querySelectorAll('.mobile-author-detail-page .masonry-card')]
     const viewportCards = cards.filter(card => card.getBoundingClientRect().top < window.innerHeight + 80)
     const authorCardsReady = masonryMetricsReady.value
       && viewportCards.length > 0
       && viewportCards.every(card => !masonryMediaPending(card))
-    if (!authorCardsReady && attempts < 42) {
+      && Math.abs(window.scrollY - targetScrollY) < 2
+    const feed = document.querySelector('.mobile-author-detail-page .masonry-feed')
+    const signature = authorCardsReady && feed
+      ? [window.scrollY, feed.getBoundingClientRect().height, ...viewportCards.slice(0, 8).flatMap(card => {
+          const rect = card.getBoundingClientRect()
+          return [rect.left, rect.top, rect.width, rect.height].map(value => Math.round(value * 10) / 10)
+        })].join(':')
+      : ''
+    if (signature && signature === previousSignature) stableFrames += 1
+    else stableFrames = 0
+    previousSignature = signature
+    if ((!authorCardsReady || stableFrames < 3) && attempts < 72) {
       attempts += 1
       window.requestAnimationFrame(waitForAuthorPage)
       return
     }
-    // Let ResizeObserver commit the same card measurements used by the transition
-    // surface before it hands off to the real author page.
-    scheduleMasonryMetrics()
-    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
-      mobileAuthorPreviewFading.value = true
-      mobileAuthorHandoffTimer = window.setTimeout(() => {
-        mobileAuthorHandoffTimer = 0
-        mobileAuthorPreviewHandoff.value = false
-        mobileAuthorPreviewFading.value = false
-        mobileAuthorPreviewPost.value = null
-      }, 210)
-    }))
+    window.requestAnimationFrame(() => {
+      mobileAuthorPreviewHandoff.value = false
+      mobileAuthorPreviewFading.value = false
+      mobileAuthorPreviewPost.value = null
+      mobileAuthorPreviewSnapshot.value = { active: false, items: [], height: 0, scrollY: 0 }
+    })
   }
   nextTick(() => window.requestAnimationFrame(waitForAuthorPage))
 }
@@ -2631,24 +2672,32 @@ function startMobileDetailReturnHandoff() {
   mobileDetailReturnHandoff.value = true
   mobileDetailReturnFading.value = false
   let attempts = 0
+  let stableFrames = 0
+  let previousSignature = ''
+  const targetScrollY = Math.max(0, mobileAuthorDetailState.value?.detailScrollY || 0)
   const waitForDetailPage = () => {
     const page = document.querySelector('.mobile-post-detail-page')
     const currentMedia = page?.querySelector('.mobile-post-media-slide.current img, .mobile-post-media-slide.current video')
     const mediaReady = !currentMedia
       || (currentMedia.tagName === 'IMG' ? currentMedia.complete && currentMedia.naturalWidth > 0 : currentMedia.readyState >= 1)
-    if ((!page || !mediaReady) && attempts < 42) {
+    const head = page?.querySelector('.mobile-post-detail-head')?.getBoundingClientRect()
+    const stage = page?.querySelector('.mobile-post-media-stage')?.getBoundingClientRect()
+    const signature = page && mediaReady && Math.abs(window.scrollY - targetScrollY) < 2
+      ? [window.scrollY, page.scrollHeight, head?.height || 0, stage?.top || 0, stage?.width || 0, stage?.height || 0]
+          .map(value => Math.round(value * 10) / 10).join(':')
+      : ''
+    if (signature && signature === previousSignature) stableFrames += 1
+    else stableFrames = 0
+    previousSignature = signature
+    if ((!page || !mediaReady || stableFrames < 3) && attempts < 72) {
       attempts += 1
       window.requestAnimationFrame(waitForDetailPage)
       return
     }
-    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
-      mobileDetailReturnFading.value = true
-      mobileDetailReturnHandoffTimer = window.setTimeout(() => {
-        mobileDetailReturnHandoffTimer = 0
-        mobileDetailReturnHandoff.value = false
-        mobileDetailReturnFading.value = false
-      }, 190)
-    }))
+    window.requestAnimationFrame(() => {
+      mobileDetailReturnHandoff.value = false
+      mobileDetailReturnFading.value = false
+    })
   }
   nextTick(() => window.requestAnimationFrame(waitForDetailPage))
 }
@@ -2679,6 +2728,7 @@ function openMobileDetailAuthor(post) {
   state.detailScrollY = window.scrollY
   mobileAuthorDetailState.value = state
   mobileAuthorScrollY = state.authorScrollY
+  captureMobileAuthorPreviewSnapshot(state.authorScrollY)
   startMobileAuthorPreviewHandoff(post)
   openAuthorPage(post.author, post.source, post.avatar, '', true)
   restoreMobileScroll(state.authorScrollY)
@@ -2931,6 +2981,7 @@ function beginMobileDetailPageSwipe(event) {
   mobileDetailPageDragging.value = false
   mobileDetailPageAnimating.value = false
   mobileDetailPageTransitionMs.value = 320
+  captureMobileAuthorPreviewSnapshot(mobileAuthorDetailState.value?.post?.id === masonryDetailPost.value.id ? mobileAuthorDetailState.value.authorScrollY : 0)
   preloadMobileDetailPost(mobileDetailPreviousPost.value)
   preloadMobileDetailPost(mobileDetailNextPost.value)
   mobileAuthorPreviewPosts.value.forEach(preloadMobileDetailPost)
@@ -3593,7 +3644,7 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
   </div>
   <div v-else class="app-shell" :class="{ dark: isDark, 'lightbox-active': lightbox.open, 'phone-ui': phonePortrait, 'timeline-search-focused': timelineSearchFocused, 'mobile-page-switching': mobilePageSwitching }" @click="showBrandMenu = false">
     <button v-if="phonePortrait && !lightbox.open && !masonryDetailPost" class="mobile-timeline-toggle mobile-frosted-control" type="button" :class="{ open: mobileSourcesOpen, active: mobileAtAllTimeline, 'icon-switching': mobileTimelineIconSwitching, 'mobile-control-hidden': !mobileControlsVisible && !mobileSourcesOpen }" :aria-expanded="mobileSourcesOpen" :title="mobileSourcesOpen ? `收起${mobileTimelineTitle}栏目` : `展开${mobileTimelineTitle}栏目`" :aria-label="mobileSourcesOpen ? `收起${mobileTimelineTitle}栏目` : `展开${mobileTimelineTitle}栏目`" @pointerdown.stop @click.stop="showMobileControls(); toggleMobileTimelineShortcut()">
-      <img v-if="mobileTimelineMeta" :class="['sidebar-source-icon', `sidebar-${activeSource}-icon`]" :src="mobileTimelineMeta.lineImage" alt="">
+      <span v-if="mobileTimelineMeta" class="mobile-platform-mask" :style="{ '--mobile-platform-mask': `url(${mobileTimelineMeta.lineImage})` }" aria-hidden="true"></span>
       <span v-else class="nav-line-symbol nav-mask-symbol" :style="{ '--nav-mask': `url(${timelineNavIcon})` }" aria-hidden="true"></span>
     </button>
     <nav v-if="phonePortrait && mobileSourcesOpen && !lightbox.open && !masonryDetailPost" class="mobile-source-shortcuts" aria-label="平台动态">
@@ -3643,10 +3694,12 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
     </aside>
 
     <aside v-if="phonePortrait && mobileAuthorDetailState && (authorProfile || mobileDetailReturnHandoff)" class="mobile-detail-return-preview" :style="mobileDetailReturnPreviewStyle" aria-hidden="true">
+      <div class="mobile-detail-return-content" :style="mobileDetailReturnContentStyle">
       <header class="mobile-post-detail-head"><span class="mobile-detail-preview-back"><svg viewBox="0 0 24 24"><path d="m15 5-7 7 7 7"/></svg></span><div class="mobile-post-author"><img :src="postAvatar(mobileAuthorDetailState.post)" :alt="mobileAuthorDetailState.post.author"><strong>{{ mobileAuthorDetailState.post.author }}</strong></div><span :class="['source-pill', 'mobile-post-source', sourceMeta[mobileAuthorDetailState.post.source].color]"><img class="source-icon" :src="sourceIconFor(mobileAuthorDetailState.post.source)" alt="">{{ sourceMeta[mobileAuthorDetailState.post.source].label }}</span></header>
       <section v-if="mobileDetailPreviewMedia(mobileAuthorDetailState.post)" :class="['mobile-detail-preview-media', { 'video-media': mobileDetailPreviewMedia(mobileAuthorDetailState.post).type === 'video' }]" :style="mobileDetailPreviewMedia(mobileAuthorDetailState.post).type === 'video' ? postVideoFrameStyle(mobileAuthorDetailState.post) : undefined"><img v-if="mobileDetailPreviewCover(mobileAuthorDetailState.post)" :src="previewMedia(mobileDetailPreviewCover(mobileAuthorDetailState.post))" :alt="mobileAuthorDetailState.post.author" loading="eager" decoding="async" fetchpriority="low"><span v-else class="mobile-detail-preview-video-mark"><svg viewBox="0 0 24 24"><path d="m9 7 8 5-8 5Z"/></svg></span></section>
       <section class="mobile-post-copy"><p v-if="mobileAuthorDetailState.post.caption" class="caption">{{ mobileAuthorDetailState.post.caption }}</p><div v-if="mobileAuthorDetailState.post.tags?.length" class="tag-row"><span v-for="tag in mobileAuthorDetailState.post.tags" :key="tag">#{{ tag }}</span></div></section>
       <footer class="mobile-post-detail-foot"><time :datetime="mobileAuthorDetailState.post.published">{{ postDateTime(mobileAuthorDetailState.post.published) }}</time><div class="mobile-detail-preview-actions"><i></i><i></i></div></footer>
+      </div>
     </aside>
     <main v-if="!showSettings && activeNav !== 'pulls' && !(phonePortrait && masonryDetailPost)" :class="['content', { 'liked-page': activeNav === 'liked', 'mobile-author-detail-page': phonePortrait && authorProfile && mobileAuthorDetailState }]" :style="phonePortrait && authorProfile && mobileAuthorDetailState ? mobileAuthorPageStyle : undefined" @touchstart.passive="beginMobileAuthorPageSwipe" @touchmove="updateMobileAuthorPageSwipe" @touchend.passive="finishMobileAuthorPageSwipe" @touchcancel.passive="finishMobileAuthorPageSwipe" @click="closeContextMenu" @contextmenu.prevent="openContextMenu($event)">
       <div v-if="!authorProfile && activeNav !== 'liked'" class="night-sky-decor" aria-hidden="true"><i class="night-haze"></i><i class="night-moon"></i><i class="night-star star-one"></i><i class="night-star star-two"></i><i class="night-star star-three"></i><i class="night-star star-four"></i><i class="night-star star-five"></i><i class="night-star star-six"></i><i class="night-star star-seven"></i><i class="night-star star-eight"></i></div>
@@ -3801,8 +3854,9 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
       </nav>
     </main>
     <aside v-if="phonePortrait && mobileAuthorPreviewDisplayPost" class="mobile-author-swipe-preview" :style="mobileAuthorPreviewStyle" aria-hidden="true">
+      <div class="mobile-transition-page-content" :style="mobileAuthorPreviewContentStyle">
       <header class="topbar author-page-header mobile-author-preview-head"><div class="author-profile-main"><img :src="postAvatar(mobileAuthorPreviewDisplayPost)" alt=""><div><p class="eyebrow">AUTHOR TIMELINE · {{ sourceMeta[mobileAuthorPreviewDisplayPost.source].label }}</p><h1>{{ mobileAuthorPreviewDisplayPost.author }}</h1><p class="subtitle">共 {{ mobileAuthorTimelinePosts.length }} 条已拉取动态</p></div></div></header>
-      <div class="section-heading mobile-author-preview-heading"><div class="filters"><span class="timeline-sort-button"><span class="timeline-sort-symbol" :style="{ '--nav-mask': `url(${timelineSort === 'newest' ? newestSortIcon : oldestSortIcon})` }"></span></span><span class="timeline-view-button"><span :class="['timeline-view-symbol', { 'list-view-symbol': !isMasonryView }]" :style="{ '--nav-mask': `url(${isMasonryView ? masonryViewIcon : listViewIcon})` }"></span></span><span class="timeline-refresh-button"><span class="timeline-refresh-symbol" :style="{ '--nav-mask': `url(${refreshIcon})` }"></span></span></div><div class="timeline-tools"><label class="timeline-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><span>搜索</span></label></div></div>
+      <div class="section-heading mobile-author-preview-heading"><div class="filters"><button class="timeline-sort-button" type="button" tabindex="-1"><span class="timeline-sort-symbol" :style="{ '--nav-mask': `url(${timelineSort === 'newest' ? newestSortIcon : oldestSortIcon})` }"></span></button><button class="timeline-view-button timeline-toolbar-button" type="button" tabindex="-1"><span :class="['timeline-view-symbol', { 'list-view-symbol': !isMasonryView }]" :style="{ '--nav-mask': `url(${isMasonryView ? masonryViewIcon : listViewIcon})` }"></span></button><button class="timeline-refresh-button timeline-toolbar-button" type="button" tabindex="-1"><span class="timeline-refresh-symbol" :style="{ '--nav-mask': `url(${refreshIcon})` }"></span></button></div><div class="timeline-tools"><label class="timeline-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><input type="search" value="" placeholder="搜索" tabindex="-1" readonly></label></div></div>
       <section class="mobile-author-preview-feed feed-list masonry-feed" :style="mobileAuthorPreviewFeedStyle">
         <article v-for="item in mobileAuthorPreviewItems" :key="item.post.id" :class="['masonry-card', { 'text-only': !masonryCover(item.post) && !item.post.videos?.length }]" :style="mobilePreviewMasonryItemStyle(item)">
           <div v-if="masonryCover(item.post)" class="masonry-cover">
@@ -3817,11 +3871,12 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
           </div>
           <div class="masonry-card-body">
             <p v-if="item.post.caption" class="masonry-caption">{{ item.post.caption }}</p>
-            <div v-if="item.post.tags?.length" class="masonry-tags"><span v-for="tag in item.post.tags.slice(0, 2)" :key="tag">#{{ tag }}</span><span v-if="item.post.tags.length > 2">+{{ item.post.tags.length - 2 }}</span></div>
+            <div v-if="item.post.tags?.length" class="masonry-tags"><button v-for="tag in item.post.tags.slice(0, 2)" :key="tag" type="button" tabindex="-1">#{{ tag }}</button><span v-if="item.post.tags.length > 2">+{{ item.post.tags.length - 2 }}</span></div>
             <footer class="masonry-meta"><span class="masonry-author"><img :src="postAvatar(item.post)" alt=""><span><strong>{{ item.post.author }}</strong><small>{{ postDateTime(item.post.published) }}</small></span></span><span :class="['masonry-like-button', { liked: item.post.liked }]"><span class="post-action-mask post-favorite-symbol" :style="{ '--post-action-mask': `url(${favoriteNavIcon})` }"></span></span></footer>
           </div>
         </article>
       </section>
+      </div>
     </aside>
     <aside v-if="phonePortrait && mobileReturnPreviewDisplayPost" class="mobile-return-swipe-preview" :style="mobileReturnPreviewStyle" aria-hidden="true">
       <header><div><small>SAVED MOMENTS</small><strong>{{ mobileTimelineTitle }}</strong></div><span :class="['source-pill', sourceMeta[mobileReturnPreviewDisplayPost.source].color]"><img class="source-icon" :src="sourceIconFor(mobileReturnPreviewDisplayPost.source)" alt="">{{ sourceMeta[mobileReturnPreviewDisplayPost.source].label }}</span></header>
