@@ -1624,13 +1624,13 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control > * { position: relative; z-index: 2; }
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle).open { --mobile-frosted-surface: linear-gradient(142deg, rgba(255, 244, 202, .36), rgba(218, 193, 126, .20) 58%, rgba(159, 127, 63, .16)); color: #514018; box-shadow: 0 0 16px #d5bd7138, 0 12px 30px #54452a24, inset 0 1px 0 #fff7d875!important; }
   .phone-ui.dark :is(.mobile-menu-toggle, .mobile-timeline-toggle).open { --mobile-frosted-surface: linear-gradient(142deg, rgba(143, 157, 204, .28), rgba(64, 75, 111, .20) 55%, rgba(25, 31, 53, .22)); color: #f7f2df; box-shadow: 0 0 18px #758de340, 0 12px 32px #0006, inset 0 1px 0 #edf1ff38!important; }
+  /* The timeline button deliberately shares the exact same frosted material as
+     the menu and scroll-top controls. Only the platform icon is specialized. */
   .phone-ui .mobile-timeline-toggle.mobile-frosted-control > .sidebar-source-icon { opacity: 1; filter: grayscale(1) brightness(0) invert(.38) opacity(.96) drop-shadow(0 1px 2px rgba(255, 255, 255, .44))!important; }
   .phone-ui .mobile-timeline-toggle.mobile-frosted-control > .nav-mask-symbol { color: #52606c!important; filter: drop-shadow(0 1px 2px rgba(255, 255, 255, .44)); }
-  .phone-ui .mobile-timeline-toggle.mobile-frosted-control { --mobile-frosted-surface: linear-gradient(145deg, rgba(255, 255, 255, .13), rgba(255, 247, 226, .035) 56%, rgba(169, 137, 91, .045)); background: rgba(244, 238, 225, .12)!important; backdrop-filter: blur(72px) saturate(145%) contrast(.95)!important; -webkit-backdrop-filter: blur(72px) saturate(145%) contrast(.95)!important; }
   .phone-ui .mobile-timeline-toggle.mobile-frosted-control.active { color: #795f24; }
   .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control > .sidebar-source-icon { filter: grayscale(1) brightness(0) invert(.94) opacity(.98) drop-shadow(0 0 4px rgba(211, 224, 255, .46))!important; }
   .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control > .nav-mask-symbol { color: #e9effd!important; filter: drop-shadow(0 0 4px rgba(211, 224, 255, .46)); }
-  .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control { --mobile-frosted-surface: linear-gradient(145deg, rgba(199, 211, 242, .10), rgba(91, 105, 143, .025) 52%, rgba(4, 7, 14, .045)); background: rgba(17, 22, 34, .14)!important; backdrop-filter: blur(78px) saturate(142%) contrast(.96)!important; -webkit-backdrop-filter: blur(78px) saturate(142%) contrast(.96)!important; }
   .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control.active { color: #f5e4a4; }
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle) { transition: opacity .3s ease, transform .34s cubic-bezier(.16,.88,.22,1), color .22s ease, background .22s ease, box-shadow .28s ease; }
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-control-hidden { opacity: 0; pointer-events: none; transform: translateY(-12px) scale(.86); filter: blur(.4px); }
@@ -1947,12 +1947,14 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
 .mobile-author-preview-head .author-profile-main > img { width: 44px; height: 44px; }
 .mobile-author-preview-head .author-profile-main h1 { max-width: calc(100vw - 122px); margin: 0; color: var(--ink); font-family: 'Noto Serif SC', serif; font-size: 18px; line-height: 1.3; }
 .mobile-author-preview-head .author-profile-main .eyebrow { margin: 0 0 3px; font-size: 8px; letter-spacing: 1px; }
-.mobile-author-preview-head .author-profile-main .subtitle { margin-top: 3px; font-size: 9px; }
-.mobile-author-preview-heading { align-items: center; margin: 12px 0 0; }
+.mobile-author-preview-head .author-profile-main .subtitle { margin-top: 3px; font-size: 10px; }
+.mobile-author-preview-heading { align-items: center; margin: 16px 0 12px; }
 .mobile-author-preview-heading .filters { display: flex; gap: 5px; }
 .mobile-author-preview-heading .timeline-tools { margin-left: auto; }
-.mobile-author-preview-heading .timeline-search { width: min(132px, 34vw); }
-.mobile-author-preview-heading .timeline-search > span { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.mobile-author-preview-heading .timeline-search { width: 100%; }
+.mobile-author-preview-heading .timeline-search > span { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.mobile-author-preview-feed { position: relative; display: block; width: 100%; min-height: 240px; padding: 0; contain: layout style; }
+.mobile-author-preview-feed .masonry-card { pointer-events: none; }
 .mobile-author-preview-toolbar { display: grid; grid-template-columns: auto 40px 40px minmax(0, 1fr); gap: 6px; align-items: center; margin: 12px 0 0; }
 .mobile-author-preview-toolbar > :is(span, i, label) { display: grid; place-items: center; height: 40px; color: #718279; background: var(--card); border: 1px solid var(--line); border-radius: 9px; }
 .mobile-author-preview-toolbar > span { min-width: 56px; padding: 0 11px; color: #80611c; background: #f6eccf; border-color: #dccb9c; font-size: 12px; font-weight: 650; }

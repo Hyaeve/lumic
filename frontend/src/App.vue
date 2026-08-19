@@ -364,9 +364,12 @@ const mobileLightboxTrackStyle = computed(() => {
 const mobileDetailPageStyle = computed(() => {
   const width = typeof window === 'undefined' ? 390 : Math.max(1, window.innerWidth)
   const height = typeof window === 'undefined' ? 844 : Math.max(1, window.innerHeight)
-  const progress = Math.min(1, Math.max(Math.abs(mobileDetailPageDragX.value) / width, Math.abs(mobileDetailPageDragY.value) / height))
+  const horizontalProgress = Math.min(1, Math.abs(mobileDetailPageDragX.value) / width)
+  const verticalProgress = Math.min(1, Math.abs(mobileDetailPageDragY.value) / height)
+  const progress = Math.max(horizontalProgress, verticalProgress)
+  const scale = 1 - verticalProgress * .018
   return {
-    transform: `translate3d(${mobileDetailPageDragX.value}px, ${mobileDetailPageDragY.value}px, 0) scale(${1 - progress * .018})`,
+    transform: `translate3d(${mobileDetailPageDragX.value}px, ${mobileDetailPageDragY.value}px, 0) scale(${scale})`,
     opacity: String(1 - progress * .08),
     transition: mobileDetailPageDragging.value ? 'none' : mobileDetailPageAnimating.value ? `transform ${mobileDetailPageTransitionMs.value}ms cubic-bezier(.16, .86, .2, 1), opacity ${Math.min(280, mobileDetailPageTransitionMs.value)}ms ease` : 'none'
   }
@@ -375,50 +378,74 @@ const mobileAuthorPreviewDisplayPost = computed(() => masonryDetailPost.value ||
 const mobileAuthorTimelinePosts = computed(() => {
   const post = mobileAuthorPreviewDisplayPost.value
   if (!post) return []
-  return posts.value.filter(item => item.source === post.source && item.author === post.author)
+  let result = posts.value.filter(item => item.source === post.source && item.author === post.author)
+  const keywords = timelineSearch.value.trim().normalize('NFKC').toLocaleLowerCase().split(/\s+/).filter(Boolean)
+  if (keywords.length) result = result.filter(item => {
+    const tags = Array.isArray(item.tags) ? item.tags : []
+    const searchable = [item.caption, item.author, ...tags, ...tags.map(tag => `#${tag}`)]
+      .map(value => String(value || '').normalize('NFKC').toLocaleLowerCase())
+    return keywords.every(keyword => searchable.some(value => value.includes(keyword)))
+  })
+  return [...result].sort((left, right) => {
+    const difference = new Date(right.published).getTime() - new Date(left.published).getTime()
+    return timelineSort.value === 'newest' ? difference : -difference
+  })
 })
-function buildMobilePreviewColumns(items, limit = 8) {
-  const columns = [[], []]
+function buildMobilePreviewMasonry(items, limit = 8) {
+  const gap = 8
+  const viewportWidth = typeof window === 'undefined' ? 390 : Math.max(1, window.innerWidth)
+  // The transition surface has the same horizontal inset as the real mobile content.
+  const columnWidth = Math.max(1, (viewportWidth - 24 - gap) / 2)
   const heights = [0, 0]
-  for (const post of items.slice(0, limit)) {
+  return items.slice(0, limit).map((post, index) => {
     const column = heights[1] < heights[0] ? 1 : 0
-    columns[column].push(post)
-    heights[column] += (masonryHeights.value[post.id] || estimateMasonryPostHeight(post)) + 8
-  }
-  return columns
+    const height = masonryHeights.value[post.id] || estimateMasonryPostHeight(post)
+    const item = { post, index, column, x: column * (columnWidth + gap), y: heights[column], height, width: columnWidth }
+    heights[column] += height + gap
+    return item
+  })
+}
+function mobilePreviewFeedStyle(items) {
+  const height = Math.max(0, ...items.map(item => item.y + item.height))
+  return { height: `${Math.ceil(height)}px` }
+}
+function mobilePreviewMasonryItemStyle(item) {
+  return { left: `${item.x}px`, top: `${item.y}px`, width: `${item.width}px` }
 }
 const mobileAuthorPreviewPosts = computed(() => mobileAuthorTimelinePosts.value.slice(0, 8))
-const mobileAuthorPreviewColumns = computed(() => buildMobilePreviewColumns(mobileAuthorPreviewPosts.value))
+const mobileAuthorPreviewItems = computed(() => buildMobilePreviewMasonry(mobileAuthorTimelinePosts.value))
+const mobileAuthorPreviewFeedStyle = computed(() => mobilePreviewFeedStyle(mobileAuthorPreviewItems.value))
 const mobileAuthorPreviewStyle = computed(() => {
   if (mobileAuthorPreviewHandoff.value) return {
     zIndex: 70,
     opacity: mobileAuthorPreviewFading.value ? '0' : '1',
-    transform: 'translate3d(0, 0, 0) scale(1)',
+    transform: 'translate3d(0, 0, 0)',
     transition: mobileAuthorPreviewFading.value ? 'opacity .18s ease-out' : 'none'
   }
   const width = typeof window === 'undefined' ? 390 : Math.max(1, window.innerWidth)
   const progress = Math.min(1, Math.max(0, -mobileDetailPageDragX.value) / width)
   return {
     opacity: String(.7 + progress * .3),
-    transform: `translate3d(${100 - progress * 100}%, 0, 0) scale(${.985 + progress * .015})`,
+    transform: `translate3d(${100 - progress * 100}%, 0, 0)`,
     transition: mobileDetailPageDragging.value ? 'none' : mobileDetailPageAnimating.value ? 'transform .32s cubic-bezier(.16,.88,.22,1)' : 'none'
   }
 })
 const mobileReturnPreviewPosts = computed(() => filteredPosts.value.slice(0, 8))
-const mobileReturnPreviewColumns = computed(() => buildMobilePreviewColumns(mobileReturnPreviewPosts.value))
+const mobileReturnPreviewItems = computed(() => buildMobilePreviewMasonry(filteredPosts.value))
+const mobileReturnPreviewFeedStyle = computed(() => mobilePreviewFeedStyle(mobileReturnPreviewItems.value))
 const mobileReturnPreviewDisplayPost = computed(() => masonryDetailPost.value || mobileTimelineReturnPreviewPost.value)
 const mobileReturnPreviewStyle = computed(() => {
   if (mobileTimelineReturnHandoff.value) return {
     zIndex: 70,
     opacity: mobileTimelineReturnFading.value ? '0' : '1',
-    transform: 'translate3d(0, 0, 0) scale(1)',
+    transform: 'translate3d(0, 0, 0)',
     transition: mobileTimelineReturnFading.value ? 'opacity .18s ease-out' : 'none'
   }
   const width = typeof window === 'undefined' ? 390 : Math.max(1, window.innerWidth)
   const progress = Math.min(1, Math.max(0, mobileDetailPageDragX.value) / width)
   return {
     opacity: String(.7 + progress * .3),
-    transform: `translate3d(${-100 + progress * 100}%, 0, 0) scale(${.985 + progress * .015})`,
+    transform: `translate3d(${-100 + progress * 100}%, 0, 0)`,
     transition: mobileDetailPageDragging.value ? 'none' : mobileDetailPageAnimating.value ? 'transform .32s cubic-bezier(.16,.88,.22,1)' : 'none'
   }
 })
@@ -446,7 +473,7 @@ const mobileAuthorPageStyle = computed(() => {
   const width = typeof window === 'undefined' ? 390 : Math.max(1, window.innerWidth)
   const progress = Math.min(1, Math.max(0, mobileAuthorPageDragX.value) / width)
   return {
-    transform: `translate3d(${mobileAuthorPageDragX.value}px, 0, 0) scale(${1 - progress * .018})`,
+    transform: `translate3d(${mobileAuthorPageDragX.value}px, 0, 0)`,
     opacity: String(1 - progress * .08),
     transition: mobileAuthorPageDragging.value ? 'none' : mobileAuthorPageAnimating.value ? 'transform .32s cubic-bezier(.16,.88,.22,1), opacity .26s ease' : 'none'
   }
@@ -455,14 +482,14 @@ const mobileDetailReturnPreviewStyle = computed(() => {
   if (mobileDetailReturnHandoff.value) return {
     zIndex: 70,
     opacity: mobileDetailReturnFading.value ? '0' : '1',
-    transform: 'translate3d(0, 0, 0) scale(1)',
+    transform: 'translate3d(0, 0, 0)',
     transition: mobileDetailReturnFading.value ? 'opacity .18s ease-out' : 'none'
   }
   const width = typeof window === 'undefined' ? 390 : Math.max(1, window.innerWidth)
   const progress = Math.min(1, Math.max(0, mobileAuthorPageDragX.value) / width)
   return {
     opacity: String(.7 + progress * .3),
-    transform: `translate3d(${-100 + progress * 100}%, 0, 0) scale(${.985 + progress * .015})`,
+    transform: `translate3d(${-100 + progress * 100}%, 0, 0)`,
     transition: mobileAuthorPageDragging.value ? 'none' : mobileAuthorPageAnimating.value ? 'transform .32s cubic-bezier(.16,.88,.22,1)' : 'none'
   }
 })
@@ -2574,13 +2601,20 @@ function startMobileAuthorPreviewHandoff(post) {
   mobileAuthorPreviewFading.value = false
   let attempts = 0
   const waitForAuthorPage = () => {
-    const authorCardsReady = masonryMetricsReady.value && Boolean(document.querySelector('.mobile-author-detail-page .masonry-card'))
-    if (!authorCardsReady && attempts < 24) {
+    const cards = [...document.querySelectorAll('.mobile-author-detail-page .masonry-card')]
+    const viewportCards = cards.filter(card => card.getBoundingClientRect().top < window.innerHeight + 80)
+    const authorCardsReady = masonryMetricsReady.value
+      && viewportCards.length > 0
+      && viewportCards.every(card => !masonryMediaPending(card))
+    if (!authorCardsReady && attempts < 42) {
       attempts += 1
       window.requestAnimationFrame(waitForAuthorPage)
       return
     }
-    window.requestAnimationFrame(() => {
+    // Let ResizeObserver commit the same card measurements used by the transition
+    // surface before it hands off to the real author page.
+    scheduleMasonryMetrics()
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
       mobileAuthorPreviewFading.value = true
       mobileAuthorHandoffTimer = window.setTimeout(() => {
         mobileAuthorHandoffTimer = 0
@@ -2588,7 +2622,7 @@ function startMobileAuthorPreviewHandoff(post) {
         mobileAuthorPreviewFading.value = false
         mobileAuthorPreviewPost.value = null
       }, 210)
-    })
+    }))
   }
   nextTick(() => window.requestAnimationFrame(waitForAuthorPage))
 }
@@ -2596,14 +2630,27 @@ function startMobileDetailReturnHandoff() {
   if (mobileDetailReturnHandoffTimer) window.clearTimeout(mobileDetailReturnHandoffTimer)
   mobileDetailReturnHandoff.value = true
   mobileDetailReturnFading.value = false
-  nextTick(() => window.requestAnimationFrame(() => window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
-    mobileDetailReturnFading.value = true
-    mobileDetailReturnHandoffTimer = window.setTimeout(() => {
-      mobileDetailReturnHandoffTimer = 0
-      mobileDetailReturnHandoff.value = false
-      mobileDetailReturnFading.value = false
-    }, 190)
-  }))))
+  let attempts = 0
+  const waitForDetailPage = () => {
+    const page = document.querySelector('.mobile-post-detail-page')
+    const currentMedia = page?.querySelector('.mobile-post-media-slide.current img, .mobile-post-media-slide.current video')
+    const mediaReady = !currentMedia
+      || (currentMedia.tagName === 'IMG' ? currentMedia.complete && currentMedia.naturalWidth > 0 : currentMedia.readyState >= 1)
+    if ((!page || !mediaReady) && attempts < 42) {
+      attempts += 1
+      window.requestAnimationFrame(waitForDetailPage)
+      return
+    }
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+      mobileDetailReturnFading.value = true
+      mobileDetailReturnHandoffTimer = window.setTimeout(() => {
+        mobileDetailReturnHandoffTimer = 0
+        mobileDetailReturnHandoff.value = false
+        mobileDetailReturnFading.value = false
+      }, 190)
+    }))
+  }
+  nextTick(() => window.requestAnimationFrame(waitForDetailPage))
 }
 function startMobileTimelineReturnHandoff(post) {
   if (!post) return
@@ -3756,12 +3803,48 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
     <aside v-if="phonePortrait && mobileAuthorPreviewDisplayPost" class="mobile-author-swipe-preview" :style="mobileAuthorPreviewStyle" aria-hidden="true">
       <header class="topbar author-page-header mobile-author-preview-head"><div class="author-profile-main"><img :src="postAvatar(mobileAuthorPreviewDisplayPost)" alt=""><div><p class="eyebrow">AUTHOR TIMELINE · {{ sourceMeta[mobileAuthorPreviewDisplayPost.source].label }}</p><h1>{{ mobileAuthorPreviewDisplayPost.author }}</h1><p class="subtitle">共 {{ mobileAuthorTimelinePosts.length }} 条已拉取动态</p></div></div></header>
       <div class="section-heading mobile-author-preview-heading"><div class="filters"><span class="timeline-sort-button"><span class="timeline-sort-symbol" :style="{ '--nav-mask': `url(${timelineSort === 'newest' ? newestSortIcon : oldestSortIcon})` }"></span></span><span class="timeline-view-button"><span :class="['timeline-view-symbol', { 'list-view-symbol': !isMasonryView }]" :style="{ '--nav-mask': `url(${isMasonryView ? masonryViewIcon : listViewIcon})` }"></span></span><span class="timeline-refresh-button"><span class="timeline-refresh-symbol" :style="{ '--nav-mask': `url(${refreshIcon})` }"></span></span></div><div class="timeline-tools"><label class="timeline-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><span>搜索</span></label></div></div>
-      <div class="mobile-author-preview-grid"><div v-for="(column, columnIndex) in mobileAuthorPreviewColumns" :key="`author-preview-column-${columnIndex}`" class="mobile-author-preview-column"><article v-for="post in column" :key="post.id" class="mobile-author-preview-card"><div v-if="mobileDetailPreviewCover(post)" class="masonry-cover"><img :src="previewMedia(mobileDetailPreviewCover(post))" alt="" loading="eager" decoding="async" fetchpriority="low"><span v-if="post.media?.length > 1" class="masonry-media-count">1 / {{ post.media.length }}</span></div><div class="masonry-card-body"><p v-if="post.caption" class="masonry-caption">{{ post.caption }}</p><div v-if="post.tags?.length" class="masonry-tags"><span v-for="tag in post.tags.slice(0, 2)" :key="tag">#{{ tag }}</span></div><footer class="masonry-meta"><span class="masonry-author"><img :src="postAvatar(post)" alt=""><span><strong>{{ post.author }}</strong><small>{{ postDateTime(post.published) }}</small></span></span><span :class="['mobile-preview-like', { liked: post.liked }]"><span class="post-action-mask post-favorite-symbol" :style="{ '--post-action-mask': `url(${favoriteNavIcon})` }"></span></span></footer></div></article></div></div>
+      <section class="mobile-author-preview-feed feed-list masonry-feed" :style="mobileAuthorPreviewFeedStyle">
+        <article v-for="item in mobileAuthorPreviewItems" :key="item.post.id" :class="['masonry-card', { 'text-only': !masonryCover(item.post) && !item.post.videos?.length }]" :style="mobilePreviewMasonryItemStyle(item)">
+          <div v-if="masonryCover(item.post)" class="masonry-cover">
+            <img :src="previewMedia(masonryCover(item.post))" alt="" loading="eager" decoding="async" fetchpriority="low">
+            <span v-if="!masonryCoverIsVideo(item.post) && item.post.media?.length > 1" class="masonry-media-count">1 / {{ item.post.media.length }}</span>
+            <span v-if="masonryPostHasVideo(item.post)" class="masonry-video-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m9 7 8 5-8 5Z"/></svg></span>
+          </div>
+          <div v-else-if="primaryVideo(item.post)" class="masonry-cover masonry-video-cover">
+            <img v-if="primaryVideo(item.post).poster" :src="previewMedia(primaryVideo(item.post).poster)" alt="" loading="eager" decoding="async" fetchpriority="low">
+            <video v-else :src="videoPreviewSource(primaryVideo(item.post))" muted playsinline preload="metadata" aria-hidden="true"></video>
+            <span class="masonry-video-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m9 7 8 5-8 5Z"/></svg></span>
+          </div>
+          <div class="masonry-card-body">
+            <p v-if="item.post.caption" class="masonry-caption">{{ item.post.caption }}</p>
+            <div v-if="item.post.tags?.length" class="masonry-tags"><span v-for="tag in item.post.tags.slice(0, 2)" :key="tag">#{{ tag }}</span><span v-if="item.post.tags.length > 2">+{{ item.post.tags.length - 2 }}</span></div>
+            <footer class="masonry-meta"><span class="masonry-author"><img :src="postAvatar(item.post)" alt=""><span><strong>{{ item.post.author }}</strong><small>{{ postDateTime(item.post.published) }}</small></span></span><span :class="['masonry-like-button', { liked: item.post.liked }]"><span class="post-action-mask post-favorite-symbol" :style="{ '--post-action-mask': `url(${favoriteNavIcon})` }"></span></span></footer>
+          </div>
+        </article>
+      </section>
     </aside>
     <aside v-if="phonePortrait && mobileReturnPreviewDisplayPost" class="mobile-return-swipe-preview" :style="mobileReturnPreviewStyle" aria-hidden="true">
       <header><div><small>SAVED MOMENTS</small><strong>{{ mobileTimelineTitle }}</strong></div><span :class="['source-pill', sourceMeta[mobileReturnPreviewDisplayPost.source].color]"><img class="source-icon" :src="sourceIconFor(mobileReturnPreviewDisplayPost.source)" alt="">{{ sourceMeta[mobileReturnPreviewDisplayPost.source].label }}</span></header>
       <div class="mobile-author-preview-toolbar"><span>全部</span><i></i><i></i><label><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><b>搜索</b></label></div>
-      <div class="mobile-author-preview-grid"><div v-for="(column, columnIndex) in mobileReturnPreviewColumns" :key="`timeline-preview-column-${columnIndex}`" class="mobile-author-preview-column"><article v-for="post in column" :key="post.id" class="mobile-author-preview-card"><div v-if="mobileDetailPreviewCover(post)" class="masonry-cover"><img :src="previewMedia(mobileDetailPreviewCover(post))" alt="" loading="eager" decoding="async" fetchpriority="low"><span v-if="post.media?.length > 1" class="masonry-media-count">1 / {{ post.media.length }}</span></div><div class="masonry-card-body"><p v-if="post.caption" class="masonry-caption">{{ post.caption }}</p><div v-if="post.tags?.length" class="masonry-tags"><span v-for="tag in post.tags.slice(0, 2)" :key="tag">#{{ tag }}</span></div><footer class="masonry-meta"><span class="masonry-author"><img :src="postAvatar(post)" alt=""><span><strong>{{ post.author }}</strong><small>{{ postDateTime(post.published) }}</small></span></span><span :class="['mobile-preview-like', { liked: post.liked }]"><span class="post-action-mask post-favorite-symbol" :style="{ '--post-action-mask': `url(${favoriteNavIcon})` }"></span></span></footer></div></article></div></div>
+      <section class="mobile-author-preview-feed feed-list masonry-feed" :style="mobileReturnPreviewFeedStyle">
+        <article v-for="item in mobileReturnPreviewItems" :key="item.post.id" :class="['masonry-card', { 'text-only': !masonryCover(item.post) && !item.post.videos?.length }]" :style="mobilePreviewMasonryItemStyle(item)">
+          <div v-if="masonryCover(item.post)" class="masonry-cover">
+            <img :src="previewMedia(masonryCover(item.post))" alt="" loading="eager" decoding="async" fetchpriority="low">
+            <span v-if="!masonryCoverIsVideo(item.post) && item.post.media?.length > 1" class="masonry-media-count">1 / {{ item.post.media.length }}</span>
+            <span v-if="masonryPostHasVideo(item.post)" class="masonry-video-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m9 7 8 5-8 5Z"/></svg></span>
+          </div>
+          <div v-else-if="primaryVideo(item.post)" class="masonry-cover masonry-video-cover">
+            <img v-if="primaryVideo(item.post).poster" :src="previewMedia(primaryVideo(item.post).poster)" alt="" loading="eager" decoding="async" fetchpriority="low">
+            <video v-else :src="videoPreviewSource(primaryVideo(item.post))" muted playsinline preload="metadata" aria-hidden="true"></video>
+            <span class="masonry-video-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m9 7 8 5-8 5Z"/></svg></span>
+          </div>
+          <div class="masonry-card-body">
+            <p v-if="item.post.caption" class="masonry-caption">{{ item.post.caption }}</p>
+            <div v-if="item.post.tags?.length" class="masonry-tags"><span v-for="tag in item.post.tags.slice(0, 2)" :key="tag">#{{ tag }}</span><span v-if="item.post.tags.length > 2">+{{ item.post.tags.length - 2 }}</span></div>
+            <footer class="masonry-meta"><span class="masonry-author"><img :src="postAvatar(item.post)" alt=""><span><strong>{{ item.post.author }}</strong><small>{{ postDateTime(item.post.published) }}</small></span></span><span :class="['masonry-like-button', { liked: item.post.liked }]"><span class="post-action-mask post-favorite-symbol" :style="{ '--post-action-mask': `url(${favoriteNavIcon})` }"></span></span></footer>
+          </div>
+        </article>
+      </section>
     </aside>
     <aside v-if="phonePortrait && masonryDetailPost && mobileDetailPreviousPost" class="mobile-detail-vertical-preview previous" :style="mobilePreviousDetailPreviewStyle" aria-hidden="true">
       <header class="mobile-post-detail-head">
