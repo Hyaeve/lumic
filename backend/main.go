@@ -931,6 +931,14 @@ func flowPublicPath(source Source, author, name string) string {
 	return "/flow/" + url.PathEscape(string(source)) + "/" + url.PathEscape(safeFlowDirectoryName(author)) + "/" + url.PathEscape(name)
 }
 
+func flowNestedPublicPath(source Source, storageName string, segments ...string) string {
+	parts := []string{"", "flow", url.PathEscape(string(source)), url.PathEscape(safeFlowDirectoryName(storageName))}
+	for _, segment := range segments {
+		parts = append(parts, url.PathEscape(segment))
+	}
+	return strings.Join(parts, "/")
+}
+
 // Cache account avatars locally so mobile WebViews do not depend on third-party
 // avatar hosts, which may reject hotlinking or fail under their network policy.
 func cacheAccountAvatar(source Source, storageName, avatar, proxyURL, referer, cookie string) string {
@@ -4139,6 +4147,22 @@ func (b *BilibiliStore) archiveSourceContent(feed SourceConfig, posts []Post) (S
 		if !strings.HasPrefix(prepared.ID, "weibo-likes-") && !strings.HasPrefix(prepared.ID, "pixiv-bookmarks-") && !strings.HasPrefix(prepared.ID, "twitter-likes-") && !isBilibiliFavoriteOpusFeed(prepared) {
 			posts[postIndex].Avatar = prepared.Avatar
 		}
+		if avatar := normalizeRemoteImage(posts[postIndex].Avatar); avatar != "" && !strings.HasPrefix(avatar, "/flow/") {
+			avatarBase := filepath.Join(target.StoragePath, "avatar")
+			avatarPathFor := func(path string) string {
+				return flowPublicPath(target.Source, target.Name, filepath.Base(path))
+			}
+			if isCollectionFeed(prepared) && target.ID == prepared.ID {
+				authorDirectory := safeFlowDirectoryName(posts[postIndex].Author)
+				avatarBase = filepath.Join(target.StoragePath, ".avatars", authorDirectory, "avatar")
+				avatarPathFor = func(path string) string {
+					return flowNestedPublicPath(target.Source, target.Name, ".avatars", authorDirectory, filepath.Base(path))
+				}
+			}
+			if avatarPath, avatarErr := downloadRemoteImage(client, avatar, avatarBase, referer, cookie); avatarErr == nil {
+				posts[postIndex].Avatar = avatarPathFor(avatarPath)
+			}
+		}
 		localMedia := make([]string, 0, len(posts[postIndex].Media))
 		for mediaIndex, remoteURL := range posts[postIndex].Media {
 			if strings.HasPrefix(remoteURL, "/flow/") {
@@ -4800,9 +4824,20 @@ func (b *BilibiliStore) weiboLikesHandler(w http.ResponseWriter, r *http.Request
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	posts, err := b.fetchWeiboLikedPosts(SourceConfig{}, false)
+	b.RLock()
+	credentials := b.config.Weibo
+	b.RUnlock()
+	feed := SourceConfig{ID: "weibo-likes-" + credentials.UserID, Source: SourceWeibo, Name: weiboLikesName, Handle: credentials.UserName, Avatar: credentials.Avatar}
+	posts, err := b.fetchWeiboLikedPosts(feed, false)
 	if err != nil {
 		writeAPIError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	b.RLock()
+	feed, posts, err = b.archiveSourceContent(feed, posts)
+	b.RUnlock()
+	if err != nil {
+		writeAPIError(w, http.StatusBadGateway, "无法归档微博点赞动态："+err.Error())
 		return
 	}
 	added, err := b.content.mergePosts(posts)
@@ -4890,6 +4925,14 @@ func (s *Store) postsAfterOrSourceMembership(posts []Post, boundary time.Time, f
 			continue
 		}
 		if containsString(stored.FeedIDs, feedID) {
+			// Collection syncs also repair legacy remote author avatars. Reuse all
+			// already archived media so this does not trigger a full redownload.
+			if strings.TrimSpace(post.Avatar) == "" || localFlowFileAvailable(stored.Avatar) {
+				continue
+			}
+			prepared, _ := reuseAvailablePostArchive(post, stored)
+			prepared.FeedIDs = mergeUniqueStrings(stored.FeedIDs, prepared.FeedIDs, []string{feedID})
+			filtered = append(filtered, prepared)
 			continue
 		}
 		if len(stored.Media) > 0 {
@@ -5009,7 +5052,7 @@ func historyPostNeedsMetadataUpdate(stored, incoming Post, feed SourceConfig) bo
 	if stored.OriginalURL == "" && incoming.OriginalURL != "" {
 		return true
 	}
-	if stored.Avatar == "" && incoming.Avatar != "" {
+	if incoming.Avatar != "" && !localFlowFileAvailable(stored.Avatar) {
 		return true
 	}
 	for _, tag := range feed.Tags {
