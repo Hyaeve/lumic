@@ -2088,7 +2088,7 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
   .phone-ui .masonry-video-mark { right: 6px; bottom: 6px; width: 25px; height: 25px; }
   .phone-ui .masonry-select-control { top: 6px; right: 6px; }
   .phone-ui .mobile-post-detail-page { width: 100%; margin: 0; padding: env(safe-area-inset-top) 0 0; overflow-x: clip; overflow-y: visible; overscroll-behavior-x: contain; touch-action: pan-y; will-change: transform, opacity; }
-  .phone-ui .mobile-author-detail-page { position: relative; z-index: 1; overscroll-behavior-x: contain; touch-action: pan-y; will-change: transform; }
+  .phone-ui .mobile-author-detail-page { position: relative; z-index: 1; min-height: 100dvh; overscroll-behavior-x: contain; touch-action: pan-y; will-change: transform; }
   .phone-ui .mobile-post-detail-page.page-dragging { user-select: none; }
   .phone-ui .mobile-post-detail-head { position: sticky; top: 0; z-index: 5; gap: 4px; padding: 8px 7px 8px 4px; }
   .phone-ui .mobile-post-back { width: 31px; }
