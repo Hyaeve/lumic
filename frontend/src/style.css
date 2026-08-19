@@ -138,6 +138,30 @@ a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color
 @media (prefers-reduced-motion: reduce) {
   .lightbox-layer, .lightbox-image-stage, .mobile-lightbox-carousel { animation: none!important; }
 }
+
+/* The desktop source collapse control is an icon-only affordance. Keep the
+   button box completely transparent even when the dark navigation hover/active
+   rules are applied. */
+.app-shell:not(.phone-ui) .main-nav .source-nav-toggle,
+.app-shell:not(.phone-ui) .main-nav .source-nav-toggle:hover,
+.app-shell:not(.phone-ui) .main-nav .source-nav-toggle:focus,
+.app-shell:not(.phone-ui) .main-nav .source-nav-toggle:focus-visible,
+.app-shell:not(.phone-ui) .main-nav .source-nav-toggle:active,
+.app-shell:not(.phone-ui) .dark .main-nav .source-nav-toggle,
+.app-shell:not(.phone-ui) .dark .main-nav .source-nav-toggle:hover,
+.app-shell:not(.phone-ui) .dark .main-nav .source-nav-toggle:focus,
+.app-shell:not(.phone-ui) .dark .main-nav .source-nav-toggle:focus-visible,
+.app-shell:not(.phone-ui) .dark .main-nav .source-nav-toggle:active {
+  background: transparent!important;
+  background-image: none!important;
+  border: 0!important;
+  border-color: transparent!important;
+  border-radius: 0!important;
+  box-shadow: none!important;
+  outline: 0!important;
+}
+.app-shell:not(.phone-ui) .main-nav .source-nav-toggle::before,
+.app-shell:not(.phone-ui) .main-nav .source-nav-toggle::after { display: none!important; }
 /* Settings workspace */
 .settings-page { width: calc(100% - 258px); min-height: 100vh; margin-left: 258px; padding: 30px 52px 64px; background: #f6f8f6; }
 .dark .settings-page { background: #17211f; }
