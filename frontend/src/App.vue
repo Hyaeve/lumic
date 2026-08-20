@@ -2572,21 +2572,31 @@ function findMobileDetailReturnTarget(postId) {
 function runMobileDetailRouteExit(snapshot) {
   if (!snapshot?.layer?.isConnected) return
   let attempts = 0
+  let stableFrames = 0
+  let previousSignature = ''
   const animate = () => {
     if (!snapshot.layer.isConnected) return
     const foundTarget = findMobileDetailReturnTarget(snapshot.postId)
     const storedTarget = mobilePostOriginVisual?.postId === snapshot.postId ? mobilePostOriginVisual : null
-    if (!foundTarget && !storedTarget && attempts < 14) {
+    const expectedScroll = Math.max(0, Number(mobilePostReturnScrollY.value) || 0)
+    const scrollReady = Math.abs(window.scrollY - expectedScroll) < 3
+    const targetRect = foundTarget?.rect || storedTarget?.rect || null
+    const signature = targetRect && scrollReady
+      ? [window.scrollY, targetRect.left, targetRect.top, targetRect.width, targetRect.height].map(value => Math.round(value * 10) / 10).join(':')
+      : ''
+    stableFrames = signature && signature === previousSignature ? stableFrames + 1 : 0
+    previousSignature = signature
+    if ((!targetRect || !scrollReady || stableFrames < 2) && attempts < 36) {
       attempts += 1
       window.requestAnimationFrame(animate)
       return
     }
-    const targetRect = foundTarget?.rect || storedTarget?.rect || snapshot.sourceRect
+    const finalTargetRect = targetRect || snapshot.sourceRect
     const targetRadius = foundTarget?.borderRadius || storedTarget?.borderRadius || '9px'
-    const translateX = targetRect.left - snapshot.sourceRect.left
-    const translateY = targetRect.top - snapshot.sourceRect.top
-    const scaleX = targetRect.width / Math.max(1, snapshot.sourceRect.width)
-    const scaleY = targetRect.height / Math.max(1, snapshot.sourceRect.height)
+    const translateX = finalTargetRect.left - snapshot.sourceRect.left
+    const translateY = finalTargetRect.top - snapshot.sourceRect.top
+    const scaleX = finalTargetRect.width / Math.max(1, snapshot.sourceRect.width)
+    const scaleY = finalTargetRect.height / Math.max(1, snapshot.sourceRect.height)
     if (foundTarget?.element) {
       mobileDetailRouteExitTarget = foundTarget.element
       foundTarget.element.style.visibility = 'hidden'
@@ -2595,19 +2605,17 @@ function runMobileDetailRouteExit(snapshot) {
       cleanupMobileDetailRouteExit()
       return
     }
-    const easing = 'cubic-bezier(.2,.78,.18,1)'
+    const easing = 'cubic-bezier(.22,.61,.36,1)'
     const targetRadiusValue = Number.parseFloat(targetRadius) || 9
     const shellAnimation = snapshot.shell.animate([
       { opacity: 1, transform: 'scale(1)' },
-      { opacity: .98, transform: 'scale(.999)', offset: .38 },
-      { opacity: .72, transform: 'scale(.996)', offset: .76 },
-      { opacity: 0, transform: 'scale(.994)' }
-    ], { duration: 370, easing, fill: 'forwards' })
+      { opacity: 1, transform: 'scale(1)', offset: .72 },
+      { opacity: 0, transform: 'scale(.998)' }
+    ], { duration: 300, easing, fill: 'forwards' })
     const mediaAnimation = snapshot.media.animate([
       { transform: 'translate3d(0,0,0) scale(1,1)', borderRadius: '0px', boxShadow: '0 0 0 rgba(0,0,0,0)' },
-      { transform: `translate3d(${translateX * .58}px,${translateY * .58}px,0) scale(${1 + (scaleX - 1) * .58},${1 + (scaleY - 1) * .58})`, borderRadius: `${targetRadiusValue * .58}px`, boxShadow: '0 14px 34px rgba(0,0,0,.14)', offset: .58 },
-      { transform: `translate3d(${translateX}px,${translateY}px,0) scale(${scaleX},${scaleY})`, borderRadius: targetRadius, boxShadow: '0 10px 28px rgba(0,0,0,.18)' }
-    ], { duration: 370, easing, fill: 'forwards' })
+      { transform: `translate3d(${translateX}px,${translateY}px,0) scale(${scaleX},${scaleY})`, borderRadius: targetRadius || `${targetRadiusValue}px`, boxShadow: '0 8px 24px rgba(0,0,0,.14)' }
+    ], { duration: 300, easing, fill: 'forwards' })
     Promise.allSettled([shellAnimation.finished, mediaAnimation.finished]).then(() => {
       cleanupMobileDetailRouteExit()
     })

@@ -1620,7 +1620,14 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
     pointer-events: none;
   }
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control::before { z-index: 0; background: var(--mobile-frosted-surface); backdrop-filter: blur(36px) saturate(148%) contrast(.96); -webkit-backdrop-filter: blur(36px) saturate(148%) contrast(.96); transform: translateZ(0); }
-  .phone-ui .mobile-timeline-toggle.mobile-frosted-control::before { backdrop-filter: blur(54px) saturate(154%) contrast(.95); -webkit-backdrop-filter: blur(54px) saturate(154%) contrast(.95); }
+  .phone-ui .mobile-timeline-toggle.mobile-frosted-control {
+    background: rgba(255, 255, 255, .07)!important;
+    backdrop-filter: blur(72px) saturate(165%) contrast(.94)!important;
+    -webkit-backdrop-filter: blur(72px) saturate(165%) contrast(.94)!important;
+  }
+  .phone-ui .mobile-timeline-toggle.mobile-frosted-control::before { backdrop-filter: blur(72px) saturate(165%) contrast(.94); -webkit-backdrop-filter: blur(72px) saturate(165%) contrast(.94); }
+  .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control { background: rgba(112, 130, 170, .045)!important; backdrop-filter: blur(72px) saturate(165%) contrast(.93)!important; -webkit-backdrop-filter: blur(72px) saturate(165%) contrast(.93)!important; }
+  .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control::before { backdrop-filter: blur(72px) saturate(165%) contrast(.93); -webkit-backdrop-filter: blur(72px) saturate(165%) contrast(.93); }
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control::after { z-index: 1; background: radial-gradient(circle at 24% 12%, rgba(255, 255, 255, .20), transparent 46%); }
   .phone-ui.dark :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control::after { background: radial-gradient(circle at 24% 12%, rgba(224, 232, 255, .14), transparent 46%); }
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control > * { position: relative; z-index: 2; }
