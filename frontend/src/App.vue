@@ -110,6 +110,7 @@ const posts = ref([])
 const postStats = ref(null)
 const postsFullyLoaded = ref(false)
 const feeds = ref([])
+const resolvedAuthorAvatars = ref({})
 const postActionBusy = ref('')
 const timelineMessage = ref('')
 const selectionMode = ref(false)
@@ -450,11 +451,22 @@ const mobileAuthorPreviewStyle = computed(() => {
     transition: mobileDetailPageDragging.value ? 'none' : mobileDetailPageAnimating.value ? 'transform .32s cubic-bezier(.16,.88,.22,1)' : 'none'
   }
 })
-const mobileReturnPreviewPosts = computed(() => filteredPosts.value.slice(0, 8))
-const mobileReturnPreviewLayout = computed(() => buildMobilePreviewMasonrySnapshot(filteredPosts.value, mobilePostReturnScrollY.value))
+const mobileAuthorReturnsToTimeline = computed(() => Boolean(authorProfile.value && mobileAuthorDetailState.value?.returnToDetail === false))
+const mobileReturnTimelinePosts = computed(() => {
+  const state = mobileAuthorDetailState.value
+  if (!mobileAuthorReturnsToTimeline.value || !Array.isArray(state?.returnPostIds)) return filteredPosts.value
+  const byId = new Map(posts.value.map(post => [String(post.id), post]))
+  return state.returnPostIds.map(id => byId.get(String(id))).filter(Boolean)
+})
+const mobileReturnPreviewPosts = computed(() => mobileReturnTimelinePosts.value.slice(0, 8))
+const mobileReturnPreviewLayout = computed(() => buildMobilePreviewMasonrySnapshot(
+  mobileReturnTimelinePosts.value,
+  mobileAuthorReturnsToTimeline.value ? mobileAuthorDetailState.value?.detailScrollY : mobilePostReturnScrollY.value
+))
 const mobileReturnPreviewItems = computed(() => mobileReturnPreviewLayout.value.items)
 const mobileReturnPreviewFeedStyle = computed(() => ({ height: `${Math.ceil(mobileReturnPreviewLayout.value.height)}px` }))
-const mobileReturnPreviewDisplayPost = computed(() => masonryDetailPost.value || mobileTimelineReturnPreviewPost.value)
+const mobileReturnPreviewDisplayPost = computed(() => masonryDetailPost.value || mobileTimelineReturnPreviewPost.value || (mobileAuthorReturnsToTimeline.value ? mobileAuthorDetailState.value?.post : null))
+const mobileReturnPreviewTitle = computed(() => mobileAuthorReturnsToTimeline.value ? (mobileAuthorDetailState.value?.returnTitle || '全部动态') : mobileTimelineTitle.value)
 const mobileDetailReturnContentStyle = computed(() => ({ transform: `translate3d(0, ${-(mobileAuthorDetailState.value?.detailScrollY || 0)}px, 0)` }))
 const mobileReturnPreviewStyle = computed(() => {
   if (mobileTimelineReturnHandoff.value) return {
@@ -464,11 +476,15 @@ const mobileReturnPreviewStyle = computed(() => {
     transition: mobileTimelineReturnFading.value ? 'opacity .18s ease-out' : 'none'
   }
   const width = typeof window === 'undefined' ? 390 : Math.max(1, window.innerWidth)
-  const progress = Math.min(1, Math.max(0, mobileDetailPageDragX.value) / width)
+  const returningFromAuthor = mobileAuthorReturnsToTimeline.value
+  const dragX = returningFromAuthor ? mobileAuthorPageDragX.value : mobileDetailPageDragX.value
+  const dragging = returningFromAuthor ? mobileAuthorPageDragging.value : mobileDetailPageDragging.value
+  const animating = returningFromAuthor ? mobileAuthorPageAnimating.value : mobileDetailPageAnimating.value
+  const progress = Math.min(1, Math.max(0, dragX) / width)
   return {
     opacity: String(.7 + progress * .3),
     transform: `translate3d(${-100 + progress * 100}%, 0, 0)`,
-    transition: mobileDetailPageDragging.value ? 'none' : mobileDetailPageAnimating.value ? 'transform .32s cubic-bezier(.16,.88,.22,1)' : 'none'
+    transition: dragging ? 'none' : animating ? 'transform .32s cubic-bezier(.16,.88,.22,1)' : 'none'
   }
 })
 const mobilePreviousDetailPreviewStyle = computed(() => {
@@ -689,22 +705,90 @@ function handleSourceAvatarError(event, feed, platform) {
   image.dataset.fallbackIndex = String(nextIndex)
   if (candidates[nextIndex]) image.src = candidates[nextIndex]
 }
+function authorAvatarKey(post) {
+  const source = String(post?.source || '').trim()
+  const author = String(post?.author || post?.name || '').trim()
+  return source && author ? `${source}\u0000${author}` : ''
+}
+function uniqueAvatarCandidates(values) {
+  const unique = [...new Set(values.map(value => String(value || '').trim()).filter(Boolean))]
+  return unique.sort((left, right) => Number(!left.startsWith('/flow/')) - Number(!right.startsWith('/flow/')))
+}
+const authorAvatarPool = computed(() => {
+  const pool = new Map()
+  const add = (source, author, avatar) => {
+    const key = authorAvatarKey({ source, author })
+    if (!key || !avatar) return
+    const candidates = pool.get(key) || []
+    candidates.push(avatar)
+    pool.set(key, candidates)
+  }
+  for (const post of posts.value) add(post?.source, post?.author, post?.avatar)
+  for (const feed of feeds.value) add(feed?.source, feed?.name, feed?.avatar)
+  for (const [key, candidates] of pool) pool.set(key, uniqueAvatarCandidates(candidates))
+  return pool
+})
 function postAvatarCandidates(post) {
-  const candidates = [post?.avatar]
-  const matchingFeed = feeds.value.find(feed => feed.source === post?.source && feed.name === post?.author)
+  const key = authorAvatarKey(post)
+  const author = post?.author || post?.name
+  const candidates = [resolvedAuthorAvatars.value[key], ...(authorAvatarPool.value.get(key) || []), post?.avatar]
+  const matchingFeed = feeds.value.find(feed => feed.source === post?.source && feed.name === author)
   if (matchingFeed?.avatar) candidates.push(matchingFeed.avatar)
   candidates.push(sourceIconFor(post?.source))
-  return [...new Set(candidates.filter(Boolean))]
+  return uniqueAvatarCandidates(candidates)
 }
 function postAvatar(post) {
   return postAvatarCandidates(post)[0] || ''
 }
+function rememberPostAvatar(post, value) {
+  const key = authorAvatarKey(post)
+  const avatar = String(value || '').trim()
+  if (!key || !avatar || resolvedAuthorAvatars.value[key] === avatar) return
+  resolvedAuthorAvatars.value = { ...resolvedAuthorAvatars.value, [key]: avatar }
+}
+function handlePostAvatarLoad(event, post) {
+  const image = event.currentTarget
+  if (image?.naturalWidth > 0) rememberPostAvatar(post, image.currentSrc || image.src)
+}
 function handlePostAvatarError(event, post) {
   const image = event.currentTarget
   const candidates = postAvatarCandidates(post)
-  const nextIndex = Number(image.dataset.fallbackIndex || 0) + 1
+  const currentIndex = Math.max(Number(image.dataset.fallbackIndex || 0), candidates.indexOf(image.getAttribute('src') || image.src))
+  const nextIndex = currentIndex + 1
   image.dataset.fallbackIndex = String(nextIndex)
   if (candidates[nextIndex]) image.src = candidates[nextIndex]
+}
+function preloadPostAvatar(post) {
+  const key = authorAvatarKey(post)
+  if (!key || resolvedAuthorAvatars.value[key]) return Promise.resolve(resolvedAuthorAvatars.value[key] || '')
+  const candidates = postAvatarCandidates(post)
+  return new Promise(resolve => {
+    const tryCandidate = index => {
+      const candidate = candidates[index]
+      if (!candidate) {
+        resolve('')
+        return
+      }
+      const image = new Image()
+      image.decoding = 'async'
+      image.onload = () => {
+        rememberPostAvatar(post, candidate)
+        resolve(candidate)
+      }
+      image.onerror = () => tryCandidate(index + 1)
+      image.src = candidate
+    }
+    tryCandidate(0)
+  })
+}
+function warmPostAvatars(items, limit = 48) {
+  const unique = new Map()
+  for (const post of items || []) {
+    const key = authorAvatarKey(post)
+    if (key && !unique.has(key)) unique.set(key, post)
+    if (unique.size >= limit) break
+  }
+  unique.forEach(post => { void preloadPostAvatar(post) })
 }
 function platformCardForSource(source) {
   return platformCards.value.find(platform => platform.key === source)
@@ -785,6 +869,7 @@ function loadRememberedLogin() {
 function publishPostPage(items, preserveLocalState = true) {
   if (!preserveLocalState) {
     posts.value = items
+    warmPostAvatars(items)
     resolveRoutedPost()
     return
   }
@@ -793,6 +878,7 @@ function publishPostPage(items, preserveLocalState = true) {
     const existing = current.get(String(post.id))
     return existing ? { ...post, liked: existing.liked, favoriteExplicit: existing.favoriteExplicit ?? post.favoriteExplicit } : post
   })
+  warmPostAvatars(items)
   resolveRoutedPost()
 }
 async function loadRemainingPostPages(generation, firstPage) {
@@ -2641,6 +2727,8 @@ function closePostDetail() {
 }
 function startMobileAuthorPreviewHandoff(post) {
   if (mobileAuthorHandoffTimer) window.clearTimeout(mobileAuthorHandoffTimer)
+  void preloadPostAvatar(post)
+  warmPostAvatars(mobileAuthorTimelinePosts.value, 24)
   mobileAuthorPreviewPost.value = post
   mobileAuthorPreviewHandoff.value = true
   mobileAuthorPreviewFading.value = false
@@ -2655,8 +2743,10 @@ function startMobileAuthorPreviewHandoff(post) {
       && viewportCards.length > 0
       && viewportCards.every(card => !masonryMediaPending(card))
       && Math.abs(window.scrollY - targetScrollY) < 2
+    const headerAvatar = document.querySelector('.mobile-author-detail-page .author-page-header .author-profile-main > img')
+    const avatarReady = !headerAvatar || (headerAvatar.complete && headerAvatar.naturalWidth > 0)
     const feed = document.querySelector('.mobile-author-detail-page .masonry-feed')
-    const signature = authorCardsReady && feed
+    const signature = authorCardsReady && avatarReady && feed
       ? [window.scrollY, feed.getBoundingClientRect().height, ...viewportCards.slice(0, 8).flatMap(card => {
           const rect = card.getBoundingClientRect()
           return [rect.left, rect.top, rect.width, rect.height].map(value => Math.round(value * 10) / 10)
@@ -2665,7 +2755,7 @@ function startMobileAuthorPreviewHandoff(post) {
     if (signature && signature === previousSignature) stableFrames += 1
     else stableFrames = 0
     previousSignature = signature
-    if ((!authorCardsReady || stableFrames < 3) && attempts < 72) {
+    if ((!authorCardsReady || !avatarReady || stableFrames < 3) && attempts < 72) {
       attempts += 1
       window.requestAnimationFrame(waitForAuthorPage)
       return
@@ -2715,6 +2805,7 @@ function startMobileDetailReturnHandoff() {
 }
 function startMobileTimelineReturnHandoff(post) {
   if (!post) return
+  const clearAuthorState = mobileAuthorDetailState.value?.returnToDetail === false
   if (mobileTimelineReturnHandoffTimer) window.clearTimeout(mobileTimelineReturnHandoffTimer)
   mobileTimelineReturnPreviewPost.value = post
   mobileTimelineReturnHandoff.value = true
@@ -2726,6 +2817,7 @@ function startMobileTimelineReturnHandoff(post) {
       mobileTimelineReturnHandoff.value = false
       mobileTimelineReturnFading.value = false
       mobileTimelineReturnPreviewPost.value = null
+      if (clearAuthorState) mobileAuthorDetailState.value = null
     }, 190)
   }))))
 }
@@ -2736,7 +2828,8 @@ function openMobileDetailAuthor(post) {
   const previous = mobileAuthorDetailState.value
   const state = previous?.post?.id === post.id
     ? previous
-    : { post, authorPath, authorScrollY: 0, detailScrollY: 0 }
+    : { post, authorPath, authorScrollY: 0, detailScrollY: 0, returnToDetail: true }
+  state.returnToDetail = true
   state.detailScrollY = window.scrollY
   mobileAuthorDetailState.value = state
   mobileAuthorScrollY = state.authorScrollY
@@ -3461,6 +3554,30 @@ function openAuthorPage(name, source, avatar = '', feedId = '', fromMobileDetail
   window.scrollTo({ top: 0, behavior: 'auto' })
 }
 function openAuthor(post) {
+  if (phonePortrait.value && post && masonryDetailPost.value?.id === post.id) {
+    openMobileDetailAuthor(post)
+    return
+  }
+  if (phonePortrait.value && post && !masonryDetailPost.value && !authorProfile.value) {
+    const returnPath = window.location.pathname + window.location.search
+    mobileAuthorDetailState.value = {
+      post,
+      authorPath: '/author/' + post.source + '/' + encodeURIComponent(post.author),
+      authorScrollY: 0,
+      detailScrollY: window.scrollY,
+      returnPath,
+      returnTitle: activeSource.value === 'all' ? '全部动态' : (sourceMeta[activeSource.value]?.label || '动态'),
+      returnPostIds: filteredPosts.value.map(item => item.id),
+      returnToDetail: false
+    }
+    mobileAuthorScrollY = 0
+    mobileAuthorPreviewPost.value = post
+    captureMobileAuthorPreviewSnapshot(0)
+    startMobileAuthorPreviewHandoff(post)
+    openAuthorPage(post.author, post.source, post.avatar, '', true)
+    restoreMobileScroll(0)
+    return
+  }
   openAuthorPage(post.author, post.source, post.avatar)
 }
 function openFeedAuthor(feed) {
@@ -3511,11 +3628,13 @@ function handlePopState() {
   const detailRouteExit = returningToTimeline && !gestureTimelineReturn ? captureMobileDetailRouteExit(departingDetailPost) : null
   if (returningFromAuthor) mobileAuthorDetailState.value.authorScrollY = mobileAuthorScrollY
   if (returningFromAuthor && window.location.pathname.startsWith('/post/')) startMobileDetailReturnHandoff()
+  else if (returningFromAuthor && mobileAuthorDetailState.value?.returnToDetail === false) startMobileTimelineReturnHandoff(mobileAuthorDetailState.value.post)
   if (returningToTimeline && (gestureTimelineReturn || !detailRouteExit)) startMobileTimelineReturnHandoff(departingDetailPost)
   applyRoute()
   mobileDetailGestureReturnPending = false
   resetMobileAuthorPageSwipe()
   if (returningFromAuthor && window.location.pathname.startsWith('/post/') && mobileAuthorDetailState.value) restoreMobileScroll(mobileAuthorDetailState.value.detailScrollY)
+  else if (returningFromAuthor && mobileAuthorDetailState.value?.returnToDetail === false) restoreMobileScroll(mobileAuthorDetailState.value.detailScrollY)
   else if (returningToTimeline) {
     restoreMobileScroll(mobilePostReturnScrollY.value)
     if (detailRouteExit) runMobileDetailRouteExit(detailRouteExit)
@@ -3716,7 +3835,7 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
       </div>
     </aside>
 
-    <aside v-if="phonePortrait && mobileAuthorDetailState && (authorProfile || mobileDetailReturnHandoff)" class="mobile-detail-return-preview" :style="mobileDetailReturnPreviewStyle" aria-hidden="true">
+    <aside v-if="phonePortrait && mobileAuthorDetailState?.returnToDetail !== false && (authorProfile || mobileDetailReturnHandoff)" class="mobile-detail-return-preview" :style="mobileDetailReturnPreviewStyle" aria-hidden="true">
       <div class="mobile-detail-return-content" :style="mobileDetailReturnContentStyle">
       <header class="mobile-post-detail-head"><span class="mobile-detail-preview-back"><svg viewBox="0 0 24 24"><path d="m15 5-7 7 7 7"/></svg></span><div class="mobile-post-author"><img :src="postAvatar(mobileAuthorDetailState.post)" :alt="mobileAuthorDetailState.post.author"><strong>{{ mobileAuthorDetailState.post.author }}</strong></div><span :class="['source-pill', 'mobile-post-source', sourceMeta[mobileAuthorDetailState.post.source].color]"><img class="source-icon" :src="sourceIconFor(mobileAuthorDetailState.post.source)" alt="">{{ sourceMeta[mobileAuthorDetailState.post.source].label }}</span></header>
       <section v-if="mobileDetailPreviewMedia(mobileAuthorDetailState.post)" :class="['mobile-detail-preview-media', { 'video-media': mobileDetailPreviewMedia(mobileAuthorDetailState.post).type === 'video' }]" :style="mobileDetailPreviewMedia(mobileAuthorDetailState.post).type === 'video' ? postVideoFrameStyle(mobileAuthorDetailState.post) : undefined"><img v-if="mobileDetailPreviewCover(mobileAuthorDetailState.post)" :src="previewMedia(mobileDetailPreviewCover(mobileAuthorDetailState.post))" :alt="mobileAuthorDetailState.post.author" loading="eager" decoding="async" fetchpriority="low"><span v-else class="mobile-detail-preview-video-mark"><svg viewBox="0 0 24 24"><path d="m9 7 8 5-8 5Z"/></svg></span></section>
@@ -3735,7 +3854,7 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
       </div>
       <header v-if="authorProfile" class="topbar author-page-header">
         <div class="author-profile-main">
-          <img :src="postAvatar(authorProfile)" data-fallback-index="0" :alt="authorProfile.name" referrerpolicy="no-referrer" @error="handlePostAvatarError($event, authorProfile)">
+          <img :key="`${authorProfile.source}:${authorProfile.name}:${postAvatar(authorProfile)}`" :src="postAvatar(authorProfile)" data-fallback-index="0" :alt="authorProfile.name" referrerpolicy="no-referrer" @load="handlePostAvatarLoad($event, authorProfile)" @error="handlePostAvatarError($event, authorProfile)">
           <div><p class="eyebrow">AUTHOR TIMELINE · {{ sourceMeta[authorProfile.source].label }}</p><h1>{{ authorProfile.name }}</h1><p class="subtitle">共 {{ authorProfile.count }} 条已拉取动态</p></div>
         </div>
       </header>
@@ -3796,7 +3915,7 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
 <article v-for="post in visiblePosts" :key="post.id" :ref="element => setPostCard(post, element, 'list')" :class="['post-card', { selected: selectedPostIds.includes(post.id), selectable: selectionMode }]" :data-post-id="post.id" @click.capture="handlePostSelectionClick($event, post)" @contextmenu.stop.prevent="openContextMenu($event, post)">
 <label v-if="selectionMode" class="post-select-control" :title="`选择 ${post.author} 的这条动态`" @click.prevent><input type="checkbox" :checked="selectedPostIds.includes(post.id)" tabindex="-1"><span></span></label>
 <div class="post-head">
-<button class="post-author-avatar" type="button" :title="`查看 ${post.author} 的动态`" @click="openAuthor(post)"><img :src="postAvatar(post)" data-fallback-index="0" :alt="post.author" referrerpolicy="no-referrer" @error="handlePostAvatarError($event, post)"></button>
+<button class="post-author-avatar" type="button" :title="`查看 ${post.author} 的动态`" @click="openAuthor(post)"><img :key="`${post.id}:${postAvatar(post)}`" :src="postAvatar(post)" data-fallback-index="0" :alt="post.author" referrerpolicy="no-referrer" @load="handlePostAvatarLoad($event, post)" @error="handlePostAvatarError($event, post)"></button>
 <div class="author">
 <button class="post-author-name" type="button" :title="`查看 ${post.author} 的动态`" @click="openAuthor(post)"><strong>{{ post.author }}</strong></button>
 <span>{{ postDateTime(post.published) }}</span>
@@ -3838,7 +3957,7 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
     <p v-if="item.post.caption" class="masonry-caption">{{ item.post.caption }}</p>
     <div v-if="item.post.tags?.length" class="masonry-tags"><button v-for="tag in item.post.tags.slice(0, 2)" :key="tag" type="button" @click.stop="openTag(tag)">#{{ tag }}</button><span v-if="item.post.tags.length > 2">+{{ item.post.tags.length - 2 }}</span></div>
     <footer class="masonry-meta">
-      <button class="masonry-author" type="button" :title="`查看 ${item.post.author} 的动态`" @click.stop="openAuthor(item.post)"><img :src="postAvatar(item.post)" data-fallback-index="0" :alt="item.post.author" referrerpolicy="no-referrer" @error="handlePostAvatarError($event, item.post)"><span><strong>{{ item.post.author }}</strong><small>{{ postDateTime(item.post.published) }}</small></span></button>
+      <button class="masonry-author" type="button" :title="`查看 ${item.post.author} 的动态`" @click.stop="openAuthor(item.post)"><img :key="`${item.post.id}:${postAvatar(item.post)}`" :src="postAvatar(item.post)" data-fallback-index="0" :alt="item.post.author" referrerpolicy="no-referrer" @load="handlePostAvatarLoad($event, item.post)" @error="handlePostAvatarError($event, item.post)"><span><strong>{{ item.post.author }}</strong><small>{{ postDateTime(item.post.published) }}</small></span></button>
       <button :class="['masonry-like-button', { liked: item.post.liked }]" type="button" :disabled="postActionBusy === `like:${item.post.id}`" :title="item.post.liked ? '取消收藏' : '收藏'" @click.stop="togglePostLike(item.post)"><span class="post-action-mask post-favorite-symbol" :style="{ '--post-action-mask': `url(${favoriteNavIcon})` }" aria-hidden="true"></span></button>
     </footer>
   </div>
@@ -3878,7 +3997,7 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
     </main>
     <aside v-if="phonePortrait && mobileAuthorPreviewDisplayPost" class="mobile-author-swipe-preview" :style="mobileAuthorPreviewStyle" aria-hidden="true">
       <div class="mobile-transition-page-content" :style="mobileAuthorPreviewContentStyle">
-      <header class="topbar author-page-header mobile-author-preview-head"><div class="author-profile-main"><img :src="postAvatar(mobileAuthorPreviewDisplayPost)" alt=""><div><p class="eyebrow">AUTHOR TIMELINE · {{ sourceMeta[mobileAuthorPreviewDisplayPost.source].label }}</p><h1>{{ mobileAuthorPreviewDisplayPost.author }}</h1><p class="subtitle">共 {{ mobileAuthorTimelinePosts.length }} 条已拉取动态</p></div></div></header>
+      <header class="topbar author-page-header mobile-author-preview-head"><div class="author-profile-main"><img :key="'preview:' + authorAvatarKey(mobileAuthorPreviewDisplayPost) + ':' + postAvatar(mobileAuthorPreviewDisplayPost)" :src="postAvatar(mobileAuthorPreviewDisplayPost)" :alt="mobileAuthorPreviewDisplayPost.author" @load="handlePostAvatarLoad($event, mobileAuthorPreviewDisplayPost)" @error="handlePostAvatarError($event, mobileAuthorPreviewDisplayPost)"><div><p class="eyebrow">AUTHOR TIMELINE · {{ sourceMeta[mobileAuthorPreviewDisplayPost.source].label }}</p><h1>{{ mobileAuthorPreviewDisplayPost.author }}</h1><p class="subtitle">共 {{ mobileAuthorTimelinePosts.length }} 条已拉取动态</p></div></div></header>
       <div class="section-heading mobile-author-preview-heading"><div class="filters"><button class="timeline-sort-button" type="button" tabindex="-1"><span class="timeline-sort-symbol" :style="{ '--nav-mask': `url(${timelineSort === 'newest' ? newestSortIcon : oldestSortIcon})` }"></span></button><button class="timeline-view-button timeline-toolbar-button" type="button" tabindex="-1"><span :class="['timeline-view-symbol', { 'list-view-symbol': !isMasonryView }]" :style="{ '--nav-mask': `url(${isMasonryView ? masonryViewIcon : listViewIcon})` }"></span></button><button class="timeline-refresh-button timeline-toolbar-button" type="button" tabindex="-1"><span class="timeline-refresh-symbol" :style="{ '--nav-mask': `url(${refreshIcon})` }"></span></button></div><div class="timeline-tools"><label class="timeline-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><input type="search" value="" placeholder="搜索" tabindex="-1" readonly></label></div></div>
       <section class="mobile-author-preview-feed feed-list masonry-feed" :style="mobileAuthorPreviewFeedStyle">
         <article v-for="item in mobileAuthorPreviewItems" :key="item.post.id" :class="['masonry-card', { 'text-only': !masonryCover(item.post) && !item.post.videos?.length }]" :style="mobilePreviewMasonryItemStyle(item)">
@@ -3901,8 +4020,8 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
       </section>
       </div>
     </aside>
-    <aside v-if="phonePortrait && mobileReturnPreviewDisplayPost" class="mobile-return-swipe-preview" :style="mobileReturnPreviewStyle" aria-hidden="true">
-      <header><div><small>SAVED MOMENTS</small><strong>{{ mobileTimelineTitle }}</strong></div><span :class="['source-pill', sourceMeta[mobileReturnPreviewDisplayPost.source].color]"><img class="source-icon" :src="sourceIconFor(mobileReturnPreviewDisplayPost.source)" alt="">{{ sourceMeta[mobileReturnPreviewDisplayPost.source].label }}</span></header>
+    <aside v-if="phonePortrait && mobileReturnPreviewDisplayPost && (masonryDetailPost || mobileTimelineReturnHandoff || (mobileAuthorReturnsToTimeline && (mobileAuthorPageDragging || mobileAuthorPageAnimating)))" class="mobile-return-swipe-preview" :style="mobileReturnPreviewStyle" aria-hidden="true">
+      <header><div><small>SAVED MOMENTS</small><strong>{{ mobileReturnPreviewTitle }}</strong></div><span :class="['source-pill', sourceMeta[mobileReturnPreviewDisplayPost.source].color]"><img class="source-icon" :src="sourceIconFor(mobileReturnPreviewDisplayPost.source)" alt="">{{ sourceMeta[mobileReturnPreviewDisplayPost.source].label }}</span></header>
       <div class="mobile-author-preview-toolbar"><span>全部</span><i></i><i></i><label><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><b>搜索</b></label></div>
       <section class="mobile-author-preview-feed feed-list masonry-feed" :style="mobileReturnPreviewFeedStyle">
         <article v-for="item in mobileReturnPreviewItems" :key="item.post.id" :class="['masonry-card', { 'text-only': !masonryCover(item.post) && !item.post.videos?.length }]" :style="mobilePreviewMasonryItemStyle(item)">

@@ -1596,19 +1596,19 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
     overflow: hidden;
     isolation: auto;
     color: #52606c;
-    background: transparent!important;
+    background: var(--mobile-frosted-surface)!important;
     border: 0!important;
     box-shadow: 0 10px 25px rgba(70, 52, 31, .17), inset 0 1px 0 rgba(255, 255, 255, .34), inset 0 -1px 0 rgba(101, 78, 44, .08)!important;
-    backdrop-filter: none!important;
-    -webkit-backdrop-filter: none!important;
+    backdrop-filter: blur(8px) saturate(142%) contrast(.97)!important;
+    -webkit-backdrop-filter: blur(8px) saturate(142%) contrast(.97)!important;
   }
   .phone-ui.dark :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control {
     --mobile-frosted-surface: linear-gradient(145deg, rgba(205, 217, 246, .22), rgba(78, 91, 124, .15) 52%, rgba(8, 12, 22, .24));
     color: #e9effd;
-    background: transparent!important;
+    background: var(--mobile-frosted-surface)!important;
     box-shadow: 0 11px 28px rgba(0, 0, 0, .38), 0 0 17px rgba(102, 126, 192, .12), inset 0 1px 0 rgba(220, 229, 255, .18), inset 0 -1px 0 rgba(1, 3, 8, .20)!important;
-    backdrop-filter: none!important;
-    -webkit-backdrop-filter: none!important;
+    backdrop-filter: blur(8px) saturate(142%) contrast(.97)!important;
+    -webkit-backdrop-filter: blur(8px) saturate(142%) contrast(.97)!important;
   }
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control::before,
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control::after {
