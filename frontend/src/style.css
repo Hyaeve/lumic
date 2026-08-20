@@ -1619,7 +1619,7 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
     content: '';
     pointer-events: none;
   }
-  .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control::before { z-index: 0; background: var(--mobile-frosted-surface); backdrop-filter: blur(24px) saturate(142%) contrast(.97); -webkit-backdrop-filter: blur(24px) saturate(142%) contrast(.97); transform: translateZ(0); }
+  .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control::before { z-index: 0; background: var(--mobile-frosted-surface); backdrop-filter: blur(16px) saturate(142%) contrast(.97); -webkit-backdrop-filter: blur(16px) saturate(142%) contrast(.97); transform: translateZ(0); }
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control::after { z-index: 1; background: radial-gradient(circle at 24% 12%, rgba(255, 255, 255, .20), transparent 46%); }
   .phone-ui.dark :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control::after { background: radial-gradient(circle at 24% 12%, rgba(224, 232, 255, .14), transparent 46%); }
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control > * { position: relative; z-index: 2; }
