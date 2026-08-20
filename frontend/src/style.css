@@ -1619,36 +1619,7 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
     content: '';
     pointer-events: none;
   }
-  .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control::before { z-index: 0; background: var(--mobile-frosted-surface); backdrop-filter: blur(36px) saturate(148%) contrast(.96); -webkit-backdrop-filter: blur(36px) saturate(148%) contrast(.96); transform: translateZ(0); }
-  .phone-ui :is(.mobile-menu-toggle, .scroll-top-button).mobile-frosted-control::before {
-    backdrop-filter: blur(24px) saturate(142%) contrast(.97);
-    -webkit-backdrop-filter: blur(24px) saturate(142%) contrast(.97);
-  }
-  .phone-ui .mobile-timeline-toggle.mobile-frosted-control {
-    --mobile-frosted-surface: linear-gradient(145deg, rgba(244, 242, 255, .62), rgba(212, 216, 239, .42) 54%, rgba(169, 178, 211, .34));
-    isolation: isolate;
-    background: rgba(217, 221, 240, .38)!important;
-    backdrop-filter: blur(56px) saturate(168%) contrast(.94)!important;
-    -webkit-backdrop-filter: blur(56px) saturate(168%) contrast(.94)!important;
-  }
-  .phone-ui .mobile-timeline-toggle.mobile-frosted-control::before {
-    inset: 0;
-    background: var(--mobile-frosted-surface);
-    border-radius: inherit;
-    backdrop-filter: blur(56px) saturate(168%) contrast(.94);
-    -webkit-backdrop-filter: blur(56px) saturate(168%) contrast(.94);
-  }
-  .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control {
-    --mobile-frosted-surface: linear-gradient(145deg, rgba(166, 176, 211, .55), rgba(76, 86, 119, .48) 52%, rgba(31, 37, 57, .54));
-    background: rgba(68, 77, 108, .46)!important;
-    backdrop-filter: blur(56px) saturate(168%) contrast(.93)!important;
-    -webkit-backdrop-filter: blur(56px) saturate(168%) contrast(.93)!important;
-  }
-  .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control::before {
-    background: var(--mobile-frosted-surface);
-    backdrop-filter: blur(56px) saturate(168%) contrast(.93);
-    -webkit-backdrop-filter: blur(56px) saturate(168%) contrast(.93);
-  }
+  .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control::before { z-index: 0; background: var(--mobile-frosted-surface); backdrop-filter: blur(24px) saturate(142%) contrast(.97); -webkit-backdrop-filter: blur(24px) saturate(142%) contrast(.97); transform: translateZ(0); }
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control::after { z-index: 1; background: radial-gradient(circle at 24% 12%, rgba(255, 255, 255, .20), transparent 46%); }
   .phone-ui.dark :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control::after { background: radial-gradient(circle at 24% 12%, rgba(224, 232, 255, .14), transparent 46%); }
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control > * { position: relative; z-index: 2; }
