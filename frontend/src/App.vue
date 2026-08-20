@@ -145,6 +145,7 @@ const mobileDetailPageDragY = ref(0)
 const mobileDetailPageDragging = ref(false)
 const mobileDetailPageAnimating = ref(false)
 const mobileDetailPageTransitionMs = ref(320)
+const mobileDetailPageTransitionEasing = ref('cubic-bezier(.2, .78, .18, 1)')
 const showScrollTop = ref(false)
 const mobileControlsVisible = ref(true)
 const mobilePostReturnPath = ref('/')
@@ -379,7 +380,7 @@ const mobileDetailPageStyle = computed(() => {
   return {
     transform: `translate3d(${mobileDetailPageDragX.value}px, ${mobileDetailPageDragY.value}px, 0) scale(${scale})`,
     opacity: String(1 - progress * .08),
-    transition: mobileDetailPageDragging.value ? 'none' : mobileDetailPageAnimating.value ? `transform ${mobileDetailPageTransitionMs.value}ms cubic-bezier(.16, .86, .2, 1), opacity ${Math.min(280, mobileDetailPageTransitionMs.value)}ms ease` : 'none'
+    transition: mobileDetailPageDragging.value ? 'none' : mobileDetailPageAnimating.value ? `transform ${mobileDetailPageTransitionMs.value}ms ${mobileDetailPageTransitionEasing.value}, opacity ${Math.min(260, mobileDetailPageTransitionMs.value)}ms ease-out` : 'none'
   }
 })
 const mobileAuthorPreviewDisplayPost = computed(() => masonryDetailPost.value || mobileAuthorPreviewPost.value)
@@ -477,7 +478,7 @@ const mobilePreviousDetailPreviewStyle = computed(() => {
   return {
     opacity: String(.82 + progress * .18),
     transform: `translate3d(0, ${-height + dragY}px, 0) scale(${.985 + progress * .015})`,
-    transition: mobileDetailPageDragging.value ? 'none' : mobileDetailPageAnimating.value ? `transform ${mobileDetailPageTransitionMs.value}ms cubic-bezier(.16,.86,.2,1), opacity ${Math.min(280, mobileDetailPageTransitionMs.value)}ms ease` : 'none'
+    transition: mobileDetailPageDragging.value ? 'none' : mobileDetailPageAnimating.value ? `transform ${mobileDetailPageTransitionMs.value}ms ${mobileDetailPageTransitionEasing.value}, opacity ${Math.min(260, mobileDetailPageTransitionMs.value)}ms ease-out` : 'none'
   }
 })
 const mobileNextDetailPreviewStyle = computed(() => {
@@ -487,7 +488,7 @@ const mobileNextDetailPreviewStyle = computed(() => {
   return {
     opacity: String(.82 + progress * .18),
     transform: `translate3d(0, ${height + dragY}px, 0) scale(${.985 + progress * .015})`,
-    transition: mobileDetailPageDragging.value ? 'none' : mobileDetailPageAnimating.value ? `transform ${mobileDetailPageTransitionMs.value}ms cubic-bezier(.16,.86,.2,1), opacity ${Math.min(280, mobileDetailPageTransitionMs.value)}ms ease` : 'none'
+    transition: mobileDetailPageDragging.value ? 'none' : mobileDetailPageAnimating.value ? `transform ${mobileDetailPageTransitionMs.value}ms ${mobileDetailPageTransitionEasing.value}, opacity ${Math.min(260, mobileDetailPageTransitionMs.value)}ms ease-out` : 'none'
   }
 })
 const mobileAuthorPageStyle = computed(() => {
@@ -2594,16 +2595,19 @@ function runMobileDetailRouteExit(snapshot) {
       cleanupMobileDetailRouteExit()
       return
     }
-    const easing = 'cubic-bezier(.18,.82,.22,1)'
+    const easing = 'cubic-bezier(.2,.78,.18,1)'
+    const targetRadiusValue = Number.parseFloat(targetRadius) || 9
     const shellAnimation = snapshot.shell.animate([
       { opacity: 1, transform: 'scale(1)' },
-      { opacity: .88, transform: 'scale(.997)', offset: .22 },
-      { opacity: 0, transform: 'scale(.992)' }
-    ], { duration: 300, easing, fill: 'forwards' })
+      { opacity: .98, transform: 'scale(.999)', offset: .38 },
+      { opacity: .72, transform: 'scale(.996)', offset: .76 },
+      { opacity: 0, transform: 'scale(.994)' }
+    ], { duration: 370, easing, fill: 'forwards' })
     const mediaAnimation = snapshot.media.animate([
       { transform: 'translate3d(0,0,0) scale(1,1)', borderRadius: '0px', boxShadow: '0 0 0 rgba(0,0,0,0)' },
+      { transform: `translate3d(${translateX * .58}px,${translateY * .58}px,0) scale(${1 + (scaleX - 1) * .58},${1 + (scaleY - 1) * .58})`, borderRadius: `${targetRadiusValue * .58}px`, boxShadow: '0 14px 34px rgba(0,0,0,.14)', offset: .58 },
       { transform: `translate3d(${translateX}px,${translateY}px,0) scale(${scaleX},${scaleY})`, borderRadius: targetRadius, boxShadow: '0 10px 28px rgba(0,0,0,.18)' }
-    ], { duration: 420, easing, fill: 'forwards' })
+    ], { duration: 370, easing, fill: 'forwards' })
     Promise.allSettled([shellAnimation.finished, mediaAnimation.finished]).then(() => {
       cleanupMobileDetailRouteExit()
     })
@@ -2894,6 +2898,7 @@ function resetMobileDetailPageSwipe() {
   mobileDetailPageDragging.value = false
   mobileDetailPageAnimating.value = false
   mobileDetailPageTransitionMs.value = 320
+  mobileDetailPageTransitionEasing.value = 'cubic-bezier(.2, .78, .18, 1)'
 }
 function mobileDetailAdjacentPost(step) {
   return step > 0 ? mobileDetailNextPost.value : mobileDetailPreviousPost.value
@@ -2944,9 +2949,12 @@ function commitMobileDetailVerticalSwipe(step, velocityY) {
   mobileDetailPageDragging.value = false
   mobileDetailPageAnimating.value = true
   mobileDetailPageDragX.value = 0
+  const viewportHeight = Math.max(1, window.innerHeight)
+  const remaining = Math.max(0, 1 - Math.min(1, Math.abs(mobileDetailPageDragY.value) / viewportHeight))
   mobileDetailPageDragY.value = step > 0 ? -window.innerHeight : window.innerHeight
-  const duration = Math.max(190, Math.min(310, 300 - Math.abs(velocityY) * 90))
+  const duration = Math.max(220, Math.min(340, 185 + remaining * 150 - Math.min(1.5, Math.abs(velocityY)) * 34))
   mobileDetailPageTransitionMs.value = duration
+  mobileDetailPageTransitionEasing.value = 'cubic-bezier(.2, .78, .18, 1)'
   mobileDetailPageTimer = window.setTimeout(() => {
     mobileDetailPageTimer = 0
     switchMobileDetailPost(target, step)
@@ -2981,6 +2989,7 @@ function beginMobileDetailPageSwipe(event) {
   mobileDetailPageDragging.value = false
   mobileDetailPageAnimating.value = false
   mobileDetailPageTransitionMs.value = 320
+  mobileDetailPageTransitionEasing.value = 'cubic-bezier(.2, .78, .18, 1)'
   captureMobileAuthorPreviewSnapshot(mobileAuthorDetailState.value?.post?.id === masonryDetailPost.value.id ? mobileAuthorDetailState.value.authorScrollY : 0)
   preloadMobileDetailPost(mobileDetailPreviousPost.value)
   preloadMobileDetailPost(mobileDetailNextPost.value)
@@ -3031,7 +3040,11 @@ function updateMobileDetailPageSwipe(event) {
   mobileDetailPageTouch.lastY = touch.clientY
   mobileDetailPageTouch.lastTime = event.timeStamp
   const target = mobileDetailAdjacentPost(dragY < 0 ? 1 : -1)
-  const resistedY = target ? dampBeyond(dragY, window.innerHeight * .72, .16) : dragY * .24
+  const viewportHeight = Math.max(1, window.innerHeight)
+  const distance = Math.abs(dragY)
+  const direction = Math.sign(dragY)
+  const resistanceSpan = viewportHeight * (target ? .68 : .28)
+  const resistedY = direction * resistanceSpan * (1 - Math.exp(-distance / resistanceSpan))
   mobileDetailPageDragX.value = 0
   mobileDetailPageDragY.value = resistedY
 }
@@ -3060,11 +3073,13 @@ function finishMobileDetailPageSwipe(event) {
     const fastVertical = Math.abs(dy) > 64 && Math.abs(velocityY) > .82
     const step = dy < 0 ? 1 : -1
     if ((Math.abs(dy) >= threshold || fastVertical) && commitMobileDetailVerticalSwipe(step, velocityY)) return
+    mobileDetailPageTransitionMs.value = Math.max(210, Math.min(280, 220 + Math.abs(mobileDetailPageDragY.value) * .16))
+    mobileDetailPageTransitionEasing.value = 'cubic-bezier(.22, 1, .36, 1)'
     mobileDetailPageDragY.value = 0
     mobileDetailPageTimer = window.setTimeout(() => {
       resetMobileDetailPageSwipe()
       mobileDetailSwipeClickBlocked = false
-    }, 320)
+    }, mobileDetailPageTransitionMs.value)
     return
   }
   const threshold = Math.min(112, window.innerWidth * .28)
