@@ -3718,6 +3718,7 @@ function handlePopState() {
   const returningToTimeline = leavingDetail && !window.location.pathname.startsWith('/post/') && !window.location.pathname.startsWith('/author/')
   const gestureTimelineReturn = returningToTimeline && mobileDetailGestureReturnPending
   const detailRouteExit = returningToTimeline && !gestureTimelineReturn ? captureMobileDetailRouteExit(departingDetailPost) : null
+  const currentPath = window.location.pathname + window.location.search
   if (returningFromAuthor) mobileAuthorDetailState.value.authorScrollY = mobileAuthorScrollY
   if (returningFromAuthor && mobileAuthorDetailState.value?.returnToDetail === false) {
     mobileForwardPageState.value = {
@@ -3730,13 +3731,26 @@ function handlePopState() {
     }
     mobileForwardPageAvailable.value = true
   }
-  const currentPath = window.location.pathname + window.location.search
+  if (returningToTimeline && gestureTimelineReturn && departingDetailPost) {
+    mobileForwardPageState.value = {
+      kind: 'detail',
+      post: departingDetailPost,
+      path: currentPath,
+      detailPath: `/post/${encodeURIComponent(departingDetailPost.id)}`,
+      detailScrollY: 0
+    }
+    mobileForwardPageAvailable.value = true
+  }
   if (mobileForwardPageAvailable.value && mobileForwardPageState.value?.authorPath === currentPath) {
     mobileAuthorDetailState.value = {
       ...mobileForwardPageState.value,
       returnToDetail: false,
       returnPath: mobileForwardPageState.value.path
     }
+    mobileForwardPageAvailable.value = false
+    mobileForwardPageState.value = null
+  }
+  if (mobileForwardPageAvailable.value && mobileForwardPageState.value?.kind === 'detail' && mobileForwardPageState.value.detailPath === currentPath) {
     mobileForwardPageAvailable.value = false
     mobileForwardPageState.value = null
   }
