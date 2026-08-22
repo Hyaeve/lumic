@@ -94,7 +94,7 @@ const pixivBusy = ref(false)
 const pixivError = ref('')
 const pixivArtistId = ref('')
 const pixivSubscriptionTags = ref('')
-const weiboAccount = ref({ configured: false, userId: '', userName: '', avatar: '' })
+const weiboAccount = ref({ configured: false, cookieConfigured: false, passwordConfigured: false, userId: '', userName: '', avatar: '' })
 const weiboCredentials = ref({ cookie: '', userId: '' })
 const weiboPasswordCredentials = ref({ username: '', password: '' })
 const weiboQR = ref(null)
@@ -102,7 +102,7 @@ const weiboBusy = ref(false)
 const weiboError = ref('')
 let weiboPollTimer = null
 const twitterAccount = ref({ configured: false, userId: '', userName: '', avatar: '' })
-const twitterCredentials = ref({ accessToken: '' })
+const twitterCredentials = ref({ apiKey: '', username: '' })
 const twitterBusy = ref(false)
 const twitterError = ref('')
 const syncing = ref(false)
@@ -452,6 +452,7 @@ const mobileAuthorPreviewStyle = computed(() => {
   }
 })
 const mobileAuthorReturnsToTimeline = computed(() => Boolean(authorProfile.value && mobileAuthorDetailState.value?.returnToDetail === false))
+const mobilePagedReturnsToTimeline = computed(() => Boolean((authorProfile.value || selectedTag.value) && mobileAuthorDetailState.value?.returnToDetail === false))
 const mobileReturnTimelinePosts = computed(() => {
   const state = mobileAuthorDetailState.value
   if (!mobileAuthorReturnsToTimeline.value || !Array.isArray(state?.returnPostIds)) return filteredPosts.value
@@ -476,7 +477,7 @@ const mobileReturnPreviewStyle = computed(() => {
     transition: mobileTimelineReturnFading.value ? 'opacity .18s ease-out' : 'none'
   }
   const width = typeof window === 'undefined' ? 390 : Math.max(1, window.innerWidth)
-  const returningFromAuthor = mobileAuthorReturnsToTimeline.value
+  const returningFromAuthor = mobilePagedReturnsToTimeline.value
   const dragX = returningFromAuthor ? mobileAuthorPageDragX.value : mobileDetailPageDragX.value
   const dragging = returningFromAuthor ? mobileAuthorPageDragging.value : mobileDetailPageDragging.value
   const animating = returningFromAuthor ? mobileAuthorPageAnimating.value : mobileDetailPageAnimating.value
@@ -1249,7 +1250,7 @@ async function pollWeiboQR() {
     const response = await fetch(`/api/weibo/qr?id=${encodeURIComponent(weiboQR.value.id)}`)
     if (!response.ok) throw new Error(await responseError(response, '微博扫码状态查询失败'))
     const result = await response.json()
-    if (result.status === 'connected') { weiboAccount.value = { configured: true, userId: result.userId, userName: result.userName, avatar: result.avatar || '' }; weiboQR.value = null; weiboBusy.value = false; return }
+    if (result.status === 'connected') { weiboAccount.value = { ...weiboAccount.value, configured: true, cookieConfigured: true, userId: result.userId, userName: result.userName, avatar: result.avatar || '' }; weiboQR.value = null; weiboBusy.value = false; return }
     weiboPollTimer = setTimeout(pollWeiboQR, 2000)
   } catch (error) { weiboError.value = error.message; weiboBusy.value = false; stopWeiboPolling() }
 }
@@ -1273,10 +1274,10 @@ async function saveWeiboAccount() {
 async function saveTwitterAccount() {
   twitterBusy.value = true; twitterError.value = ''
   try {
-    const response = await fetch('/api/twitter/account', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accessToken: twitterCredentials.value.accessToken.trim() }) })
-    if (!response.ok) throw new Error(await responseError(response, '推特访问令牌验证失败'))
+	const response = await fetch('/api/twitter/account', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ apiKey: twitterCredentials.value.apiKey.trim(), username: twitterCredentials.value.username.trim() }) })
+	if (!response.ok) throw new Error(await responseError(response, 'twitterapi.io 凭证验证失败'))
     twitterAccount.value = await response.json()
-    twitterCredentials.value = { accessToken: '' }
+    twitterCredentials.value = { apiKey: '', username: '' }
     await loadFeeds()
   } catch (error) { twitterError.value = error.message } finally { twitterBusy.value = false }
 }
@@ -1347,7 +1348,7 @@ function nextCronExecution(expression) {
 async function loginWeiboAccount() {
   weiboBusy.value = true; weiboError.value = ''
   try {
-    const response = await fetch('/api/weibo/account', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: weiboPasswordCredentials.value.username.trim(), password: weiboPasswordCredentials.value.password }) })
+    const response = await fetch('/api/weibo/account', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: weiboPasswordCredentials.value.username.trim(), password: weiboPasswordCredentials.value.password, savePasswordOnly: weiboAccount.value.cookieConfigured }) })
     if (!response.ok) throw new Error(await responseError(response, '微博账号登录失败'))
     weiboAccount.value = await response.json()
     weiboPasswordCredentials.value = { username: '', password: '' }
@@ -2853,7 +2854,7 @@ function openMobileDetailFromAuthor() {
   restoreMobileScroll(state.detailScrollY)
 }
 function returnToMobileDetailFromAuthor() {
-  if (window.history.state?.lumicMobileAuthor) {
+  if (window.history.state?.lumicMobileAuthor || window.history.state?.lumicMobileTag) {
     window.history.back()
     return
   }
@@ -3222,7 +3223,7 @@ function resetMobileAuthorPageSwipe() {
 function beginMobileAuthorPageSwipe(event) {
   const touch = event.touches?.[0]
   const target = event.target
-  if (!phonePortrait.value || !touch || !mobileAuthorDetailState.value || !authorProfile.value || target?.closest?.('input, textarea, select, label')) return
+  if (!phonePortrait.value || !touch || !mobileAuthorDetailState.value || (!authorProfile.value && !selectedTag.value) || target?.closest?.('input, textarea, select, label')) return
   if (mobileAuthorPageTimer) window.clearTimeout(mobileAuthorPageTimer)
   mobileAuthorPageTimer = 0
   mobileAuthorPageTouch = { x: touch.clientX, y: touch.clientY, time: event.timeStamp, axis: '', prevX: touch.clientX, prevTime: event.timeStamp, lastX: touch.clientX, lastTime: event.timeStamp }
@@ -3363,8 +3364,34 @@ function navigateTo(nav, source = activeSource.value) {
 }
 function openTag(tag) {
   clearPhoneOverlayHistoryForNavigation()
-  stopSelection(); masonryDetailPost.value = null; mobileAuthorDetailState.value = null; showSettings.value = false; selectedAuthor.value = null; selectedTag.value = tag; activeNav.value = 'tag'; activeSource.value = 'all'; mobileSourcesOpen.value = false
-  updateRoute(`/tag/${encodeURIComponent(tag)}`)
+  const fromDetail = phonePortrait.value && Boolean(masonryDetailPost.value)
+  const previousPath = window.location.pathname + window.location.search
+  const previousPost = masonryDetailPost.value
+  const previousTimelineIds = filteredPosts.value.map(item => item.id)
+  stopSelection()
+  masonryDetailPost.value = null
+  if (phonePortrait.value) {
+    mobileAuthorDetailState.value = {
+      post: previousPost || filteredPosts.value[0] || { source: activeSource.value === 'all' ? 'bilibili' : activeSource.value, author: '', avatar: '' },
+      tag,
+      authorScrollY: 0,
+      detailScrollY: window.scrollY,
+      returnPath: previousPath,
+      returnTitle: activeSource.value === 'all' ? '全部动态' : (sourceMeta[activeSource.value]?.label || '动态'),
+      returnPostIds: previousTimelineIds,
+      returnToDetail: fromDetail
+    }
+  } else {
+    mobileAuthorDetailState.value = null
+  }
+  showSettings.value = false
+  selectedAuthor.value = null
+  selectedTag.value = tag
+  activeNav.value = 'tag'
+  activeSource.value = 'all'
+  mobileSourcesOpen.value = false
+  updateRoute(`/tag/${encodeURIComponent(tag)}`, false, phonePortrait.value ? (fromDetail ? { lumicMobileTag: true, lumicMobileDetailParent: previousPath } : { lumicMobileTag: true }) : {})
+  window.scrollTo({ top: 0, behavior: 'auto' })
 }
 function masonryMediaPending(element) {
   const image = element.querySelector('.masonry-cover img')
@@ -3620,7 +3647,7 @@ function handlePopState() {
     closeLightbox(true)
     return
   }
-  const returningFromAuthor = phonePortrait.value && Boolean(authorProfile.value && mobileAuthorDetailState.value)
+  const returningFromAuthor = phonePortrait.value && Boolean((authorProfile.value || selectedTag.value) && mobileAuthorDetailState.value)
   const leavingDetail = phonePortrait.value && Boolean(masonryDetailPost.value)
   const departingDetailPost = masonryDetailPost.value
   const returningToTimeline = leavingDetail && !window.location.pathname.startsWith('/post/') && !window.location.pathname.startsWith('/author/')
@@ -3694,7 +3721,7 @@ function platformEmptyMessage(platformKey) {
   if (platformKey === 'bilibili') return '点击“添加 UP 主”开始订阅图文与专栏。'
   if (platformKey === 'weibo') return '点击“添加博主”开始订阅微博动态。'
   if (platformKey === 'pixiv') return '添加画师或账号收藏来源，作品将以原图归档。'
-  if (platformKey === 'twitter') return '连接账号后，可将“推特点赞”添加为同步来源。'
+  if (platformKey === 'twitter') return '连接 twitterapi.io 后，可将“推特点赞”添加为同步来源。'
   return '作者订阅连接器将在后续版本开放。'
 }
 async function checkSession(refreshData = true) {
@@ -3843,7 +3870,7 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
       <footer class="mobile-post-detail-foot"><time :datetime="mobileAuthorDetailState.post.published">{{ postDateTime(mobileAuthorDetailState.post.published) }}</time><div class="mobile-detail-preview-actions"><i></i><i></i></div></footer>
       </div>
     </aside>
-    <main v-if="!showSettings && activeNav !== 'pulls' && !(phonePortrait && masonryDetailPost)" :class="['content', { 'liked-page': activeNav === 'liked', 'mobile-author-detail-page': phonePortrait && authorProfile && mobileAuthorDetailState }]" :style="phonePortrait && authorProfile && mobileAuthorDetailState ? mobileAuthorPageStyle : undefined" @touchstart.passive="beginMobileAuthorPageSwipe" @touchmove="updateMobileAuthorPageSwipe" @touchend.passive="finishMobileAuthorPageSwipe" @touchcancel.passive="finishMobileAuthorPageSwipe" @click="closeContextMenu" @contextmenu.prevent="openContextMenu($event)">
+    <main v-if="!showSettings && activeNav !== 'pulls' && !(phonePortrait && masonryDetailPost)" :class="['content', { 'liked-page': activeNav === 'liked', 'mobile-author-detail-page': mobilePagedDetailActive }]" :style="mobilePagedDetailActive ? mobileAuthorPageStyle : undefined" @touchstart.passive="beginMobileAuthorPageSwipe" @touchmove="updateMobileAuthorPageSwipe" @touchend.passive="finishMobileAuthorPageSwipe" @touchcancel="finishMobileAuthorPageSwipe" @click="closeContextMenu" @contextmenu.prevent="openContextMenu($event)">
       <div v-if="!authorProfile && activeNav !== 'liked'" class="night-sky-decor" aria-hidden="true"><i class="night-haze"></i><i class="night-moon"></i><i class="night-star star-one"></i><i class="night-star star-two"></i><i class="night-star star-three"></i><i class="night-star star-four"></i><i class="night-star star-five"></i><i class="night-star star-six"></i><i class="night-star star-seven"></i><i class="night-star star-eight"></i></div>
       <div v-if="!authorProfile && activeNav !== 'liked'" class="night-meteor-layer" aria-hidden="true"><i v-for="meteor in meteorBurst" :key="meteor.id" class="night-meteor" :style="meteor.style"></i></div>
       <div v-if="!authorProfile && activeNav !== 'liked'" class="seasonal-decor" :class="`season-${localSeason}`" aria-hidden="true">
@@ -4279,7 +4306,7 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
         </div>
 
         <div v-else-if="credentialPlatform.key === 'weibo'" class="credential-config-body">
-          <details class="platform-auth-details"><summary>账号密码登录</summary><form class="settings-form platform-auth-form weibo-password-form" @submit.prevent="loginWeiboAccount" autocomplete="off"><label>微博账号</label><input v-model="weiboPasswordCredentials.username" type="text" autocomplete="username" required placeholder="手机号、邮箱或微博账号"><label>微博密码</label><input v-model="weiboPasswordCredentials.password" type="password" autocomplete="current-password" required><button class="login-button" :disabled="weiboBusy">{{ weiboBusy ? '登录中…' : '账号密码登录' }}</button></form></details>
+          <details class="platform-auth-details"><summary>{{ weiboAccount.cookieConfigured ? '保存备用账号密码' : '账号密码登录' }}</summary><form class="settings-form platform-auth-form weibo-password-form" @submit.prevent="loginWeiboAccount" autocomplete="off"><label>微博账号</label><input v-model="weiboPasswordCredentials.username" type="text" autocomplete="username" required placeholder="手机号、邮箱或微博账号"><label>微博密码</label><input v-model="weiboPasswordCredentials.password" type="password" autocomplete="current-password" required><p class="credential-note">{{ weiboAccount.cookieConfigured ? '当前扫码会话会继续使用，账号密码将加密保存，用于会话失效后自动重新登录。' : '账号密码会加密保存，后续可用于自动恢复微博会话。' }}</p><button class="login-button" :disabled="weiboBusy">{{ weiboBusy ? '验证中…' : weiboAccount.cookieConfigured ? '验证并保存备用密码' : '账号密码登录并保存' }}</button></form></details>
           <div v-if="weiboQR" class="weibo-qr"><img :src="weiboQR.image.startsWith('//') ? `https:${weiboQR.image}` : weiboQR.image" alt="微博登录二维码"><span>请在二维码过期前扫码并确认</span></div>
           <button class="login-button platform-login-button" type="button" @click="startWeiboQR" :disabled="weiboBusy && !weiboQR">{{ weiboQR ? '刷新二维码' : weiboBusy ? '获取中…' : weiboAccount.configured ? '扫码切换微博账号' : '扫码连接微博' }}</button>
           <details class="manual-credential"><summary>手动导入 Cookie</summary><form class="settings-form bili-credentials" @submit.prevent="saveWeiboAccount" autocomplete="off"><label>微博 UID</label><input v-model="weiboCredentials.userId" inputmode="numeric" required placeholder="个人主页地址中的数字 UID"><label>完整 Cookie</label><textarea v-model="weiboCredentials.cookie" rows="4" required placeholder="可粘贴浏览器请求头中的 Cookie: 完整内容"></textarea><p class="credential-note">保存前会验证账号资料，不会回显原始 Cookie。</p><button class="login-button" :disabled="weiboBusy">{{ weiboBusy ? '验证中…' : '验证并保存 Cookie' }}</button></form></details>
@@ -4301,8 +4328,9 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
 
         <div v-else-if="credentialPlatform.key === 'twitter'" class="credential-config-body">
           <form class="settings-form platform-auth-form" @submit.prevent="saveTwitterAccount" autocomplete="off">
-            <label class="credential-field"><span>OAuth 2.0 用户访问令牌</span><textarea v-model="twitterCredentials.accessToken" rows="4" required autocomplete="off" placeholder="需要 tweet.read、users.read、like.read 权限"></textarea></label>
-            <p class="credential-note">令牌仅加密保存于服务端，不会再次显示。</p>
+            <label class="credential-field"><span>twitterapi.io API Key</span><input v-model="twitterCredentials.apiKey" type="password" required autocomplete="off" placeholder="在 twitterapi.io 控制台创建的 API Key"></label>
+            <label class="credential-field"><span>推特用户名</span><input v-model="twitterCredentials.username" required autocomplete="off" placeholder="例如 elonmusk，不含 @"></label>
+            <p class="credential-note">API Key 仅加密保存于服务端，不会再次显示；用户名用于读取该账号的点赞来源。</p>
             <button class="login-button" :disabled="twitterBusy">{{ twitterBusy ? '验证中…' : twitterAccount.configured ? '验证并切换推特账号' : '验证并连接推特' }}</button>
           </form>
           <p v-if="twitterError" class="login-error">{{ twitterError }}</p>

@@ -99,14 +99,10 @@ func TestTwitterCollectionArchiveUsesLikesDirectoryUntilAuthorIsSubscribed(t *te
 }
 
 func TestTwitterVideoURLSelectsHighestQualityMP4(t *testing.T) {
-	variants := []struct {
-		URL         string `json:"url"`
-		ContentType string `json:"content_type"`
-		BitRate     int64  `json:"bit_rate"`
-	}{
-		{URL: "https://video.example/playlist.m3u8", ContentType: "application/x-mpegURL"},
-		{URL: "https://video.example/low.mp4", ContentType: "video/mp4", BitRate: 256000},
-		{URL: "https://video.example/high.mp4", ContentType: "video/mp4", BitRate: 832000},
+	variants := []map[string]any{
+		{"url": "https://video.example/playlist.m3u8", "content_type": "application/x-mpegURL"},
+		{"url": "https://video.example/low.mp4", "content_type": "video/mp4", "bit_rate": "256000"},
+		{"url": "https://video.example/high.mp4", "content_type": "video/mp4", "bit_rate": "832000"},
 	}
 	if got := twitterVideoURL(variants); got != "https://video.example/high.mp4" {
 		t.Fatalf("unexpected Twitter video variant: %s", got)
@@ -1172,12 +1168,15 @@ func TestWeiboAccountHandlerReturnsValidatedAvatar(t *testing.T) {
 		bilibiliFile = oldFile
 		validateWeiboLoginSession = oldValidator
 	})
-	store := &BilibiliStore{config: BilibiliConfig{}, key: make([]byte, 32)}
+	store := &BilibiliStore{config: BilibiliConfig{Weibo: WeiboCredentials{PasswordUsername: "account", Password: "secret"}}, key: make([]byte, 32)}
 	request := httptest.NewRequest(http.MethodPut, "/api/weibo/account", strings.NewReader(`{"cookie":"SUB=session","userId":"42"}`))
 	response := httptest.NewRecorder()
 	store.weiboAccountHandler(response, request)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"avatar":"https://example.com/avatar.jpg"`) {
 		t.Fatalf("validated account avatar was not returned: status=%d body=%s", response.Code, response.Body.String())
+	}
+	if store.config.Weibo.PasswordUsername != "account" || store.config.Weibo.Password != "secret" {
+		t.Fatalf("manual cookie login discarded saved password fallback: %#v", store.config.Weibo)
 	}
 }
 

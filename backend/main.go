@@ -508,19 +508,22 @@ type PixivCredentials struct {
 }
 
 type WeiboCredentials struct {
-	Cookie   string `json:"cookie,omitempty"`
+	Cookie           string `json:"cookie,omitempty"`
+	UserID           string `json:"userId,omitempty"`
+	UserName         string `json:"userName,omitempty"`
+	Avatar           string `json:"avatar,omitempty"`
+	PasswordUsername string `json:"passwordUsername,omitempty"`
+	Password         string `json:"password,omitempty"`
+}
+
+// TwitterCredentials holds the twitterapi.io API key and the target account.
+// The key is kept only in the encrypted project configuration and is never
+// returned to clients.
+type TwitterCredentials struct {
+	APIKey   string `json:"apiKey,omitempty"`
 	UserID   string `json:"userId,omitempty"`
 	UserName string `json:"userName,omitempty"`
 	Avatar   string `json:"avatar,omitempty"`
-}
-
-// TwitterCredentials holds an OAuth 2.0 user access token. The token is kept
-// only in the encrypted project configuration and is never returned to clients.
-type TwitterCredentials struct {
-	AccessToken string `json:"accessToken,omitempty"`
-	UserID      string `json:"userId,omitempty"`
-	UserName    string `json:"userName,omitempty"`
-	Avatar      string `json:"avatar,omitempty"`
 }
 
 type BilibiliQRSession struct {
@@ -621,7 +624,7 @@ func collectionFeedWithAccountProfile(feed SourceConfig, config BilibiliConfig) 
 	case strings.TrimSpace(config.Pixiv.UserID) != "" && feed.ID == "pixiv-bookmarks-"+strings.TrimSpace(config.Pixiv.UserID):
 		avatar = config.Pixiv.Avatar
 		matched = true
-	case strings.TrimSpace(config.Twitter.UserID) != "" && feed.ID == "twitter-likes-"+strings.TrimSpace(config.Twitter.UserID):
+	case strings.TrimSpace(config.Twitter.UserName) != "" && (feed.ID == "twitter-likes-"+strings.TrimSpace(config.Twitter.UserName) || feed.ID == "twitter-likes-"+strings.TrimSpace(config.Twitter.UserID)):
 		avatar = config.Twitter.Avatar
 		matched = true
 		if strings.TrimSpace(feed.Handle) == "" {
@@ -4712,7 +4715,7 @@ func (b *BilibiliStore) fetchWeiboPosts(feed SourceConfig, full bool) ([]Post, e
 	b.RLock()
 	credentials, proxyURL := b.config.Weibo, b.config.ProxyURL
 	b.RUnlock()
-	if credentials.Cookie == "" {
+	if credentials.Cookie == "" && strings.TrimSpace(credentials.Password) == "" {
 		return nil, errors.New("微博账号未连接")
 	}
 	endpointForPage := []func(int) string{
@@ -4731,7 +4734,7 @@ func (b *BilibiliStore) fetchWeiboPosts(feed SourceConfig, full bool) ([]Post, e
 		posts := make([]Post, 0)
 		seen := make(map[string]bool)
 		for page := 1; page <= 100; page++ {
-			payload, _, err := weiboRawRequest(makeEndpoint(page), credentials, proxyURL)
+			payload, _, err := b.weiboRawRequest(makeEndpoint(page), &credentials, proxyURL)
 			if err != nil {
 				lastErr = err
 				break
@@ -4772,7 +4775,7 @@ func (b *BilibiliStore) fetchWeiboLikedPosts(feed SourceConfig, full bool) ([]Po
 	b.RLock()
 	credentials, proxyURL := b.config.Weibo, b.config.ProxyURL
 	b.RUnlock()
-	if credentials.Cookie == "" || credentials.UserID == "" {
+	if (credentials.Cookie == "" && strings.TrimSpace(credentials.Password) == "") || credentials.UserID == "" {
 		return nil, errors.New("微博账号未连接")
 	}
 	if feed.ID == "" {
@@ -4797,7 +4800,7 @@ func (b *BilibiliStore) fetchWeiboLikedPosts(feed SourceConfig, full bool) ([]Po
 	for _, endpoint := range endpoints {
 		posts, seen := make([]Post, 0), make(map[string]bool)
 		for page := 1; page <= pageLimit; page++ {
-			payload, _, err := weiboRawRequest(endpoint(page), credentials, proxyURL)
+			payload, _, err := b.weiboRawRequest(endpoint(page), &credentials, proxyURL)
 			if err != nil {
 				lastErr = err
 				break
@@ -5110,7 +5113,7 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 		credentials, proxyURL := b.config.Weibo, b.config.ProxyURL
 		b.RUnlock()
 		if userID != "" && credentials.Cookie != "" {
-			if user, repairErr := fetchWeiboUser(userID, credentials, proxyURL); repairErr == nil {
+			if user, repairErr := b.fetchWeiboUser(userID, &credentials, proxyURL); repairErr == nil {
 				if strings.TrimSpace(user.Name) != "" {
 					feed.Name = user.Name
 				}
@@ -5644,57 +5647,14 @@ func (b *BilibiliStore) fetchPixivPosts(feed SourceConfig, full bool) ([]Post, e
 	return posts, nil
 }
 
-const twitterAPIBase = "https://api.x.com/2"
-
-type twitterUserResponse struct {
-	Data struct {
-		ID              string `json:"id"`
-		Name            string `json:"name"`
-		Username        string `json:"username"`
-		ProfileImageURL string `json:"profile_image_url"`
-	} `json:"data"`
-}
-
-type twitterLikedTweetsResponse struct {
-	Data []struct {
-		ID          string `json:"id"`
-		Text        string `json:"text"`
-		CreatedAt   string `json:"created_at"`
-		AuthorID    string `json:"author_id"`
-		Attachments struct {
-			MediaKeys []string `json:"media_keys"`
-		} `json:"attachments"`
-	} `json:"data"`
-	Includes struct {
-		Media []struct {
-			MediaKey        string `json:"media_key"`
-			Type            string `json:"type"`
-			URL             string `json:"url"`
-			PreviewImageURL string `json:"preview_image_url"`
-			Variants        []struct {
-				URL         string `json:"url"`
-				ContentType string `json:"content_type"`
-				BitRate     int64  `json:"bit_rate"`
-			} `json:"variants"`
-		} `json:"media"`
-		Users []struct {
-			ID              string `json:"id"`
-			Name            string `json:"name"`
-			Username        string `json:"username"`
-			ProfileImageURL string `json:"profile_image_url"`
-		} `json:"users"`
-	} `json:"includes"`
-	Meta struct {
-		NextToken string `json:"next_token"`
-	} `json:"meta"`
-}
+const twitterAPIBase = "https://api.twitterapi.io"
 
 func twitterRequest(client *http.Client, endpoint string, credentials TwitterCredentials, target any) error {
 	request, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
 		return err
 	}
-	request.Header.Set("Authorization", "Bearer "+strings.TrimSpace(credentials.AccessToken))
+	request.Header.Set("X-API-Key", strings.TrimSpace(credentials.APIKey))
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("User-Agent", "Lumic/1.0")
 	response, err := client.Do(request)
@@ -5724,12 +5684,12 @@ func twitterRequest(client *http.Client, endpoint string, credentials TwitterCre
 			message = responseSummary(body)
 		}
 		if message == "" {
-			message = "X API 请求失败"
+			message = "twitterapi.io 请求失败"
 		}
-		return fmt.Errorf("X API 返回 HTTP %d：%s", response.StatusCode, message)
+		return fmt.Errorf("twitterapi.io 返回 HTTP %d：%s", response.StatusCode, message)
 	}
 	if err := json.Unmarshal(body, target); err != nil {
-		return fmt.Errorf("X API 返回了无效响应：%w", err)
+		return fmt.Errorf("twitterapi.io 返回了无效响应：%w", err)
 	}
 	return nil
 }
@@ -5739,24 +5699,42 @@ func normalizeTwitterAvatar(value string) string {
 	return strings.Replace(value, "_normal.", "_400x400.", 1)
 }
 
-func validateTwitterCredentials(accessToken, proxyURL string) (TwitterCredentials, error) {
-	credentials := TwitterCredentials{AccessToken: strings.TrimSpace(accessToken)}
-	if credentials.AccessToken == "" {
-		return TwitterCredentials{}, errors.New("请填写 X OAuth 2.0 用户访问令牌")
+func twitterUserValue(payload map[string]any) map[string]any {
+	if data, ok := payload["data"].(map[string]any); ok {
+		return data
+	}
+	return payload
+}
+
+func twitterUserFromValue(value map[string]any) (id, username, name, avatar string) {
+	id = firstNonEmptyRemoteText(jsonValueString(value["id"]), jsonValueString(value["userId"]))
+	username = strings.TrimPrefix(firstNonEmptyRemoteText(jsonValueString(value["userName"]), jsonValueString(value["username"]), jsonValueString(value["screenName"])), "@")
+	name = firstNonEmptyRemoteText(jsonValueString(value["name"]), username)
+	avatar = normalizeTwitterAvatar(firstNonEmptyRemoteText(jsonValueString(value["profilePicture"]), jsonValueString(value["profile_image_url"]), jsonValueString(value["avatar"])))
+	return
+}
+
+func validateTwitterCredentials(apiKey, username, proxyURL string) (TwitterCredentials, error) {
+	credentials := TwitterCredentials{APIKey: strings.TrimSpace(apiKey), UserName: strings.TrimPrefix(strings.TrimSpace(username), "@")}
+	if credentials.APIKey == "" || credentials.UserName == "" {
+		return TwitterCredentials{}, errors.New("请填写 twitterapi.io API Key 和推特用户名")
 	}
 	client, err := externalHTTPClient(proxyURL)
 	if err != nil {
 		return TwitterCredentials{}, err
 	}
-	var response twitterUserResponse
-	if err := twitterRequest(client, twitterAPIBase+"/users/me?user.fields=profile_image_url", credentials, &response); err != nil {
-		return TwitterCredentials{}, fmt.Errorf("推特访问令牌验证失败：%w", err)
+	var response map[string]any
+	endpoint := twitterAPIBase + "/twitter/user/info?userName=" + url.QueryEscape(credentials.UserName)
+	if err := twitterRequest(client, endpoint, credentials, &response); err != nil {
+		return TwitterCredentials{}, fmt.Errorf("twitterapi.io 凭证验证失败：%w", err)
 	}
-	credentials.UserID = strings.TrimSpace(response.Data.ID)
-	credentials.UserName = strings.TrimSpace(response.Data.Username)
-	credentials.Avatar = normalizeTwitterAvatar(response.Data.ProfileImageURL)
+	userID, returnedUsername, _, avatar := twitterUserFromValue(twitterUserValue(response))
+	credentials.UserID, credentials.UserName, credentials.Avatar = userID, firstNonEmptyRemoteText(returnedUsername, credentials.UserName), avatar
+	if credentials.UserName == "" {
+		credentials.UserName = strings.TrimPrefix(strings.TrimSpace(username), "@")
+	}
 	if credentials.UserID == "" || credentials.UserName == "" {
-		return TwitterCredentials{}, errors.New("X API 未返回当前账号资料，请确认令牌使用 OAuth 2.0 用户授权并具有 users.read 权限")
+		return TwitterCredentials{}, errors.New("twitterapi.io 未返回该推特用户资料，请检查用户名")
 	}
 	return credentials, nil
 }
@@ -5769,29 +5747,60 @@ func parseTwitterTime(value string) time.Time {
 	return time.Now()
 }
 
-func twitterVideoURL(variants []struct {
-	URL         string `json:"url"`
-	ContentType string `json:"content_type"`
-	BitRate     int64  `json:"bit_rate"`
-}) string {
+func twitterVideoURL(variants []map[string]any) string {
 	selected := ""
 	var selectedBitRate int64 = -1
 	for _, variant := range variants {
-		if !strings.EqualFold(variant.ContentType, "video/mp4") || strings.TrimSpace(variant.URL) == "" {
+		contentType := firstNonEmptyRemoteText(jsonValueString(variant["content_type"]), jsonValueString(variant["contentType"]))
+		videoURL := firstNonEmptyRemoteText(jsonValueString(variant["url"]), jsonValueString(variant["src"]))
+		if contentType != "" && !strings.Contains(strings.ToLower(contentType), "video/mp4") || strings.TrimSpace(videoURL) == "" {
 			continue
 		}
-		if variant.BitRate >= selectedBitRate {
-			selected, selectedBitRate = variant.URL, variant.BitRate
+		bitRate, _ := strconv.ParseInt(jsonValueString(variant["bit_rate"]), 10, 64)
+		if bitRate >= selectedBitRate {
+			selected, selectedBitRate = videoURL, bitRate
 		}
 	}
 	return selected
+}
+
+func twitterTweetItems(payload map[string]any) []map[string]any {
+	for _, key := range []string{"tweets", "data", "results"} {
+		if values, ok := payload[key].([]any); ok {
+			items := make([]map[string]any, 0, len(values))
+			for _, value := range values {
+				if item, ok := value.(map[string]any); ok {
+					items = append(items, item)
+				}
+			}
+			return items
+		}
+	}
+	return nil
+}
+
+func twitterMediaItems(tweet map[string]any) []map[string]any {
+	for _, key := range []string{"extendedEntities", "extended_entities", "entities"} {
+		if object, ok := tweet[key].(map[string]any); ok {
+			if values, ok := object["media"].([]any); ok {
+				items := make([]map[string]any, 0, len(values))
+				for _, value := range values {
+					if item, ok := value.(map[string]any); ok {
+						items = append(items, item)
+					}
+				}
+				return items
+			}
+		}
+	}
+	return nil
 }
 
 func (b *BilibiliStore) fetchTwitterLikedPosts(feed SourceConfig, full bool) ([]Post, error) {
 	b.RLock()
 	credentials, proxyURL := b.config.Twitter, b.config.ProxyURL
 	b.RUnlock()
-	if credentials.AccessToken == "" || credentials.UserID == "" {
+	if credentials.APIKey == "" || credentials.UserName == "" {
 		return nil, errors.New("推特账号未连接")
 	}
 	client, err := externalHTTPClient(proxyURL)
@@ -5799,82 +5808,57 @@ func (b *BilibiliStore) fetchTwitterLikedPosts(feed SourceConfig, full bool) ([]
 		return nil, err
 	}
 	if feed.ID == "" {
-		feed = SourceConfig{ID: "twitter-likes-" + credentials.UserID, Source: SourceTwitter, Name: twitterLikesName, Handle: "@" + credentials.UserName, Avatar: credentials.Avatar}
+		feed = SourceConfig{ID: "twitter-likes-" + credentials.UserName, Source: SourceTwitter, Name: twitterLikesName, Handle: "@" + credentials.UserName, Avatar: credentials.Avatar}
 	}
 	posts := make([]Post, 0)
 	seen := make(map[string]bool)
-	nextToken := ""
 	pageLimit := 1
 	if full {
 		pageLimit = 30
 	}
 	for page := 0; page < pageLimit; page++ {
-		query := url.Values{
-			"max_results":  {"100"},
-			"tweet.fields": {"created_at,attachments,author_id"},
-			"expansions":   {"attachments.media_keys,author_id"},
-			"media.fields": {"url,preview_image_url,type,variants"},
-			"user.fields":  {"name,username,profile_image_url"},
+		query := url.Values{"userName": {credentials.UserName}}
+		if page > 0 {
+			query.Set("cursor", strconv.Itoa(page))
 		}
-		if nextToken != "" {
-			query.Set("pagination_token", nextToken)
-		}
-		var payload twitterLikedTweetsResponse
-		endpoint := twitterAPIBase + "/users/" + url.PathEscape(credentials.UserID) + "/liked_tweets?" + query.Encode()
+		var payload map[string]any
+		endpoint := twitterAPIBase + "/twitter/user/liked_tweets?" + query.Encode()
 		if err := twitterRequest(client, endpoint, credentials, &payload); err != nil {
 			return nil, fmt.Errorf("推特点赞拉取失败：%w", err)
 		}
-		users := make(map[string]struct {
-			Name     string
-			Username string
-			Avatar   string
-		})
-		for _, user := range payload.Includes.Users {
-			users[user.ID] = struct {
-				Name     string
-				Username string
-				Avatar   string
-			}{Name: cleanRemoteText(user.Name), Username: strings.TrimSpace(user.Username), Avatar: normalizeTwitterAvatar(user.ProfileImageURL)}
-		}
-		media := make(map[string]struct {
-			Kind   string
-			URL    string
-			Poster string
-		})
-		for _, item := range payload.Includes.Media {
-			kind := strings.ToLower(strings.TrimSpace(item.Type))
-			if kind == "photo" && item.URL != "" {
-				media[item.MediaKey] = struct{ Kind, URL, Poster string }{Kind: kind, URL: normalizeRemoteImage(item.URL)}
-				continue
-			}
-			if kind == "video" || kind == "animated_gif" {
-				videoURL := twitterVideoURL(item.Variants)
-				if videoURL != "" {
-					media[item.MediaKey] = struct{ Kind, URL, Poster string }{Kind: kind, URL: videoURL, Poster: normalizeRemoteImage(item.PreviewImageURL)}
-				}
-			}
-		}
 		reachedBoundary := false
-		for _, tweet := range payload.Data {
-			if tweet.ID == "" || seen[tweet.ID] {
+		for _, tweet := range twitterTweetItems(payload) {
+			tweetID := firstNonEmptyRemoteText(jsonValueString(tweet["id"]), jsonValueString(tweet["tweetId"]))
+			if tweetID == "" || seen[tweetID] {
 				continue
 			}
-			seen[tweet.ID] = true
-			user := users[tweet.AuthorID]
-			author := firstNonEmptyRemoteText(user.Name, "@"+user.Username, feed.Name)
-			if user.Username == "" {
-				user.Username = strings.TrimPrefix(credentials.UserName, "@")
-			}
-			post := Post{ID: "twitter-tweet-" + tweet.ID, Source: SourceTwitter, FeedIDs: []string{feed.ID}, Author: author, Avatar: user.Avatar, Caption: cleanRemoteText(tweet.Text), Tags: append([]string(nil), feed.Tags...), OriginalURL: "https://x.com/" + url.PathEscape(user.Username) + "/status/" + url.PathEscape(tweet.ID), Published: parseTwitterTime(tweet.CreatedAt)}
-			for _, key := range tweet.Attachments.MediaKeys {
-				item, exists := media[key]
-				if !exists {
+			seen[tweetID] = true
+			authorObject, _ := tweet["author"].(map[string]any)
+			_, username, authorName, avatar := twitterUserFromValue(authorObject)
+			username = firstNonEmptyRemoteText(username, strings.TrimPrefix(credentials.UserName, "@"))
+			author := firstNonEmptyRemoteText(authorName, "@"+username, feed.Name)
+			post := Post{ID: "twitter-tweet-" + tweetID, Source: SourceTwitter, FeedIDs: []string{feed.ID}, Author: author, Avatar: avatar, Caption: cleanRemoteText(firstNonEmptyRemoteText(jsonValueString(tweet["text"]), jsonValueString(tweet["fullText"]))), Tags: append([]string(nil), feed.Tags...), OriginalURL: "https://x.com/" + url.PathEscape(username) + "/status/" + url.PathEscape(tweetID), Published: parseTwitterTime(firstNonEmptyRemoteText(jsonValueString(tweet["createdAt"]), jsonValueString(tweet["created_at"])))}
+			for _, item := range twitterMediaItems(tweet) {
+				kind := strings.ToLower(firstNonEmptyRemoteText(jsonValueString(item["type"]), jsonValueString(item["mediaType"])))
+				mediaURL := normalizeRemoteImage(firstNonEmptyRemoteText(jsonValueString(item["media_url_https"]), jsonValueString(item["mediaUrl"]), jsonValueString(item["url"])))
+				poster := normalizeRemoteImage(firstNonEmptyRemoteText(jsonValueString(item["thumbnailUrl"]), jsonValueString(item["preview_image_url"]), jsonValueString(item["previewImageUrl"])))
+				if kind == "photo" || (kind == "" && mediaURL != "") {
+					post.Media = append(post.Media, mediaURL)
 					continue
 				}
-				if item.Kind == "photo" {
-					post.Media = append(post.Media, item.URL)
-				} else {
-					post.Videos = append(post.Videos, PostVideo{URL: item.URL, Poster: item.Poster})
+				if variants, ok := item["video_info"].(map[string]any); ok {
+					if list, ok := variants["variants"].([]any); ok {
+						values := make([]map[string]any, 0, len(list))
+						for _, value := range list {
+							if object, ok := value.(map[string]any); ok {
+								values = append(values, object)
+							}
+						}
+						mediaURL = twitterVideoURL(values)
+					}
+				}
+				if mediaURL != "" {
+					post.Videos = append(post.Videos, PostVideo{URL: mediaURL, Poster: poster})
 				}
 			}
 			posts = append(posts, post)
@@ -5882,10 +5866,9 @@ func (b *BilibiliStore) fetchTwitterLikedPosts(feed SourceConfig, full bool) ([]
 				reachedBoundary = true
 			}
 		}
-		if payload.Meta.NextToken == "" || (!full && reachedBoundary) {
+		if !full && reachedBoundary || len(twitterTweetItems(payload)) == 0 {
 			break
 		}
-		nextToken = payload.Meta.NextToken
 	}
 	return posts, nil
 }
@@ -5895,11 +5878,11 @@ func (b *BilibiliStore) twitterAccountHandler(w http.ResponseWriter, r *http.Req
 	current, proxyURL := b.config.Twitter, b.config.ProxyURL
 	b.RUnlock()
 	if r.Method == http.MethodGet {
-		if current.AccessToken != "" && (current.UserID == "" || current.UserName == "") {
-			if refreshed, err := validateTwitterCredentials(current.AccessToken, proxyURL); err == nil {
+		if current.APIKey != "" && (current.UserID == "" || current.UserName == "") {
+			if refreshed, err := validateTwitterCredentials(current.APIKey, current.UserName, proxyURL); err == nil {
 				current = refreshed
 				b.Lock()
-				if b.config.Twitter.AccessToken == refreshed.AccessToken {
+				if b.config.Twitter.APIKey == refreshed.APIKey {
 					b.config.Twitter = refreshed
 				}
 				b.Unlock()
@@ -5911,14 +5894,14 @@ func (b *BilibiliStore) twitterAccountHandler(w http.ResponseWriter, r *http.Req
 			if cachedAvatar != current.Avatar {
 				current.Avatar = cachedAvatar
 				b.Lock()
-				if b.config.Twitter.AccessToken == current.AccessToken {
+				if b.config.Twitter.APIKey == current.APIKey {
 					b.config.Twitter.Avatar = cachedAvatar
 				}
 				b.Unlock()
 				_ = b.save()
 			}
 		}
-		writeJSON(w, map[string]any{"configured": current.AccessToken != "", "userId": current.UserID, "userName": current.UserName, "avatar": current.Avatar})
+		writeJSON(w, map[string]any{"configured": current.APIKey != "", "userId": current.UserID, "userName": current.UserName, "avatar": current.Avatar})
 		return
 	}
 	if r.Method != http.MethodPut {
@@ -5926,15 +5909,16 @@ func (b *BilibiliStore) twitterAccountHandler(w http.ResponseWriter, r *http.Req
 		return
 	}
 	var input struct {
-		AccessToken string `json:"accessToken"`
-		Token       string `json:"token"`
+		APIKey   string `json:"apiKey"`
+		Username string `json:"username"`
+		Token    string `json:"token"`
 	}
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&input) != nil {
-		writeAPIError(w, http.StatusBadRequest, "推特访问令牌格式无效")
+		writeAPIError(w, http.StatusBadRequest, "twitterapi.io 凭证格式无效")
 		return
 	}
-	accessToken := firstNonEmptyRemoteText(input.AccessToken, input.Token)
-	credentials, err := validateTwitterCredentials(accessToken, proxyURL)
+	apiKey := firstNonEmptyRemoteText(input.APIKey, input.Token)
+	credentials, err := validateTwitterCredentials(apiKey, input.Username, proxyURL)
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
@@ -5949,7 +5933,7 @@ func (b *BilibiliStore) twitterAccountHandler(w http.ResponseWriter, r *http.Req
 		b.Lock()
 		b.config.Twitter = current
 		b.Unlock()
-		writeAPIError(w, http.StatusInternalServerError, "无法保存推特访问令牌")
+		writeAPIError(w, http.StatusInternalServerError, "无法保存 twitterapi.io 凭证")
 		return
 	}
 	writeJSON(w, map[string]any{"configured": true, "userId": credentials.UserID, "userName": credentials.UserName, "avatar": credentials.Avatar})
@@ -6071,11 +6055,11 @@ func (b *BilibiliStore) twitterSubscriptionsHandler(w http.ResponseWriter, r *ht
 	b.RLock()
 	credentials := b.config.Twitter
 	b.RUnlock()
-	if credentials.AccessToken == "" || credentials.UserID == "" {
+	if credentials.APIKey == "" || credentials.UserName == "" {
 		writeAPIError(w, http.StatusPreconditionFailed, "请先连接推特账号")
 		return
 	}
-	feed := SourceConfig{ID: "twitter-likes-" + credentials.UserID, Source: SourceTwitter, Name: twitterLikesName, Handle: "@" + strings.TrimPrefix(credentials.UserName, "@"), Avatar: credentials.Avatar, Enabled: true, Schedule: "0 6 * * *", StoragePath: sourceStoragePath(SourceTwitter, twitterLikesName), OnlyWithImages: true}
+	feed := SourceConfig{ID: "twitter-likes-" + credentials.UserName, Source: SourceTwitter, Name: twitterLikesName, Handle: "@" + strings.TrimPrefix(credentials.UserName, "@"), Avatar: credentials.Avatar, Enabled: true, Schedule: "0 6 * * *", StoragePath: sourceStoragePath(SourceTwitter, twitterLikesName), OnlyWithImages: true}
 	prepared, err := prepareSourceStorage(feed)
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "无法创建推特点赞内容目录")
@@ -6806,6 +6790,41 @@ func weiboRequest(endpoint string, credentials WeiboCredentials, proxyURL string
 	return json.Unmarshal(data, target)
 }
 
+func isWeiboSessionFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "cookie 已失效") || strings.Contains(message, "cookie 已失效或") || strings.Contains(message, "登录 cookie") || strings.Contains(message, "登录凭证")
+}
+
+// weiboRawRequest retries once with the saved account/password pair when a
+// QR or Cookie session expires. The refreshed session is persisted in the
+// same encrypted platform configuration as the rest of the credentials.
+func (b *BilibiliStore) weiboRawRequest(endpoint string, credentials *WeiboCredentials, proxyURL string) (map[string]any, int, error) {
+	payload, status, err := weiboRawRequest(endpoint, *credentials, proxyURL)
+	if err == nil || !isWeiboSessionFailure(err) || strings.TrimSpace(credentials.PasswordUsername) == "" || strings.TrimSpace(credentials.Password) == "" {
+		return payload, status, err
+	}
+	refreshed, loginErr := loginWeiboWithPassword(credentials.PasswordUsername, credentials.Password, proxyURL)
+	if loginErr != nil {
+		return nil, status, fmt.Errorf("微博会话已失效，备用账号密码登录失败：%w", loginErr)
+	}
+	refreshed.PasswordUsername = credentials.PasswordUsername
+	refreshed.Password = credentials.Password
+	*credentials = refreshed
+	b.Lock()
+	current := b.config.Weibo
+	if current.Cookie == credentials.Cookie || current.UserID == refreshed.UserID || current.PasswordUsername == refreshed.PasswordUsername {
+		b.config.Weibo = refreshed
+	}
+	b.Unlock()
+	if saveErr := b.save(); saveErr != nil {
+		return nil, status, fmt.Errorf("微博会话已刷新，但无法保存新会话：%w", saveErr)
+	}
+	return weiboRawRequest(endpoint, refreshed, proxyURL)
+}
+
 func collectWeiboUsers(value any, users *[]WeiboUser, seen map[string]bool) {
 	if object, ok := value.(map[string]any); ok {
 		if nested, exists := object["user"].(map[string]any); exists {
@@ -6874,6 +6893,30 @@ func fetchWeiboUser(userID string, credentials WeiboCredentials, proxyURL string
 	return WeiboUser{}, lastErr
 }
 
+func (b *BilibiliStore) fetchWeiboUser(userID string, credentials *WeiboCredentials, proxyURL string) (WeiboUser, error) {
+	endpoints := []string{
+		"https://weibo.com/ajax/profile/info?uid=" + url.QueryEscape(userID),
+		"https://m.weibo.cn/api/container/getIndex?type=uid&value=" + url.QueryEscape(userID) + "&containerid=" + url.QueryEscape("100505"+userID),
+	}
+	var lastErr error
+	for _, endpoint := range endpoints {
+		payload, _, err := b.weiboRawRequest(endpoint, credentials, proxyURL)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		users := make([]WeiboUser, 0)
+		collectWeiboUsers(payload, &users, make(map[string]bool))
+		for _, user := range users {
+			if user.UserID == userID {
+				return user, nil
+			}
+		}
+		lastErr = errors.New("微博接口未返回指定 UID 的账号资料")
+	}
+	return WeiboUser{}, lastErr
+}
+
 func (b *BilibiliStore) weiboSearchHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -6887,7 +6930,7 @@ func (b *BilibiliStore) weiboSearchHandler(w http.ResponseWriter, r *http.Reques
 	b.RLock()
 	credentials, proxyURL := b.config.Weibo, b.config.ProxyURL
 	b.RUnlock()
-	if credentials.Cookie == "" {
+	if credentials.Cookie == "" && strings.TrimSpace(credentials.Password) == "" {
 		writeAPIError(w, http.StatusPreconditionFailed, "请先连接微博账号")
 		return
 	}
@@ -6900,7 +6943,7 @@ func (b *BilibiliStore) weiboSearchHandler(w http.ResponseWriter, r *http.Reques
 	statuses := make([]string, 0, len(endpoints))
 	lastMessage := ""
 	for _, endpoint := range endpoints {
-		payload, status, err := weiboRawRequest(endpoint, credentials, proxyURL)
+		payload, status, err := b.weiboRawRequest(endpoint, &credentials, proxyURL)
 		if err != nil {
 			statuses = append(statuses, strconv.Itoa(status))
 			lastMessage = err.Error()
@@ -7104,7 +7147,7 @@ func (b *BilibiliStore) weiboSubscriptionsHandler(w http.ResponseWriter, r *http
 	}
 	userID := strings.TrimSpace(input.UserID)
 	if strings.TrimSpace(input.Avatar) == "" {
-		if user, err := fetchWeiboUser(userID, credentials, proxyURL); err == nil {
+		if user, err := b.fetchWeiboUser(userID, &credentials, proxyURL); err == nil {
 			input.Avatar = user.Avatar
 			if strings.TrimSpace(input.Name) == "" {
 				input.Name = user.Name
@@ -7232,8 +7275,18 @@ func (b *BilibiliStore) weiboAccountHandler(w http.ResponseWriter, r *http.Reque
 	b.RUnlock()
 	if r.Method == http.MethodGet {
 		current.Avatar = normalizeRemoteImage(current.Avatar)
-		if current.Cookie != "" && current.UserID != "" && (strings.TrimSpace(current.UserName) == "" || strings.TrimSpace(current.Avatar) == "") {
-			if user, err := fetchWeiboAccountProfile(current.UserID, current, proxyURL); err == nil {
+		if (current.Cookie != "" || strings.TrimSpace(current.Password) != "") && current.UserID != "" && (strings.TrimSpace(current.UserName) == "" || strings.TrimSpace(current.Avatar) == "") {
+			var user WeiboUser
+			var profileErr error
+			if current.Cookie != "" {
+				user, profileErr = fetchWeiboAccountProfile(current.UserID, current, proxyURL)
+				if profileErr != nil && strings.TrimSpace(current.PasswordUsername) != "" && isWeiboSessionFailure(profileErr) {
+					user, profileErr = b.fetchWeiboUser(current.UserID, &current, proxyURL)
+				}
+			} else {
+				user, profileErr = b.fetchWeiboUser(current.UserID, &current, proxyURL)
+			}
+			if profileErr == nil {
 				if strings.TrimSpace(user.Name) != "" {
 					current.UserName = user.Name
 				}
@@ -7260,7 +7313,7 @@ func (b *BilibiliStore) weiboAccountHandler(w http.ResponseWriter, r *http.Reque
 				_ = b.save()
 			}
 		}
-		writeJSON(w, map[string]any{"configured": current.Cookie != "", "userId": current.UserID, "userName": current.UserName, "avatar": current.Avatar})
+		writeJSON(w, map[string]any{"configured": current.Cookie != "" || strings.TrimSpace(current.PasswordUsername) != "", "cookieConfigured": current.Cookie != "", "userId": current.UserID, "userName": current.UserName, "avatar": current.Avatar, "passwordConfigured": strings.TrimSpace(current.PasswordUsername) != "" && current.Password != ""})
 		return
 	}
 	if r.Method != http.MethodPut {
@@ -7268,10 +7321,11 @@ func (b *BilibiliStore) weiboAccountHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var input struct {
-		Cookie   string `json:"cookie"`
-		UserID   string `json:"userId"`
-		Username string `json:"username"`
-		Password string `json:"password"`
+		Cookie           string `json:"cookie"`
+		UserID           string `json:"userId"`
+		Username         string `json:"username"`
+		Password         string `json:"password"`
+		SavePasswordOnly bool   `json:"savePasswordOnly"`
 	}
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10)).Decode(&input) != nil {
 		writeAPIError(w, http.StatusBadRequest, "微博凭证格式无效")
@@ -7280,9 +7334,29 @@ func (b *BilibiliStore) weiboAccountHandler(w http.ResponseWriter, r *http.Reque
 	var credentials WeiboCredentials
 	var err error
 	if strings.TrimSpace(input.Username) != "" || strings.TrimSpace(input.Password) != "" {
-		credentials, err = loginWeiboWithPassword(input.Username, input.Password, proxyURL)
+		passwordCredentials, loginErr := loginWeiboWithPassword(input.Username, input.Password, proxyURL)
+		err = loginErr
+		if err == nil {
+			if input.SavePasswordOnly && current.Cookie != "" {
+				if current.UserID != "" && passwordCredentials.UserID != "" && current.UserID != passwordCredentials.UserID {
+					err = errors.New("备用账号密码与当前扫码账号不是同一微博账号")
+				} else {
+					credentials = current
+				}
+			} else {
+				credentials = passwordCredentials
+			}
+			if err == nil {
+				credentials.PasswordUsername = strings.TrimSpace(input.Username)
+				credentials.Password = input.Password
+			}
+		}
 	} else {
 		credentials, err = validateWeiboLoginSession(input.Cookie, input.UserID, proxyURL)
+		if err == nil {
+			credentials.PasswordUsername = current.PasswordUsername
+			credentials.Password = current.Password
+		}
 	}
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
@@ -7298,7 +7372,7 @@ func (b *BilibiliStore) weiboAccountHandler(w http.ResponseWriter, r *http.Reque
 		writeAPIError(w, http.StatusInternalServerError, "无法保存微博凭证")
 		return
 	}
-	writeJSON(w, map[string]any{"configured": true, "userId": credentials.UserID, "userName": credentials.UserName, "avatar": credentials.Avatar})
+	writeJSON(w, map[string]any{"configured": true, "cookieConfigured": credentials.Cookie != "", "userId": credentials.UserID, "userName": credentials.UserName, "avatar": credentials.Avatar, "passwordConfigured": credentials.PasswordUsername != "" && credentials.Password != ""})
 }
 
 func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
@@ -7311,7 +7385,7 @@ func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 		if id == "" {
 			account := b.config.Weibo
 			b.RUnlock()
-			writeJSON(w, map[string]any{"configured": account.UserID != "", "userId": account.UserID, "userName": account.UserName, "avatar": account.Avatar})
+			writeJSON(w, map[string]any{"configured": account.UserID != "" || strings.TrimSpace(account.PasswordUsername) != "", "cookieConfigured": account.Cookie != "", "userId": account.UserID, "userName": account.UserName, "avatar": account.Avatar, "passwordConfigured": strings.TrimSpace(account.PasswordUsername) != "" && account.Password != ""})
 			return
 		}
 		session, ok := b.weiboQR[id]
@@ -7465,7 +7539,10 @@ func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusBadGateway, "微博未返回登录 Cookie")
 			return
 		}
-		credentials := WeiboCredentials{Cookie: strings.Join(cookieParts, "; "), UserID: loginUID, UserName: loginPayload.Nick}
+		b.RLock()
+		previousPasswordUsername, previousPassword := b.config.Weibo.PasswordUsername, b.config.Weibo.Password
+		b.RUnlock()
+		credentials := WeiboCredentials{Cookie: strings.Join(cookieParts, "; "), UserID: loginUID, UserName: loginPayload.Nick, PasswordUsername: previousPasswordUsername, Password: previousPassword}
 		validated, validateErr := validateWeiboCredentials(credentials.Cookie, credentials.UserID, proxyURL)
 		if validateErr != nil {
 			writeAPIError(w, http.StatusBadGateway, "微博扫码登录已确认，但当前出口无法使用该会话："+validateErr.Error())
@@ -7475,6 +7552,8 @@ func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 			validated.UserName = credentials.UserName
 		}
 		credentials = validated
+		credentials.PasswordUsername = previousPasswordUsername
+		credentials.Password = previousPassword
 		b.Lock()
 		b.config.Weibo = credentials
 		delete(b.weiboQR, id)
