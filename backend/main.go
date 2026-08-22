@@ -5144,7 +5144,7 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 		if strings.HasPrefix(feed.ID, "twitter-likes-") {
 			posts, err = b.fetchTwitterLikedPosts(feed, full)
 		} else {
-			err = errors.New("当前仅支持拉取登录账号点赞的推特动态")
+			posts, err = b.fetchTwitterPosts(feed, full)
 		}
 	default:
 		err = errors.New("该来源尚未配置采集器")
@@ -5796,13 +5796,18 @@ func twitterMediaItems(tweet map[string]any) []map[string]any {
 	return nil
 }
 
-func (b *BilibiliStore) fetchTwitterLikedPosts(feed SourceConfig, full bool) ([]Post, error) {
+func (b *BilibiliStore) fetchTwitterPostsFromAPI(feed SourceConfig, full bool, endpointName string) ([]Post, error) {
 	b.RLock()
 	credentials, proxyURL := b.config.Twitter, b.config.ProxyURL
 	b.RUnlock()
 	if credentials.APIKey == "" || credentials.UserName == "" {
 		return nil, errors.New("推特账号未连接")
 	}
+	targetUserName := strings.TrimPrefix(feed.ID, "twitter-author-")
+	if strings.HasPrefix(feed.ID, "twitter-likes-") || targetUserName == feed.ID {
+		targetUserName = credentials.UserName
+	}
+	targetUserName = strings.TrimPrefix(strings.TrimSpace(targetUserName), "@")
 	client, err := externalHTTPClient(proxyURL)
 	if err != nil {
 		return nil, err
@@ -5817,12 +5822,12 @@ func (b *BilibiliStore) fetchTwitterLikedPosts(feed SourceConfig, full bool) ([]
 		pageLimit = 30
 	}
 	for page := 0; page < pageLimit; page++ {
-		query := url.Values{"userName": {credentials.UserName}}
+		query := url.Values{"userName": {targetUserName}}
 		if page > 0 {
 			query.Set("cursor", strconv.Itoa(page))
 		}
 		var payload map[string]any
-		endpoint := twitterAPIBase + "/twitter/user/liked_tweets?" + query.Encode()
+		endpoint := twitterAPIBase + "/twitter/user/" + endpointName + "?" + query.Encode()
 		if err := twitterRequest(client, endpoint, credentials, &payload); err != nil {
 			return nil, fmt.Errorf("推特点赞拉取失败：%w", err)
 		}
@@ -5871,6 +5876,17 @@ func (b *BilibiliStore) fetchTwitterLikedPosts(feed SourceConfig, full bool) ([]
 		}
 	}
 	return posts, nil
+}
+
+func (b *BilibiliStore) fetchTwitterLikedPosts(feed SourceConfig, full bool) ([]Post, error) {
+	return b.fetchTwitterPostsFromAPI(feed, full, "liked_tweets")
+}
+
+func (b *BilibiliStore) fetchTwitterPosts(feed SourceConfig, full bool) ([]Post, error) {
+	if strings.HasPrefix(feed.ID, "twitter-likes-") {
+		return b.fetchTwitterLikedPosts(feed, full)
+	}
+	return b.fetchTwitterPostsFromAPI(feed, full, "last_tweets")
 }
 
 func (b *BilibiliStore) twitterAccountHandler(w http.ResponseWriter, r *http.Request) {
@@ -5996,7 +6012,7 @@ func (b *BilibiliStore) twitterSubscriptionsHandler(w http.ResponseWriter, r *ht
 	}
 	if r.Method == http.MethodPut {
 		var input SourceConfig
-		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&input) != nil || !strings.HasPrefix(input.ID, "twitter-likes-") {
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&input) != nil || (!strings.HasPrefix(input.ID, "twitter-likes-") && !strings.HasPrefix(input.ID, "twitter-author-")) {
 			writeAPIError(w, http.StatusBadRequest, "推特来源设置无效")
 			return
 		}
@@ -6046,6 +6062,69 @@ func (b *BilibiliStore) twitterSubscriptionsHandler(w http.ResponseWriter, r *ht
 			}
 		}
 		writeJSON(w, input)
+		return
+	}
+	if r.Method == http.MethodPost && r.URL.Query().Get("type") == "author" {
+		var input struct {
+			Username string   `json:"username"`
+			Name     string   `json:"name"`
+			Avatar   string   `json:"avatar"`
+			Schedule string   `json:"schedule"`
+			Tags     []string `json:"tags"`
+		}
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&input) != nil {
+			writeAPIError(w, http.StatusBadRequest, "推特博主订阅信息无效")
+			return
+		}
+		username := strings.TrimPrefix(strings.TrimSpace(input.Username), "@")
+		if username == "" || len([]rune(username)) > 80 {
+			writeAPIError(w, http.StatusBadRequest, "请输入有效的推特用户名")
+			return
+		}
+		b.RLock()
+		credentials, proxyURL := b.config.Twitter, b.config.ProxyURL
+		b.RUnlock()
+		if credentials.APIKey == "" {
+			writeAPIError(w, http.StatusPreconditionFailed, "请先连接 twitterapi.io")
+			return
+		}
+		profileCredentials, profileErr := validateTwitterCredentials(credentials.APIKey, username, proxyURL)
+		if profileErr != nil {
+			writeAPIError(w, http.StatusBadRequest, profileErr.Error())
+			return
+		}
+		name := firstNonEmptyRemoteText(strings.TrimSpace(input.Name), profileCredentials.UserName)
+		avatar := firstNonEmptyRemoteText(normalizeRemoteImage(input.Avatar), profileCredentials.Avatar)
+		schedule := normalizeSchedule(input.Schedule)
+		if schedule == "" {
+			schedule = "0 6 * * *"
+		}
+		if !validCron(schedule) {
+			writeAPIError(w, http.StatusBadRequest, "Cron 表达式无效，请使用五段式格式")
+			return
+		}
+		feed := SourceConfig{ID: "twitter-author-" + username, Source: SourceTwitter, Name: name, Handle: "@" + username, Avatar: avatar, Enabled: true, Schedule: schedule, Tags: normalizeTags(input.Tags), OnlyWithImages: true}
+		prepared, err := prepareSourceStorage(feed)
+		if err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "无法创建推特博主内容目录")
+			return
+		}
+		feed = prepared
+		b.Lock()
+		for _, existing := range b.config.TwitterSubscriptions {
+			if existing.ID == feed.ID {
+				b.Unlock()
+				writeAPIError(w, http.StatusConflict, "已经订阅该推特博主")
+				return
+			}
+		}
+		b.config.TwitterSubscriptions = append(b.config.TwitterSubscriptions, feed)
+		b.Unlock()
+		if err := b.save(); err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "无法保存推特博主订阅")
+			return
+		}
+		writeJSON(w, feed)
 		return
 	}
 	if r.Method != http.MethodPost || r.URL.Query().Get("type") != "likes" {
