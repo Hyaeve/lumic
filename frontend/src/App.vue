@@ -155,6 +155,10 @@ const mobileControlsVisible = ref(true)
 const mobilePostReturnPath = ref('/')
 const mobilePostReturnScrollY = ref(0)
 const mobileAuthorDetailState = ref(null)
+// A single forward target lets the timeline return to the author/tag page
+// that was just left without stacking duplicate history entries.
+const mobileForwardPageAvailable = ref(false)
+const mobileForwardPageState = ref(null)
 const mobileAuthorPageDragX = ref(0)
 const mobileAuthorPageDragging = ref(false)
 const mobileAuthorPageAnimating = ref(false)
@@ -387,7 +391,7 @@ const mobileDetailPageStyle = computed(() => {
     transition: mobileDetailPageDragging.value ? 'none' : mobileDetailPageAnimating.value ? `transform ${mobileDetailPageTransitionMs.value}ms ${mobileDetailPageTransitionEasing.value}, opacity ${Math.min(260, mobileDetailPageTransitionMs.value)}ms ease-out` : 'none'
   }
 })
-const mobileAuthorPreviewDisplayPost = computed(() => masonryDetailPost.value || mobileAuthorPreviewPost.value)
+const mobileAuthorPreviewDisplayPost = computed(() => masonryDetailPost.value || mobileAuthorPreviewPost.value || mobileForwardPageState.value?.post || null)
 const mobileAuthorTimelinePosts = computed(() => {
   const post = mobileAuthorPreviewDisplayPost.value
   if (!post) return []
@@ -447,11 +451,17 @@ const mobileAuthorPreviewStyle = computed(() => {
     transition: mobileAuthorPreviewFading.value ? 'opacity .18s ease-out' : 'none'
   }
   const width = typeof window === 'undefined' ? 390 : Math.max(1, window.innerWidth)
-  const progress = Math.min(1, Math.max(0, -mobileDetailPageDragX.value) / width)
+  const reverse = mobileTimelineCanReturn.value
+  const reverseProgress = reverse
+    ? Math.min(1, Math.max(0, -mobileAuthorPageDragX.value) / width)
+    : 0
+  const progress = reverseProgress || Math.min(1, Math.max(0, -mobileDetailPageDragX.value) / width)
   return {
     opacity: String(.7 + progress * .3),
     transform: `translate3d(${100 - progress * 100}%, 0, 0)`,
-    transition: mobileDetailPageDragging.value ? 'none' : mobileDetailPageAnimating.value ? 'transform .32s cubic-bezier(.16,.88,.22,1)' : 'none'
+    transition: reverse
+      ? (mobileAuthorPageDragging.value ? 'none' : mobileAuthorPageAnimating.value ? 'transform .32s cubic-bezier(.16,.88,.22,1)' : 'none')
+      : (mobileDetailPageDragging.value ? 'none' : mobileDetailPageAnimating.value ? 'transform .32s cubic-bezier(.16,.88,.22,1)' : 'none')
   }
 })
 const mobileAuthorReturnsToTimeline = computed(() => Boolean((authorProfile.value || selectedTag.value) && mobileAuthorDetailState.value?.returnToDetail === false))
@@ -513,7 +523,7 @@ const mobileNextDetailPreviewStyle = computed(() => {
 })
 const mobileAuthorPageStyle = computed(() => {
   const width = typeof window === 'undefined' ? 390 : Math.max(1, window.innerWidth)
-  const progress = Math.min(1, Math.max(0, mobileAuthorPageDragX.value) / width)
+  const progress = Math.min(1, Math.abs(mobileAuthorPageDragX.value) / width)
   return {
     transform: `translate3d(${mobileAuthorPageDragX.value}px, 0, 0)`,
     opacity: String(1 - progress * .08),
@@ -668,6 +678,8 @@ const authorProfile = computed(() => {
   const latest = authorPosts[0]
   return { ...selectedAuthor.value, avatar: selectedAuthor.value.feedId ? selectedAuthor.value.avatar : (latest?.avatar || selectedAuthor.value.avatar), count: authorPosts.length }
 })
+const mobileTimelineCanReturn = computed(() => Boolean(phonePortrait.value && mobileForwardPageAvailable.value && !authorProfile.value && !selectedTag.value && !masonryDetailPost.value))
+const mobilePagedTransitionActive = computed(() => Boolean(phonePortrait.value && ((mobileAuthorDetailState.value && (authorProfile.value || selectedTag.value)) || mobileTimelineCanReturn.value)))
 const mobilePagedDetailActive = computed(() => Boolean(phonePortrait.value && mobileAuthorDetailState.value && (authorProfile.value || selectedTag.value)))
 const isTimelinePage = computed(() => !showSettings.value && activeNav.value !== 'pulls' && !masonryDetailPost.value)
 const platformCards = computed(() => [
@@ -3251,10 +3263,12 @@ function resetMobileAuthorPageSwipe() {
 function beginMobileAuthorPageSwipe(event) {
   const touch = event.touches?.[0]
   const target = event.target
-  if (!phonePortrait.value || !touch || !mobileAuthorDetailState.value || (!authorProfile.value && !selectedTag.value) || target?.closest?.('input, textarea, select, label')) return
+  const fromTimeline = mobileTimelineCanReturn.value
+  const fromAuthorPage = Boolean(mobileAuthorDetailState.value && (authorProfile.value || selectedTag.value))
+  if (!phonePortrait.value || !touch || (!fromAuthorPage && !fromTimeline) || target?.closest?.('input, textarea, select, label')) return
   if (mobileAuthorPageTimer) window.clearTimeout(mobileAuthorPageTimer)
   mobileAuthorPageTimer = 0
-  mobileAuthorPageTouch = { x: touch.clientX, y: touch.clientY, time: event.timeStamp, axis: '', prevX: touch.clientX, prevTime: event.timeStamp, lastX: touch.clientX, lastTime: event.timeStamp }
+  mobileAuthorPageTouch = { x: touch.clientX, y: touch.clientY, time: event.timeStamp, axis: '', fromTimeline, prevX: touch.clientX, prevTime: event.timeStamp, lastX: touch.clientX, lastTime: event.timeStamp }
   mobileAuthorPageDragging.value = false
   mobileAuthorPageAnimating.value = false
 }
@@ -3266,14 +3280,17 @@ function updateMobileAuthorPageSwipe(event) {
   if (!mobileAuthorPageTouch.axis && Math.max(Math.abs(dx), Math.abs(dy)) > 9) {
     mobileAuthorPageTouch.axis = Math.abs(dx) > Math.abs(dy) * 1.12 ? 'horizontal' : 'vertical'
   }
-  if (mobileAuthorPageTouch.axis !== 'horizontal' || dx <= 0) return
+  if (mobileAuthorPageTouch.axis !== 'horizontal') return
+  if ((!mobileAuthorPageTouch.fromTimeline && dx <= 0) || (mobileAuthorPageTouch.fromTimeline && dx >= 0)) return
   event.preventDefault()
   mobileAuthorPageDragging.value = true
   mobileAuthorPageTouch.prevX = mobileAuthorPageTouch.lastX
   mobileAuthorPageTouch.prevTime = mobileAuthorPageTouch.lastTime
   mobileAuthorPageTouch.lastX = touch.clientX
   mobileAuthorPageTouch.lastTime = event.timeStamp
-  mobileAuthorPageDragX.value = dampBeyond(dx, window.innerWidth, .18)
+  mobileAuthorPageDragX.value = mobileAuthorPageTouch.fromTimeline
+    ? -dampBeyond(Math.abs(dx), window.innerWidth, .18)
+    : dampBeyond(dx, window.innerWidth, .18)
 }
 function finishMobileAuthorPageSwipe(event) {
   const touch = event.changedTouches?.[0]
@@ -3289,12 +3306,21 @@ function finishMobileAuthorPageSwipe(event) {
   mobileAuthorPageAnimating.value = true
   const threshold = Math.min(112, window.innerWidth * .28)
   const fastReturn = dx > 36 && velocityX > .78
-  if (!cancelled && horizontal && (dx > threshold || fastReturn)) {
+  const fastForward = dx < -36 && velocityX < -.78
+  if (!cancelled && horizontal && !touchState.fromTimeline && (dx > threshold || fastReturn)) {
     if (mobileAuthorDetailState.value) mobileAuthorDetailState.value.authorScrollY = mobileAuthorScrollY
     mobileAuthorPageDragX.value = window.innerWidth
     mobileAuthorPageTimer = window.setTimeout(() => {
       mobileAuthorPageTimer = 0
       returnToMobileDetailFromAuthor()
+    }, 320)
+    return
+  }
+  if (!cancelled && horizontal && touchState.fromTimeline && (dx < -threshold || fastForward)) {
+    mobileAuthorPageDragX.value = -window.innerWidth
+    mobileAuthorPageTimer = window.setTimeout(() => {
+      mobileAuthorPageTimer = 0
+      window.history.forward()
     }, 320)
     return
   }
@@ -3374,6 +3400,8 @@ function navigateTo(nav, source = activeSource.value) {
   resetMobileDetailPageSwipe()
   resetMobileAuthorPageSwipe()
   mobileAuthorDetailState.value = null
+  mobileForwardPageAvailable.value = false
+  mobileForwardPageState.value = null
   stopSelection()
   masonryDetailPost.value = null
   showBrandMenu.value = false
@@ -3392,6 +3420,8 @@ function navigateTo(nav, source = activeSource.value) {
 }
 function openTag(tag) {
   clearPhoneOverlayHistoryForNavigation()
+  mobileForwardPageAvailable.value = false
+  mobileForwardPageState.value = null
   const fromDetail = phonePortrait.value && Boolean(masonryDetailPost.value)
   const previousPath = window.location.pathname + window.location.search
   const previousPost = masonryDetailPost.value
@@ -3402,6 +3432,7 @@ function openTag(tag) {
     mobileAuthorDetailState.value = {
       post: previousPost || filteredPosts.value[0] || { source: activeSource.value === 'all' ? 'bilibili' : activeSource.value, author: '', avatar: '' },
       tag,
+      authorPath: `/tag/${encodeURIComponent(tag)}`,
       authorScrollY: 0,
       detailScrollY: window.scrollY,
       returnPath: previousPath,
@@ -3533,7 +3564,7 @@ function scheduleTimelineWindow() {
 }
 function hideMobileControlsAfterIdle() {
   mobileControlsTimer = 0
-  const remaining = 2200 - (performance.now() - mobileControlsLastActivity)
+  const remaining = 3200 - (performance.now() - mobileControlsLastActivity)
   if (remaining > 0) {
     mobileControlsTimer = window.setTimeout(hideMobileControlsAfterIdle, remaining)
     return
@@ -3544,7 +3575,7 @@ function showMobileControls() {
   if (!phonePortrait.value || lightbox.value.open || masonryDetailPost.value) return
   mobileControlsLastActivity = performance.now()
   mobileControlsVisible.value = true
-  if (!mobileControlsTimer) mobileControlsTimer = window.setTimeout(hideMobileControlsAfterIdle, 2200)
+  if (!mobileControlsTimer) mobileControlsTimer = window.setTimeout(hideMobileControlsAfterIdle, 3200)
 }
 function handleWindowScroll() {
   if (phonePortrait.value && authorProfile.value && mobileAuthorDetailState.value) mobileAuthorScrollY = window.scrollY
@@ -3590,6 +3621,8 @@ function openPhoneDefaultTimeline() {
   activeSource.value = 'all'
   selectedAuthor.value = null
   selectedTag.value = ''
+  mobileForwardPageAvailable.value = false
+  mobileForwardPageState.value = null
   updateRoute('/', true)
 }
 function openAuthorPage(name, source, avatar = '', feedId = '', fromMobileDetail = false) {
@@ -3598,7 +3631,11 @@ function openAuthorPage(name, source, avatar = '', feedId = '', fromMobileDetail
   mobileMenuOpen.value = false
   selectedPlatform.value = null
   masonryDetailPost.value = null
-  if (!fromMobileDetail) mobileAuthorDetailState.value = null
+  if (!fromMobileDetail) {
+    mobileAuthorDetailState.value = null
+    mobileForwardPageAvailable.value = false
+    mobileForwardPageState.value = null
+  }
   showSettings.value = false
   activeNav.value = 'author'
   activeSource.value = source
@@ -3682,6 +3719,27 @@ function handlePopState() {
   const gestureTimelineReturn = returningToTimeline && mobileDetailGestureReturnPending
   const detailRouteExit = returningToTimeline && !gestureTimelineReturn ? captureMobileDetailRouteExit(departingDetailPost) : null
   if (returningFromAuthor) mobileAuthorDetailState.value.authorScrollY = mobileAuthorScrollY
+  if (returningFromAuthor && mobileAuthorDetailState.value?.returnToDetail === false) {
+    mobileForwardPageState.value = {
+      post: mobileAuthorDetailState.value.post,
+      path: window.location.pathname + window.location.search,
+      authorPath: mobileAuthorDetailState.value.authorPath,
+      authorScrollY: mobileAuthorDetailState.value.authorScrollY,
+      returnPostIds: mobileAuthorDetailState.value.returnPostIds,
+      returnTitle: mobileAuthorDetailState.value.returnTitle
+    }
+    mobileForwardPageAvailable.value = true
+  }
+  const currentPath = window.location.pathname + window.location.search
+  if (mobileForwardPageAvailable.value && mobileForwardPageState.value?.authorPath === currentPath) {
+    mobileAuthorDetailState.value = {
+      ...mobileForwardPageState.value,
+      returnToDetail: false,
+      returnPath: mobileForwardPageState.value.path
+    }
+    mobileForwardPageAvailable.value = false
+    mobileForwardPageState.value = null
+  }
   if (returningFromAuthor && window.location.pathname.startsWith('/post/')) startMobileDetailReturnHandoff()
   else if (returningFromAuthor && mobileAuthorDetailState.value?.returnToDetail === false) startMobileTimelineReturnHandoff(mobileAuthorDetailState.value.post)
   if (returningToTimeline && (gestureTimelineReturn || !detailRouteExit)) startMobileTimelineReturnHandoff(departingDetailPost)
@@ -3898,7 +3956,7 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
       <footer class="mobile-post-detail-foot"><time :datetime="mobileAuthorDetailState.post.published">{{ postDateTime(mobileAuthorDetailState.post.published) }}</time><div class="mobile-detail-preview-actions"><i></i><i></i></div></footer>
       </div>
     </aside>
-    <main v-if="!showSettings && activeNav !== 'pulls' && !(phonePortrait && masonryDetailPost)" :class="['content', { 'liked-page': activeNav === 'liked', 'mobile-author-detail-page': mobilePagedDetailActive }]" :style="mobilePagedDetailActive ? mobileAuthorPageStyle : undefined" @touchstart.passive="beginMobileAuthorPageSwipe" @touchmove="updateMobileAuthorPageSwipe" @touchend.passive="finishMobileAuthorPageSwipe" @touchcancel="finishMobileAuthorPageSwipe" @click="closeContextMenu" @contextmenu.prevent="openContextMenu($event)">
+    <main v-if="!showSettings && activeNav !== 'pulls' && !(phonePortrait && masonryDetailPost)" :class="['content', { 'liked-page': activeNav === 'liked', 'mobile-author-detail-page': mobilePagedTransitionActive }]" :style="mobilePagedTransitionActive ? mobileAuthorPageStyle : undefined" @touchstart.passive="beginMobileAuthorPageSwipe" @touchmove="updateMobileAuthorPageSwipe" @touchend.passive="finishMobileAuthorPageSwipe" @touchcancel="finishMobileAuthorPageSwipe" @click="closeContextMenu" @contextmenu.prevent="openContextMenu($event)">
       <div v-if="!authorProfile && activeNav !== 'liked'" class="night-sky-decor" aria-hidden="true"><i class="night-haze"></i><i class="night-moon"></i><i class="night-star star-one"></i><i class="night-star star-two"></i><i class="night-star star-three"></i><i class="night-star star-four"></i><i class="night-star star-five"></i><i class="night-star star-six"></i><i class="night-star star-seven"></i><i class="night-star star-eight"></i></div>
       <div v-if="!authorProfile && activeNav !== 'liked'" class="night-meteor-layer" aria-hidden="true"><i v-for="meteor in meteorBurst" :key="meteor.id" class="night-meteor" :style="meteor.style"></i></div>
       <div v-if="!authorProfile && activeNav !== 'liked'" class="seasonal-decor" :class="`season-${localSeason}`" aria-hidden="true">
@@ -4050,7 +4108,7 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
         <button type="button" :disabled="subscriptionPage >= subscriptionPageCount" title="下一页" aria-label="下一页" @click="subscriptionPage++"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 5 7 7-7 7"/></svg></button>
       </nav>
     </main>
-    <aside v-if="phonePortrait && mobileAuthorPreviewDisplayPost" class="mobile-author-swipe-preview" :style="mobileAuthorPreviewStyle" aria-hidden="true">
+    <aside v-if="phonePortrait && mobileAuthorPreviewDisplayPost && (mobileAuthorPreviewHandoff || mobileDetailPageDragging || mobileDetailPageAnimating || (mobileTimelineCanReturn && (mobileAuthorPageDragging || mobileAuthorPageAnimating)))" class="mobile-author-swipe-preview" :style="mobileAuthorPreviewStyle" aria-hidden="true">
       <div class="mobile-transition-page-content" :style="mobileAuthorPreviewContentStyle">
       <header class="topbar author-page-header mobile-author-preview-head"><div class="author-profile-main"><img :key="'preview:' + authorAvatarKey(mobileAuthorPreviewDisplayPost) + ':' + postAvatar(mobileAuthorPreviewDisplayPost)" :src="postAvatar(mobileAuthorPreviewDisplayPost)" :alt="mobileAuthorPreviewDisplayPost.author" @load="handlePostAvatarLoad($event, mobileAuthorPreviewDisplayPost)" @error="handlePostAvatarError($event, mobileAuthorPreviewDisplayPost)"><div><p class="eyebrow">AUTHOR TIMELINE · {{ sourceMeta[mobileAuthorPreviewDisplayPost.source].label }}</p><h1>{{ mobileAuthorPreviewDisplayPost.author }}</h1><p class="subtitle">共 {{ mobileAuthorTimelinePosts.length }} 条已拉取动态</p></div></div></header>
       <div class="section-heading mobile-author-preview-heading"><div class="filters"><button class="timeline-sort-button" type="button" tabindex="-1"><span class="timeline-sort-symbol" :style="{ '--nav-mask': `url(${timelineSort === 'newest' ? newestSortIcon : oldestSortIcon})` }"></span></button><button class="timeline-view-button timeline-toolbar-button" type="button" tabindex="-1"><span :class="['timeline-view-symbol', { 'list-view-symbol': !isMasonryView }]" :style="{ '--nav-mask': `url(${isMasonryView ? masonryViewIcon : listViewIcon})` }"></span></button><button class="timeline-refresh-button timeline-toolbar-button" type="button" tabindex="-1"><span class="timeline-refresh-symbol" :style="{ '--nav-mask': `url(${refreshIcon})` }"></span></button></div><div class="timeline-tools"><label class="timeline-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><input type="search" value="" placeholder="搜索" tabindex="-1" readonly></label></div></div>
