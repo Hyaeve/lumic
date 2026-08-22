@@ -899,6 +899,10 @@ body, button, input, textarea, select { font-size: 14px; }
 .pixiv-source-form .subscription-tag-field { margin-top: 0; }
 .pixiv-source-form .subscription-tag-field input { width: 100%; height: 42px; padding: 0 12px; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 8px; outline: none; }
 .pixiv-source-form .subscription-tag-field input:focus { border-color: #a88a45; box-shadow: 0 0 0 3px #a88a451f; }
+.twitter-subscribe-form .pixiv-subscribe-row input { min-width: 0; color: var(--ink); background: transparent; }
+.twitter-subscribe-form .pixiv-subscribe-row input:focus { border-color: #7189c8; box-shadow: 0 0 0 3px #7189c826; }
+.twitter-subscribe-form .pixiv-subscribe-row button { color: #fff; background: #7189c8; }
+.dark .twitter-subscribe-form .pixiv-subscribe-row button { background: #687cae; }
 
 /* Seasonal daylight ornaments and a soft moonlit night sky */
 .timeline-hero { position: relative; isolation: isolate; }

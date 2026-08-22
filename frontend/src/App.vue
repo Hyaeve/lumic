@@ -4288,10 +4288,9 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
         <h2>订阅推特博主</h2>
         <p>填写推特用户名，仅添加订阅，不会立即拉取动态。历史内容可在订阅平台页面手动获取。</p>
         <div class="bili-account"><span>已连接 twitterapi.io · @{{ twitterAccount.userName }}</span><button @click="showTwitter = false; openSettings('platforms')">管理凭证</button></div>
-        <form class="pixiv-source-form" @submit.prevent="subscribeTwitter">
-          <label class="credential-field"><span>推特用户名</span><input v-model="twitterArtistUsername" required autocomplete="off" placeholder="例如 nasa，不含 @"></label>
+        <form class="pixiv-source-form twitter-subscribe-form" @submit.prevent="subscribeTwitter">
+          <div class="bili-search pixiv-subscribe-row"><input v-model="twitterArtistUsername" required autocomplete="off" placeholder="推特用户名，例如 nasa，不含 @"><button :disabled="twitterBusy">{{ twitterBusy ? '添加中…' : '订阅' }}</button></div>
           <label class="subscription-tag-field"><span>作者标签</span><input v-model="twitterSubscriptionTags" placeholder="#科技 #资讯" maxlength="120"></label>
-          <button class="login-button" :disabled="twitterBusy">{{ twitterBusy ? '验证并添加中…' : '添加订阅' }}</button>
         </form>
         <p v-if="twitterError" class="login-error">{{ twitterError }}</p>
       </div>
