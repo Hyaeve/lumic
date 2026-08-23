@@ -395,7 +395,10 @@ const mobileAuthorPreviewDisplayPost = computed(() => masonryDetailPost.value ||
 const mobileAuthorTimelinePosts = computed(() => {
   const post = mobileAuthorPreviewDisplayPost.value
   if (!post) return []
-  let result = posts.value.filter(item => item.source === post.source && item.author === post.author)
+  const tag = String(mobileAuthorDetailState.value?.tag || '').trim()
+  let result = tag
+    ? posts.value.filter(item => Array.isArray(item.tags) && item.tags.includes(tag))
+    : posts.value.filter(item => item.source === post.source && item.author === post.author)
   const keywords = timelineSearch.value.trim().normalize('NFKC').toLocaleLowerCase().split(/\s+/).filter(Boolean)
   if (keywords.length) result = result.filter(item => {
     const tags = Array.isArray(item.tags) ? item.tags : []
@@ -457,6 +460,7 @@ const mobileAuthorPreviewStyle = computed(() => {
     : 0
   const progress = reverseProgress || Math.min(1, Math.max(0, -mobileDetailPageDragX.value) / width)
   return {
+    zIndex: 2,
     opacity: String(.7 + progress * .3),
     transform: `translate3d(${100 - progress * 100}%, 0, 0)`,
     transition: reverse
@@ -479,6 +483,9 @@ const mobileReturnPreviewLayout = computed(() => buildMobilePreviewMasonrySnapsh
 ))
 const mobileReturnPreviewItems = computed(() => mobileReturnPreviewLayout.value.items)
 const mobileReturnPreviewFeedStyle = computed(() => ({ height: `${Math.ceil(mobileReturnPreviewLayout.value.height)}px` }))
+const mobileReturnPreviewContentStyle = computed(() => ({
+  transform: `translate3d(0, ${-(mobileAuthorReturnsToTimeline.value ? (mobileAuthorDetailState.value?.detailScrollY || 0) : (mobilePostReturnScrollY.value || 0))}px, 0)`
+}))
 const mobileReturnPreviewDisplayPost = computed(() => masonryDetailPost.value || mobileTimelineReturnPreviewPost.value || (mobileAuthorReturnsToTimeline.value ? mobileAuthorDetailState.value?.post : null))
 const mobileReturnPreviewTitle = computed(() => mobileAuthorReturnsToTimeline.value ? (mobileAuthorDetailState.value?.returnTitle || '全部动态') : mobileTimelineTitle.value)
 const mobileDetailReturnContentStyle = computed(() => ({ transform: `translate3d(0, ${-(mobileAuthorDetailState.value?.detailScrollY || 0)}px, 0)` }))
@@ -496,6 +503,7 @@ const mobileReturnPreviewStyle = computed(() => {
   const animating = returningFromAuthor ? mobileAuthorPageAnimating.value : mobileDetailPageAnimating.value
   const progress = Math.min(1, Math.max(0, dragX) / width)
   return {
+    zIndex: 2,
     opacity: String(.7 + progress * .3),
     transform: `translate3d(${-100 + progress * 100}%, 0, 0)`,
     transition: dragging ? 'none' : animating ? 'transform .32s cubic-bezier(.16,.88,.22,1)' : 'none'
@@ -1662,7 +1670,7 @@ function resetLightboxState() {
   if (lightboxScaleFrame) window.cancelAnimationFrame(lightboxScaleFrame)
   lightboxScaleFrame = 0
 }
-function closeLightbox(fromHistory = false, delay = 320) {
+function closeLightbox(fromHistory = false, delay = phonePortrait.value ? 220 : 320) {
   if (lightboxClosing.value) return
   lightboxClosing.value = true
   clearLightboxSingleTap()
@@ -3302,6 +3310,10 @@ function beginMobileAuthorPageSwipe(event) {
   mobileAuthorPageTouch = { x: touch.clientX, y: touch.clientY, time: event.timeStamp, axis: '', fromTimeline, prevX: touch.clientX, prevTime: event.timeStamp, lastX: touch.clientX, lastTime: event.timeStamp }
   mobileAuthorPageDragging.value = false
   mobileAuthorPageAnimating.value = false
+  if (fromAuthorPage && mobileAuthorDetailState.value?.returnToDetail === false) {
+    mobileTimelineReturnPreviewPost.value = mobileAuthorDetailState.value.post
+    mobileReturnTimelinePosts.value.slice(0, 24).forEach(preloadMobileDetailPost)
+  }
 }
 function updateMobileAuthorPageSwipe(event) {
   const touch = event.touches?.[0]
@@ -3457,6 +3469,7 @@ function openTag(tag) {
   const previousPath = window.location.pathname + window.location.search
   const previousPost = masonryDetailPost.value
   const previousTimelineIds = filteredPosts.value.map(item => item.id)
+  let tagPreviewPost = null
   stopSelection()
   masonryDetailPost.value = null
   if (phonePortrait.value) {
@@ -3471,6 +3484,7 @@ function openTag(tag) {
       returnPostIds: previousTimelineIds,
       returnToDetail: fromDetail
     }
+    tagPreviewPost = previousPost || filteredPosts.value[0] || { source: activeSource.value === 'all' ? 'bilibili' : activeSource.value, author: '', avatar: '' }
   } else {
     mobileAuthorDetailState.value = null
   }
@@ -3481,6 +3495,11 @@ function openTag(tag) {
   activeSource.value = 'all'
   mobileSourcesOpen.value = false
   updateRoute(`/tag/${encodeURIComponent(tag)}`, false, phonePortrait.value ? (fromDetail ? { lumicMobileTag: true, lumicMobileDetailParent: previousPath } : { lumicMobileTag: true }) : {})
+  if (phonePortrait.value && tagPreviewPost) {
+    mobileAuthorPreviewPost.value = tagPreviewPost
+    captureMobileAuthorPreviewSnapshot(0)
+    startMobileAuthorPreviewHandoff(tagPreviewPost)
+  }
   window.scrollTo({ top: 0, behavior: 'auto' })
 }
 function masonryMediaPending(element) {
@@ -3755,6 +3774,10 @@ function handlePopState() {
     && mobileForwardPageState.value.detailPath === currentPath
     ? { ...mobileForwardPageState.value }
     : null
+  const forwardPagedState = mobileForwardPageAvailable.value
+    && mobileForwardPageState.value?.authorPath === currentPath
+    ? { ...mobileForwardPageState.value }
+    : null
   const authorDetailReturnPost = returningFromAuthor && window.location.pathname.startsWith('/post/')
     ? mobileAuthorDetailState.value?.post
     : null
@@ -3814,6 +3837,12 @@ function handlePopState() {
   else if (returningToTimeline) {
     restoreMobileScroll(mobilePostReturnScrollY.value)
     if (detailRouteExit) runMobileDetailRouteExit(detailRouteExit)
+  }
+  if (forwardPagedState && (authorProfile.value || selectedTag.value)) {
+    // Keep the destination page covered by the already prepared preview until
+    // its header, cards and masonry geometry are stable. This also applies to
+    // tag pages, whose filtered list used to flash its top bar during a swipe.
+    startMobileAuthorPreviewHandoff(forwardPagedState.post)
   }
 }
 function applyRoute() {
@@ -4202,6 +4231,7 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
     </aside>
     <aside v-if="phonePortrait && mobileReturnPreviewDisplayPost && (masonryDetailPost || mobileTimelineReturnHandoff || (mobileAuthorReturnsToTimeline && (mobileAuthorPageDragging || mobileAuthorPageAnimating)))" class="mobile-return-swipe-preview" :style="mobileReturnPreviewStyle" aria-hidden="true">
       <header><div><small>SAVED MOMENTS</small><strong>{{ mobileReturnPreviewTitle }}</strong></div><span :class="['source-pill', sourceMeta[mobileReturnPreviewDisplayPost.source].color]"><img class="source-icon" :src="sourceIconFor(mobileReturnPreviewDisplayPost.source)" alt="">{{ sourceMeta[mobileReturnPreviewDisplayPost.source].label }}</span></header>
+      <div class="mobile-return-preview-scroll-content" :style="mobileReturnPreviewContentStyle">
       <div class="mobile-author-preview-toolbar"><span>全部</span><i></i><i></i><label><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><b>搜索</b></label></div>
       <section class="mobile-author-preview-feed feed-list masonry-feed" :style="mobileReturnPreviewFeedStyle">
         <article v-for="item in mobileReturnPreviewItems" :key="item.post.id" :class="['masonry-card', { 'text-only': !masonryCover(item.post) && !item.post.videos?.length }]" :style="mobilePreviewMasonryItemStyle(item)">
@@ -4222,6 +4252,7 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
           </div>
         </article>
       </section>
+      </div>
     </aside>
     <aside v-if="phonePortrait && masonryDetailPost && mobileDetailPreviousPost" class="mobile-detail-vertical-preview previous" :style="mobilePreviousDetailPreviewStyle" aria-hidden="true">
       <header class="mobile-post-detail-head">

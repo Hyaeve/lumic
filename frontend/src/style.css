@@ -125,10 +125,10 @@ a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color
 .phone-ui .lightbox-layer { padding: 0; background: rgba(7, 9, 14, .30); backdrop-filter: blur(22px) saturate(.86) brightness(.78); -webkit-backdrop-filter: blur(22px) saturate(.86) brightness(.78); }
 .phone-ui.lightbox-active > :is(.sidebar, .content, .settings-page, .add-fab, .masonry-detail-backdrop) { filter: blur(16px) brightness(.76) saturate(.80); }
 .phone-ui .lightbox-layer.mobile-entering { animation: none; }
-.phone-ui .lightbox-layer.closing { animation: mobile-lightbox-layer-out .3s cubic-bezier(.28,.76,.26,1) both; }
+.phone-ui .lightbox-layer.closing { animation: mobile-lightbox-layer-out .22s cubic-bezier(.28,.76,.26,1) both; }
 .phone-ui .lightbox-layer.mobile-entering:not(.mobile-exit-dragging) .mobile-lightbox-carousel { animation: none; }
 .phone-ui .lightbox-layer.closing .lightbox-image-stage { animation: none; }
-.phone-ui .lightbox-layer.closing:not(.mobile-exit-dragging) .mobile-lightbox-carousel { animation: mobile-lightbox-content-out .3s cubic-bezier(.28,.76,.26,1) both; }
+.phone-ui .lightbox-layer.closing:not(.mobile-exit-dragging) .mobile-lightbox-carousel { animation: mobile-lightbox-content-out .22s cubic-bezier(.28,.76,.26,1) both; }
 .phone-ui .lightbox-layer.mobile-exit-dragging .mobile-lightbox-carousel { animation: none; }
 .phone-ui .lightbox-layer.closing.mobile-gesture-exiting { animation: none; }
 .phone-ui .lightbox-layer.closing.mobile-gesture-exiting .mobile-lightbox-carousel { animation: none; }
