@@ -5741,8 +5741,16 @@ func validateTwitterCredentials(apiKey, username, proxyURL string) (TwitterCrede
 
 func parseTwitterTime(value string) time.Time {
 	value = strings.TrimSpace(value)
-	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
-		return parsed
+	for _, layout := range []string{time.RFC3339, time.RFC3339Nano, "Mon Jan 02 15:04:05 -0700 2006", "Mon Jan 02 15:04:05 MST 2006", "2006-01-02 15:04:05 -0700 MST"} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed
+		}
+	}
+	if unix, err := strconv.ParseInt(value, 10, 64); err == nil && unix > 0 {
+		if unix > 1_000_000_000_000 {
+			unix /= 1000
+		}
+		return time.Unix(unix, 0)
 	}
 	return time.Now()
 }
@@ -5775,21 +5783,51 @@ func twitterTweetItems(payload map[string]any) []map[string]any {
 			}
 			return items
 		}
+		if object, ok := payload[key].(map[string]any); ok {
+			for _, nestedKey := range []string{"tweets", "results", "items"} {
+				if values, nestedOK := object[nestedKey].([]any); nestedOK {
+					items := make([]map[string]any, 0, len(values))
+					for _, value := range values {
+						if item, itemOK := value.(map[string]any); itemOK {
+							items = append(items, item)
+						}
+					}
+					return items
+				}
+			}
+		}
 	}
 	return nil
 }
 
 func twitterMediaItems(tweet map[string]any) []map[string]any {
-	for _, key := range []string{"extendedEntities", "extended_entities", "entities"} {
+	for _, key := range []string{"extendedEntities", "extended_entities", "entities", "media"} {
+		if values, ok := tweet[key].([]any); ok {
+			items := make([]map[string]any, 0, len(values))
+			for _, value := range values {
+				if item, itemOK := value.(map[string]any); itemOK {
+					items = append(items, item)
+				}
+			}
+			if len(items) > 0 {
+				return items
+			}
+		}
 		if object, ok := tweet[key].(map[string]any); ok {
-			if values, ok := object["media"].([]any); ok {
+			for _, mediaKey := range []string{"media", "items"} {
+				values, valuesOK := object[mediaKey].([]any)
+				if !valuesOK {
+					continue
+				}
 				items := make([]map[string]any, 0, len(values))
 				for _, value := range values {
 					if item, ok := value.(map[string]any); ok {
 						items = append(items, item)
 					}
 				}
-				return items
+				if len(items) > 0 {
+					return items
+				}
 			}
 		}
 	}
@@ -5821,10 +5859,11 @@ func (b *BilibiliStore) fetchTwitterPostsFromAPI(feed SourceConfig, full bool, e
 	if full {
 		pageLimit = 30
 	}
+	cursor := ""
 	for page := 0; page < pageLimit; page++ {
 		query := url.Values{"userName": {targetUserName}}
-		if page > 0 {
-			query.Set("cursor", strconv.Itoa(page))
+		if cursor != "" {
+			query.Set("cursor", cursor)
 		}
 		var payload map[string]any
 		endpoint := twitterAPIBase + "/twitter/user/" + endpointName + "?" + query.Encode()
@@ -5842,16 +5881,20 @@ func (b *BilibiliStore) fetchTwitterPostsFromAPI(feed SourceConfig, full bool, e
 			_, username, authorName, avatar := twitterUserFromValue(authorObject)
 			username = firstNonEmptyRemoteText(username, strings.TrimPrefix(credentials.UserName, "@"))
 			author := firstNonEmptyRemoteText(authorName, "@"+username, feed.Name)
-			post := Post{ID: "twitter-tweet-" + tweetID, Source: SourceTwitter, FeedIDs: []string{feed.ID}, Author: author, Avatar: avatar, Caption: cleanRemoteText(firstNonEmptyRemoteText(jsonValueString(tweet["text"]), jsonValueString(tweet["fullText"]))), Tags: append([]string(nil), feed.Tags...), OriginalURL: "https://x.com/" + url.PathEscape(username) + "/status/" + url.PathEscape(tweetID), Published: parseTwitterTime(firstNonEmptyRemoteText(jsonValueString(tweet["createdAt"]), jsonValueString(tweet["created_at"])))}
+			post := Post{ID: "twitter-tweet-" + tweetID, Source: SourceTwitter, FeedIDs: []string{feed.ID}, Author: author, Avatar: avatar, Caption: cleanRemoteText(firstNonEmptyRemoteText(jsonValueString(tweet["text"]), jsonValueString(tweet["fullText"]), jsonValueString(tweet["full_text"]))), Tags: append([]string(nil), feed.Tags...), OriginalURL: firstNonEmptyRemoteText(jsonValueString(tweet["url"]), "https://x.com/" + url.PathEscape(username) + "/status/" + url.PathEscape(tweetID)), Published: parseTwitterTime(firstNonEmptyRemoteText(jsonValueString(tweet["createdAt"]), jsonValueString(tweet["created_at"]))) }
 			for _, item := range twitterMediaItems(tweet) {
 				kind := strings.ToLower(firstNonEmptyRemoteText(jsonValueString(item["type"]), jsonValueString(item["mediaType"])))
-				mediaURL := normalizeRemoteImage(firstNonEmptyRemoteText(jsonValueString(item["media_url_https"]), jsonValueString(item["mediaUrl"]), jsonValueString(item["url"])))
+				mediaURL := normalizeRemoteImage(firstNonEmptyRemoteText(jsonValueString(item["media_url_https"]), jsonValueString(item["mediaUrl"]), jsonValueString(item["media_url"]), jsonValueString(item["originalUrl"]), jsonValueString(item["url"])))
 				poster := normalizeRemoteImage(firstNonEmptyRemoteText(jsonValueString(item["thumbnailUrl"]), jsonValueString(item["preview_image_url"]), jsonValueString(item["previewImageUrl"])))
 				if kind == "photo" || (kind == "" && mediaURL != "") {
 					post.Media = append(post.Media, mediaURL)
 					continue
 				}
-				if variants, ok := item["video_info"].(map[string]any); ok {
+				videoInfo := item["video_info"]
+				if videoInfo == nil {
+					videoInfo = item["videoInfo"]
+				}
+				if variants, ok := videoInfo.(map[string]any); ok {
 					if list, ok := variants["variants"].([]any); ok {
 						values := make([]map[string]any, 0, len(list))
 						for _, value := range list {
@@ -5871,7 +5914,13 @@ func (b *BilibiliStore) fetchTwitterPostsFromAPI(feed SourceConfig, full bool, e
 				reachedBoundary = true
 			}
 		}
-		if !full && reachedBoundary || len(twitterTweetItems(payload)) == 0 {
+		items := twitterTweetItems(payload)
+		if len(items) == 0 {
+			break
+		}
+		cursor = firstNonEmptyRemoteText(jsonValueString(payload["next_cursor"]), jsonValueString(payload["nextCursor"]))
+		hasNext, _ := payload["has_next_page"].(bool)
+		if (!full && reachedBoundary) || !hasNext || cursor == "" {
 			break
 		}
 	}

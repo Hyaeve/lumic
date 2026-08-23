@@ -109,6 +109,20 @@ func TestTwitterVideoURLSelectsHighestQualityMP4(t *testing.T) {
 	}
 }
 
+func TestTwitterPayloadCompatibility(t *testing.T) {
+	parsed := parseTwitterTime("Tue Dec 10 07:00:30 +0000 2024")
+	if parsed.Year() != 2024 || parsed.Month() != time.December || parsed.Day() != 10 {
+		t.Fatalf("unexpected Twitter timestamp: %v", parsed)
+	}
+	tweet := map[string]any{
+		"extendedEntities": map[string]any{"media": []any{map[string]any{"type": "photo", "media_url_https": "https://img.example/photo.jpg"}}},
+	}
+	media := twitterMediaItems(tweet)
+	if len(media) != 1 || jsonValueString(media[0]["media_url_https"]) == "" {
+		t.Fatalf("Twitter media payload was not decoded: %#v", media)
+	}
+}
+
 func TestMediaPreviewHandlerCompressesAndCleansCache(t *testing.T) {
 	root := t.TempDir()
 	oldFlowRoot, oldPreviewRoot := flowRoot, previewRoot
