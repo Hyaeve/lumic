@@ -2893,15 +2893,20 @@ function startMobileTimelineReturnHandoff(post) {
       window.requestAnimationFrame(waitForTimeline)
       return
     }
-    mobileTimelineReturnFading.value = true
+    // Do not fade the handoff: a fade exposes the virtualized feed while its
+    // measurements are still settling, which looks like a one-frame jump.
+    // Keep the opaque preview until two paint frames after the final anchor.
+    mobileTimelineReturnFading.value = false
     mobileTimelineReturnHandoffTimer = window.setTimeout(() => {
       mobileTimelineReturnHandoffTimer = 0
-      mobileTimelineReturnHandoff.value = false
-      mobileTimelineReturnFading.value = false
-      mobileTimelineReturnPreviewPost.value = null
-      if (clearAuthorState) mobileAuthorDetailState.value = null
       window.scrollTo({ top: targetScrollY, behavior: 'auto' })
-    }, 150)
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        mobileTimelineReturnHandoff.value = false
+        mobileTimelineReturnFading.value = false
+        mobileTimelineReturnPreviewPost.value = null
+        if (clearAuthorState) mobileAuthorDetailState.value = null
+      }))
+    }, 40)
   }
   nextTick(() => {
     window.scrollTo({ top: targetScrollY, behavior: 'auto' })
