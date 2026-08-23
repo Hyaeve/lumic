@@ -5664,6 +5664,25 @@ func (b *BilibiliStore) fetchPixivPosts(feed SourceConfig, full bool) ([]Post, e
 
 const twitterAPIBase = "https://api.twitterapi.io"
 
+// twitterRequestGate serializes all twitterapi.io requests and enforces the
+// provider's limit of at most one request in any five-second window.
+var twitterRequestGate struct {
+	sync.Mutex
+	last time.Time
+}
+
+func waitForTwitterRequest() {
+	twitterRequestGate.Lock()
+	defer twitterRequestGate.Unlock()
+	if !twitterRequestGate.last.IsZero() {
+		if wait := 5*time.Second - time.Since(twitterRequestGate.last); wait > 0 {
+			time.Sleep(wait)
+		}
+	}
+	// Record immediately before the network request so retries are counted.
+	twitterRequestGate.last = time.Now()
+}
+
 func twitterRequest(client *http.Client, endpoint string, credentials TwitterCredentials, target any) error {
 	for attempt := 0; attempt < 3; attempt++ {
 		request, err := http.NewRequest(http.MethodGet, endpoint, nil)
@@ -5673,6 +5692,7 @@ func twitterRequest(client *http.Client, endpoint string, credentials TwitterCre
 		request.Header.Set("X-API-Key", strings.TrimSpace(credentials.APIKey))
 		request.Header.Set("Accept", "application/json")
 		request.Header.Set("User-Agent", "Lumic/1.0")
+		waitForTwitterRequest()
 		response, err := client.Do(request)
 		if err != nil {
 			return err
