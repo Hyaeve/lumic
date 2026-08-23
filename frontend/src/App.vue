@@ -2872,6 +2872,9 @@ function startMobileTimelineReturnHandoff(post) {
   let stableFrames = 0
   let previousSignature = ''
   const waitForTimeline = () => {
+    // Keep the restored anchor locked while virtualized masonry cards mount.
+    // This prevents a brief paint at the feed top before returning to the card.
+    window.scrollTo({ top: targetScrollY, behavior: 'auto' })
     const target = findMobileDetailReturnTarget(post.id)
     const scrollReady = Math.abs(window.scrollY - targetScrollY) < 3
     const feed = feedListElement.value || document.querySelector('.masonry-feed, .feed-list')
@@ -2884,7 +2887,7 @@ function startMobileTimelineReturnHandoff(post) {
     if (signature && signature === previousSignature) stableFrames += 1
     else stableFrames = 0
     previousSignature = signature
-    if ((!target || !scrollReady || stableFrames < 3) && attempts < 90) {
+    if ((!target || !scrollReady || stableFrames < 6) && attempts < 120) {
       attempts += 1
       scheduleTimelineWindow()
       window.requestAnimationFrame(waitForTimeline)
@@ -2897,6 +2900,7 @@ function startMobileTimelineReturnHandoff(post) {
       mobileTimelineReturnFading.value = false
       mobileTimelineReturnPreviewPost.value = null
       if (clearAuthorState) mobileAuthorDetailState.value = null
+      window.scrollTo({ top: targetScrollY, behavior: 'auto' })
     }, 150)
   }
   nextTick(() => {
@@ -3831,6 +3835,16 @@ function handlePopState() {
   // or timeline page while the detail post is resolved asynchronously.
   const handoffDetailPost = forwardDetailState?.post || authorDetailReturnPost
   if (handoffDetailPost) {
+    // A reverse swipe from the timeline restores the detail page directly.
+    // Drop any author-page handoff state first so the old author preview cannot
+    // flash underneath the incoming detail page during route reconciliation.
+    if (forwardDetailState) {
+      mobileAuthorPreviewHandoff.value = false
+      mobileAuthorPreviewFading.value = false
+      mobileAuthorPreviewPost.value = null
+      mobileAuthorPreviewSnapshot.value = { active: false, items: [], height: 0, scrollY: 0 }
+      mobileAuthorDetailState.value = null
+    }
     masonryDetailPost.value = posts.value.find(item => String(item.id) === String(handoffDetailPost.id)) || handoffDetailPost
     pendingPostId.value = String(handoffDetailPost.id)
     mobileDetailIndex.value = 0
