@@ -242,11 +242,17 @@ func normalizeBilibiliContentTypes(values []string, legacyDefault bool) []string
 	if len(values) == 0 && legacyDefault {
 		return []string{"DRAW", "ARTICLE"}
 	}
-	result := []string{"DRAW"}
+	result := make([]string, 0, 2)
 	for _, value := range values {
-		if strings.EqualFold(strings.TrimSpace(value), "ARTICLE") {
-			result = append(result, "ARTICLE")
-			break
+		switch strings.ToUpper(strings.TrimSpace(value)) {
+		case "DRAW":
+			if !containsString(result, "DRAW") {
+				result = append(result, "DRAW")
+			}
+		case "ARTICLE":
+			if !containsString(result, "ARTICLE") {
+				result = append(result, "ARTICLE")
+			}
 		}
 	}
 	return result
@@ -259,8 +265,12 @@ func bilibiliDynamicTypeEnabled(dynamicType string, contentTypes []string, inclu
 	if dynamicType == "DYNAMIC_TYPE_AV" {
 		return includeVideos
 	}
+	selected := normalizeBilibiliContentTypes(contentTypes, false)
 	if dynamicType == "DYNAMIC_TYPE_ARTICLE" {
-		return containsString(normalizeBilibiliContentTypes(contentTypes, true), "ARTICLE")
+		return containsString(selected, "ARTICLE")
+	}
+	if dynamicType == "DYNAMIC_TYPE_DRAW" || dynamicType == "DYNAMIC_TYPE_OPUS" {
+		return containsString(selected, "DRAW")
 	}
 	return true
 }
@@ -5650,48 +5660,60 @@ func (b *BilibiliStore) fetchPixivPosts(feed SourceConfig, full bool) ([]Post, e
 const twitterAPIBase = "https://api.twitterapi.io"
 
 func twitterRequest(client *http.Client, endpoint string, credentials TwitterCredentials, target any) error {
-	request, err := http.NewRequest(http.MethodGet, endpoint, nil)
-	if err != nil {
-		return err
-	}
-	request.Header.Set("X-API-Key", strings.TrimSpace(credentials.APIKey))
-	request.Header.Set("Accept", "application/json")
-	request.Header.Set("User-Agent", "Lumic/1.0")
-	response, err := client.Do(request)
-	if err != nil {
-		return err
-	}
-	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, 8<<20))
-	if err != nil {
-		return err
-	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		var failure struct {
-			Title  string `json:"title"`
-			Detail string `json:"detail"`
-			Errors []struct {
-				Message string `json:"message"`
-				Detail  string `json:"detail"`
-			} `json:"errors"`
+	for attempt := 0; attempt < 3; attempt++ {
+		request, err := http.NewRequest(http.MethodGet, endpoint, nil)
+		if err != nil {
+			return err
 		}
-		_ = json.Unmarshal(body, &failure)
-		message := firstNonEmptyRemoteText(failure.Detail, failure.Title)
-		if len(failure.Errors) > 0 {
-			message = firstNonEmptyRemoteText(failure.Errors[0].Detail, failure.Errors[0].Message, message)
+		request.Header.Set("X-API-Key", strings.TrimSpace(credentials.APIKey))
+		request.Header.Set("Accept", "application/json")
+		request.Header.Set("User-Agent", "Lumic/1.0")
+		response, err := client.Do(request)
+		if err != nil {
+			return err
 		}
-		if message == "" {
-			message = responseSummary(body)
+		retryAfter := response.Header.Get("Retry-After")
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, 8<<20))
+		response.Body.Close()
+		if readErr != nil {
+			return readErr
 		}
-		if message == "" {
-			message = "twitterapi.io 请求失败"
+		if response.StatusCode == http.StatusTooManyRequests && attempt < 2 {
+			delay := 5 * time.Second
+			if seconds, parseErr := strconv.Atoi(strings.TrimSpace(retryAfter)); parseErr == nil && seconds > 0 && seconds <= 60 {
+				delay = time.Duration(seconds) * time.Second
+			}
+			time.Sleep(delay)
+			continue
 		}
-		return fmt.Errorf("twitterapi.io 返回 HTTP %d：%s", response.StatusCode, message)
+		if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+			var failure struct {
+				Title  string `json:"title"`
+				Detail string `json:"detail"`
+				Errors []struct {
+					Message string `json:"message"`
+					Detail  string `json:"detail"`
+				} `json:"errors"`
+			}
+			_ = json.Unmarshal(body, &failure)
+			message := firstNonEmptyRemoteText(failure.Detail, failure.Title)
+			if len(failure.Errors) > 0 {
+				message = firstNonEmptyRemoteText(failure.Errors[0].Detail, failure.Errors[0].Message, message)
+			}
+			if message == "" {
+				message = responseSummary(body)
+			}
+			if message == "" {
+				message = "twitterapi.io 请求失败"
+			}
+			return fmt.Errorf("twitterapi.io 返回 HTTP %d：%s", response.StatusCode, message)
+		}
+		if err := json.Unmarshal(body, target); err != nil {
+			return fmt.Errorf("twitterapi.io 返回了无效响应：%w", err)
+		}
+		return nil
 	}
-	if err := json.Unmarshal(body, target); err != nil {
-		return fmt.Errorf("twitterapi.io 返回了无效响应：%w", err)
-	}
-	return nil
+	return errors.New("twitterapi.io 请求重试次数已用尽")
 }
 
 func normalizeTwitterAvatar(value string) string {
@@ -5868,7 +5890,7 @@ func (b *BilibiliStore) fetchTwitterPostsFromAPI(feed SourceConfig, full bool, e
 		var payload map[string]any
 		endpoint := twitterAPIBase + "/twitter/user/" + endpointName + "?" + query.Encode()
 		if err := twitterRequest(client, endpoint, credentials, &payload); err != nil {
-			return nil, fmt.Errorf("推特点赞拉取失败：%w", err)
+			return nil, fmt.Errorf("推特动态拉取失败：%w", err)
 		}
 		reachedBoundary := false
 		for _, tweet := range twitterTweetItems(payload) {
@@ -5881,7 +5903,7 @@ func (b *BilibiliStore) fetchTwitterPostsFromAPI(feed SourceConfig, full bool, e
 			_, username, authorName, avatar := twitterUserFromValue(authorObject)
 			username = firstNonEmptyRemoteText(username, strings.TrimPrefix(credentials.UserName, "@"))
 			author := firstNonEmptyRemoteText(authorName, "@"+username, feed.Name)
-			post := Post{ID: "twitter-tweet-" + tweetID, Source: SourceTwitter, FeedIDs: []string{feed.ID}, Author: author, Avatar: avatar, Caption: cleanRemoteText(firstNonEmptyRemoteText(jsonValueString(tweet["text"]), jsonValueString(tweet["fullText"]), jsonValueString(tweet["full_text"]))), Tags: append([]string(nil), feed.Tags...), OriginalURL: firstNonEmptyRemoteText(jsonValueString(tweet["url"]), "https://x.com/" + url.PathEscape(username) + "/status/" + url.PathEscape(tweetID)), Published: parseTwitterTime(firstNonEmptyRemoteText(jsonValueString(tweet["createdAt"]), jsonValueString(tweet["created_at"]))) }
+			post := Post{ID: "twitter-tweet-" + tweetID, Source: SourceTwitter, FeedIDs: []string{feed.ID}, Author: author, Avatar: avatar, Caption: cleanRemoteText(firstNonEmptyRemoteText(jsonValueString(tweet["text"]), jsonValueString(tweet["fullText"]), jsonValueString(tweet["full_text"]))), Tags: append([]string(nil), feed.Tags...), OriginalURL: firstNonEmptyRemoteText(jsonValueString(tweet["url"]), "https://x.com/"+url.PathEscape(username)+"/status/"+url.PathEscape(tweetID)), Published: parseTwitterTime(firstNonEmptyRemoteText(jsonValueString(tweet["createdAt"]), jsonValueString(tweet["created_at"])))}
 			for _, item := range twitterMediaItems(tweet) {
 				kind := strings.ToLower(firstNonEmptyRemoteText(jsonValueString(item["type"]), jsonValueString(item["mediaType"])))
 				mediaURL := normalizeRemoteImage(firstNonEmptyRemoteText(jsonValueString(item["media_url_https"]), jsonValueString(item["mediaUrl"]), jsonValueString(item["media_url"]), jsonValueString(item["originalUrl"]), jsonValueString(item["url"])))

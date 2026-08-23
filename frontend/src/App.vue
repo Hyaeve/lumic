@@ -4509,7 +4509,7 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
             <label v-if="selectedFeed.source === 'weibo' || (selectedFeed.source === 'bilibili' && !selectedFeed.id.startsWith('bili-opus-favorites-'))"><input v-model="selectedFeed.includeVideos" type="checkbox"><span>包含视频</span></label>
             <label><input v-model="selectedFeed.enabled" type="checkbox"><span>启用自动同步</span></label>
           </div>
-          <div v-if="selectedFeed.source === 'bilibili' && !selectedFeed.id.startsWith('bili-opus-favorites-')" class="content-scope"><strong>内容范围</strong><span>图文动态（DRAW）</span><label><input v-model="selectedFeed.contentTypes" type="checkbox" value="ARTICLE"><span>专栏（ARTICLE）</span></label><small>专栏默认关闭；转发动态仍过滤。</small></div>
+          <div v-if="selectedFeed.source === 'bilibili' && !selectedFeed.id.startsWith('bili-opus-favorites-')" class="content-scope"><strong>内容范围</strong><label><input v-model="selectedFeed.contentTypes" type="checkbox" value="DRAW"><span>图文动态（DRAW）</span></label><label><input v-model="selectedFeed.contentTypes" type="checkbox" value="ARTICLE"><span>专栏（ARTICLE）</span></label><small>图文动态默认开启；取消勾选后不再拉取图文动态。</small></div>
           <p v-if="settingsError" class="login-error">{{ settingsError }}</p><button class="login-button" :disabled="settingsBusy">保存来源设置</button>
         </form>
       </div>

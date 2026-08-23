@@ -416,10 +416,13 @@ func TestBilibiliArticleContentTypeIsOptional(t *testing.T) {
 	if !bilibiliDynamicTypeEnabled("DYNAMIC_TYPE_ARTICLE", []string{"DRAW", "ARTICLE"}, false) {
 		t.Fatal("article dynamic should be collected when ARTICLE is enabled")
 	}
-	for _, dynamicType := range []string{"DYNAMIC_TYPE_WORD", "DYNAMIC_TYPE_DRAW", "DYNAMIC_TYPE_OPUS"} {
+	for _, dynamicType := range []string{"DYNAMIC_TYPE_DRAW", "DYNAMIC_TYPE_OPUS"} {
 		if !bilibiliDynamicTypeEnabled(dynamicType, []string{"DRAW"}, false) {
 			t.Fatalf("expected %s to remain enabled without ARTICLE", dynamicType)
 		}
+	}
+	if bilibiliDynamicTypeEnabled("DYNAMIC_TYPE_DRAW", nil, false) {
+		t.Fatal("image-text dynamic should be filtered when DRAW is disabled")
 	}
 }
 
@@ -438,8 +441,8 @@ func TestNormalizeBilibiliContentTypesPreservesLegacyArticles(t *testing.T) {
 		t.Fatalf("legacy content types were not preserved: %#v", legacy)
 	}
 	newFeed := normalizeBilibiliContentTypes(nil, false)
-	if !containsString(newFeed, "DRAW") || containsString(newFeed, "ARTICLE") {
-		t.Fatalf("new content types should default to DRAW only: %#v", newFeed)
+	if len(newFeed) != 0 {
+		t.Fatalf("explicitly empty content types should remain empty: %#v", newFeed)
 	}
 }
 
