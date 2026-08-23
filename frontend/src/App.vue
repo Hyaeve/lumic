@@ -166,6 +166,7 @@ const mobileAuthorPreviewPost = ref(null)
 const mobileAuthorPreviewSnapshot = ref({ active: false, items: [], height: 0, scrollY: 0 })
 const mobileAuthorPreviewHandoff = ref(false)
 const mobileAuthorPreviewFading = ref(false)
+const mobileDetailForwardHandoff = ref(false)
 const mobileDetailReturnHandoff = ref(false)
 const mobileDetailReturnFading = ref(false)
 const mobileTimelineReturnPreviewPost = ref(null)
@@ -3809,6 +3810,7 @@ function handlePopState() {
     && mobileForwardPageState.value.detailPath === currentPath
     ? { ...mobileForwardPageState.value }
     : null
+  mobileDetailForwardHandoff.value = Boolean(forwardDetailState)
   const forwardPagedState = mobileForwardPageAvailable.value
     && mobileForwardPageState.value?.authorPath === currentPath
     ? { ...mobileForwardPageState.value }
@@ -3888,6 +3890,11 @@ function handlePopState() {
     // its header, cards and masonry geometry are stable. This also applies to
     // tag pages, whose filtered list used to flash its top bar during a swipe.
     startMobileAuthorPreviewHandoff(forwardPagedState.post)
+  }
+  if (forwardDetailState) {
+    // Keep the prepared detail page above the old author preview for a few
+    // paint frames; clearing immediately lets the previous page flash once.
+    window.setTimeout(() => { mobileDetailForwardHandoff.value = false }, 180)
   }
 }
 function applyRoute() {
@@ -4097,7 +4104,7 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
       <footer class="mobile-post-detail-foot"><time :datetime="mobileAuthorDetailState.post.published">{{ postDateTime(mobileAuthorDetailState.post.published) }}</time><div class="mobile-detail-preview-actions"><i></i><i></i></div></footer>
       </div>
     </aside>
-    <main v-if="!showSettings && activeNav !== 'pulls' && !(phonePortrait && masonryDetailPost)" :class="['content', { 'liked-page': activeNav === 'liked', 'mobile-author-detail-page': mobilePagedTransitionActive }]" :style="mobilePagedTransitionActive ? mobileAuthorPageStyle : undefined" @touchstart.passive="beginMobileAuthorPageSwipe" @touchmove="updateMobileAuthorPageSwipe" @touchend.passive="finishMobileAuthorPageSwipe" @touchcancel="finishMobileAuthorPageSwipe" @click="closeContextMenu" @contextmenu.prevent="openContextMenu($event)">
+    <main v-if="!showSettings && activeNav !== 'pulls' && !(phonePortrait && masonryDetailPost)" :class="['content', { 'liked-page': activeNav === 'liked', 'mobile-author-detail-page': mobilePagedTransitionActive, 'mobile-timeline-returning': mobileTimelineReturnHandoff }]" :style="mobilePagedTransitionActive ? mobileAuthorPageStyle : undefined" @touchstart.passive="beginMobileAuthorPageSwipe" @touchmove="updateMobileAuthorPageSwipe" @touchend.passive="finishMobileAuthorPageSwipe" @touchcancel="finishMobileAuthorPageSwipe" @click="closeContextMenu" @contextmenu.prevent="openContextMenu($event)">
       <div v-if="!authorProfile && activeNav !== 'liked'" class="night-sky-decor" aria-hidden="true"><i class="night-haze"></i><i class="night-moon"></i><i class="night-star star-one"></i><i class="night-star star-two"></i><i class="night-star star-three"></i><i class="night-star star-four"></i><i class="night-star star-five"></i><i class="night-star star-six"></i><i class="night-star star-seven"></i><i class="night-star star-eight"></i></div>
       <div v-if="!authorProfile && activeNav !== 'liked'" class="night-meteor-layer" aria-hidden="true"><i v-for="meteor in meteorBurst" :key="meteor.id" class="night-meteor" :style="meteor.style"></i></div>
       <div v-if="!authorProfile && activeNav !== 'liked'" class="seasonal-decor" :class="`season-${localSeason}`" aria-hidden="true">
@@ -4249,7 +4256,7 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
         <button type="button" :disabled="subscriptionPage >= subscriptionPageCount" title="下一页" aria-label="下一页" @click="subscriptionPage++"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 5 7 7-7 7"/></svg></button>
       </nav>
     </main>
-    <aside v-if="phonePortrait && mobileAuthorPreviewDisplayPost && !masonryDetailPost && (mobileAuthorPreviewHandoff || mobileDetailPageDragging || mobileDetailPageAnimating || (mobileTimelineCanReturn && (mobileAuthorPageDragging || mobileAuthorPageAnimating)))" class="mobile-author-swipe-preview" :style="mobileAuthorPreviewStyle" aria-hidden="true">
+    <aside v-if="phonePortrait && mobileAuthorPreviewDisplayPost && !mobileDetailForwardHandoff && (mobileAuthorPreviewHandoff || mobileDetailPageDragging || mobileDetailPageAnimating || (mobileTimelineCanReturn && (mobileAuthorPageDragging || mobileAuthorPageAnimating)))" class="mobile-author-swipe-preview" :style="mobileAuthorPreviewStyle" aria-hidden="true">
       <div class="mobile-transition-page-content" :style="mobileAuthorPreviewContentStyle">
       <header class="topbar author-page-header mobile-author-preview-head"><div class="author-profile-main"><img :key="'preview:' + authorAvatarKey(mobileAuthorPreviewDisplayPost) + ':' + postAvatar(mobileAuthorPreviewDisplayPost)" :src="postAvatar(mobileAuthorPreviewDisplayPost)" :alt="mobileAuthorPreviewDisplayPost.author" @load="handlePostAvatarLoad($event, mobileAuthorPreviewDisplayPost)" @error="handlePostAvatarError($event, mobileAuthorPreviewDisplayPost)"><div><p class="eyebrow">AUTHOR TIMELINE · {{ sourceMeta[mobileAuthorPreviewDisplayPost.source].label }}</p><h1>{{ mobileAuthorPreviewDisplayPost.author }}</h1><p class="subtitle">共 {{ mobileAuthorTimelinePosts.length }} 条已拉取动态</p></div></div></header>
       <div class="section-heading mobile-author-preview-heading"><div class="filters"><button class="timeline-sort-button" type="button" tabindex="-1"><span class="timeline-sort-symbol" :style="{ '--nav-mask': `url(${timelineSort === 'newest' ? newestSortIcon : oldestSortIcon})` }"></span></button><button class="timeline-view-button timeline-toolbar-button" type="button" tabindex="-1"><span :class="['timeline-view-symbol', { 'list-view-symbol': !isMasonryView }]" :style="{ '--nav-mask': `url(${isMasonryView ? masonryViewIcon : listViewIcon})` }"></span></button><button class="timeline-refresh-button timeline-toolbar-button" type="button" tabindex="-1"><span class="timeline-refresh-symbol" :style="{ '--nav-mask': `url(${refreshIcon})` }"></span></button></div><div class="timeline-tools"><label class="timeline-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><input type="search" value="" placeholder="搜索" tabindex="-1" readonly></label></div></div>
