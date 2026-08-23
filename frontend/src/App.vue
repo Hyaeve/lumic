@@ -3655,6 +3655,22 @@ function scrollTimelineToTop() {
   window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 function resetTimelineWindow() {
+  // During a mobile handoff the list is being restored to an anchored card.
+  // Rebuilding the virtual masonry window here briefly paints the feed from
+  // offset zero, which causes the visible "jump up, then back" on return.
+  if (phonePortrait.value && mobileTimelineReturnHandoff.value) {
+    const preservedTop = Math.max(0, Number(window.scrollY) || 0)
+    timelineStart.value = Math.max(0, timelineStart.value)
+    timelineEnd.value = Math.max(
+      timelineEnd.value,
+      Math.min(filteredPosts.value.length, phonePortrait.value ? 12 : 20)
+    )
+    masonryViewportTop.value = preservedTop
+    masonryViewportBottom.value = preservedTop + (typeof window === 'undefined' ? 900 : window.innerHeight)
+    feedListTopValid = false
+    nextTick(() => { updateFeedListDocumentTop(); scheduleMasonryMetrics(); scheduleTimelineWindow() })
+    return
+  }
   timelineStart.value = 0
   timelineEnd.value = Math.min(filteredPosts.value.length, phonePortrait.value ? 7 : 15)
   masonryViewportTop.value = 0
@@ -4233,7 +4249,7 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
         <button type="button" :disabled="subscriptionPage >= subscriptionPageCount" title="下一页" aria-label="下一页" @click="subscriptionPage++"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 5 7 7-7 7"/></svg></button>
       </nav>
     </main>
-    <aside v-if="phonePortrait && mobileAuthorPreviewDisplayPost && (mobileAuthorPreviewHandoff || mobileDetailPageDragging || mobileDetailPageAnimating || (mobileTimelineCanReturn && (mobileAuthorPageDragging || mobileAuthorPageAnimating)))" class="mobile-author-swipe-preview" :style="mobileAuthorPreviewStyle" aria-hidden="true">
+    <aside v-if="phonePortrait && mobileAuthorPreviewDisplayPost && !masonryDetailPost && (mobileAuthorPreviewHandoff || mobileDetailPageDragging || mobileDetailPageAnimating || (mobileTimelineCanReturn && (mobileAuthorPageDragging || mobileAuthorPageAnimating)))" class="mobile-author-swipe-preview" :style="mobileAuthorPreviewStyle" aria-hidden="true">
       <div class="mobile-transition-page-content" :style="mobileAuthorPreviewContentStyle">
       <header class="topbar author-page-header mobile-author-preview-head"><div class="author-profile-main"><img :key="'preview:' + authorAvatarKey(mobileAuthorPreviewDisplayPost) + ':' + postAvatar(mobileAuthorPreviewDisplayPost)" :src="postAvatar(mobileAuthorPreviewDisplayPost)" :alt="mobileAuthorPreviewDisplayPost.author" @load="handlePostAvatarLoad($event, mobileAuthorPreviewDisplayPost)" @error="handlePostAvatarError($event, mobileAuthorPreviewDisplayPost)"><div><p class="eyebrow">AUTHOR TIMELINE · {{ sourceMeta[mobileAuthorPreviewDisplayPost.source].label }}</p><h1>{{ mobileAuthorPreviewDisplayPost.author }}</h1><p class="subtitle">共 {{ mobileAuthorTimelinePosts.length }} 条已拉取动态</p></div></div></header>
       <div class="section-heading mobile-author-preview-heading"><div class="filters"><button class="timeline-sort-button" type="button" tabindex="-1"><span class="timeline-sort-symbol" :style="{ '--nav-mask': `url(${timelineSort === 'newest' ? newestSortIcon : oldestSortIcon})` }"></span></button><button class="timeline-view-button timeline-toolbar-button" type="button" tabindex="-1"><span :class="['timeline-view-symbol', { 'list-view-symbol': !isMasonryView }]" :style="{ '--nav-mask': `url(${isMasonryView ? masonryViewIcon : listViewIcon})` }"></span></button><button class="timeline-refresh-button timeline-toolbar-button" type="button" tabindex="-1"><span class="timeline-refresh-symbol" :style="{ '--nav-mask': `url(${refreshIcon})` }"></span></button></div><div class="timeline-tools"><label class="timeline-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><input type="search" value="" placeholder="搜索" tabindex="-1" readonly></label></div></div>
