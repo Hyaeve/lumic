@@ -2616,6 +2616,9 @@ function openMasonryPost(post, event) {
 }
 function restoreMobileScroll(top = 0) {
   const target = Math.max(0, Number(top) || 0)
+  // Set the scroll position synchronously as soon as the route is restored.
+  // The following frames only compensate for the virtualized feed mounting.
+  window.scrollTo({ top: target, behavior: 'auto' })
   nextTick(() => {
     window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => window.scrollTo({ top: target, behavior: 'auto' }))
@@ -2851,7 +2854,31 @@ function startMobileTimelineReturnHandoff(post) {
   mobileTimelineReturnPreviewPost.value = post
   mobileTimelineReturnHandoff.value = true
   mobileTimelineReturnFading.value = false
-  nextTick(() => window.requestAnimationFrame(() => window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+  const targetScrollY = Math.max(0, Number(clearAuthorState
+    ? mobileAuthorDetailState.value?.detailScrollY
+    : mobilePostReturnScrollY.value) || 0)
+  let attempts = 0
+  let stableFrames = 0
+  let previousSignature = ''
+  const waitForTimeline = () => {
+    const target = findMobileDetailReturnTarget(post.id)
+    const scrollReady = Math.abs(window.scrollY - targetScrollY) < 3
+    const feed = feedListElement.value || document.querySelector('.masonry-feed, .feed-list')
+    const feedRect = feed?.getBoundingClientRect?.()
+    const targetRect = target?.rect
+    const signature = target && scrollReady && feedRect
+      ? [window.scrollY, feedRect.height, targetRect.left, targetRect.top, targetRect.width, targetRect.height]
+        .map(value => Math.round(value * 10) / 10).join(':')
+      : ''
+    if (signature && signature === previousSignature) stableFrames += 1
+    else stableFrames = 0
+    previousSignature = signature
+    if ((!target || !scrollReady || stableFrames < 3) && attempts < 90) {
+      attempts += 1
+      scheduleTimelineWindow()
+      window.requestAnimationFrame(waitForTimeline)
+      return
+    }
     mobileTimelineReturnFading.value = true
     mobileTimelineReturnHandoffTimer = window.setTimeout(() => {
       mobileTimelineReturnHandoffTimer = 0
@@ -2859,8 +2886,12 @@ function startMobileTimelineReturnHandoff(post) {
       mobileTimelineReturnFading.value = false
       mobileTimelineReturnPreviewPost.value = null
       if (clearAuthorState) mobileAuthorDetailState.value = null
-    }, 190)
-  }))))
+    }, 150)
+  }
+  nextTick(() => {
+    window.scrollTo({ top: targetScrollY, behavior: 'auto' })
+    window.requestAnimationFrame(waitForTimeline)
+  })
 }
 function openMobileDetailAuthor(post) {
   if (!post) return
@@ -3719,6 +3750,14 @@ function handlePopState() {
   const gestureTimelineReturn = returningToTimeline && mobileDetailGestureReturnPending
   const detailRouteExit = returningToTimeline && !gestureTimelineReturn ? captureMobileDetailRouteExit(departingDetailPost) : null
   const currentPath = window.location.pathname + window.location.search
+  const forwardDetailState = mobileForwardPageAvailable.value
+    && mobileForwardPageState.value?.kind === 'detail'
+    && mobileForwardPageState.value.detailPath === currentPath
+    ? { ...mobileForwardPageState.value }
+    : null
+  const authorDetailReturnPost = returningFromAuthor && window.location.pathname.startsWith('/post/')
+    ? mobileAuthorDetailState.value?.post
+    : null
   if (returningFromAuthor) mobileAuthorDetailState.value.authorScrollY = mobileAuthorScrollY
   if (returningFromAuthor && mobileAuthorDetailState.value?.returnToDetail === false) {
     mobileForwardPageState.value = {
@@ -3754,6 +3793,16 @@ function handlePopState() {
     mobileForwardPageAvailable.value = false
     mobileForwardPageState.value = null
   }
+  // Prime the destination detail page before applyRoute clears the current
+  // page state. This keeps a forward swipe from briefly rendering the author
+  // or timeline page while the detail post is resolved asynchronously.
+  const handoffDetailPost = forwardDetailState?.post || authorDetailReturnPost
+  if (handoffDetailPost) {
+    masonryDetailPost.value = posts.value.find(item => String(item.id) === String(handoffDetailPost.id)) || handoffDetailPost
+    pendingPostId.value = String(handoffDetailPost.id)
+    mobileDetailIndex.value = 0
+    resetMobileDetailTrack()
+  }
   if (returningFromAuthor && window.location.pathname.startsWith('/post/')) startMobileDetailReturnHandoff()
   else if (returningFromAuthor && mobileAuthorDetailState.value?.returnToDetail === false) startMobileTimelineReturnHandoff(mobileAuthorDetailState.value.post)
   if (returningToTimeline && (gestureTimelineReturn || !detailRouteExit)) startMobileTimelineReturnHandoff(departingDetailPost)
@@ -3770,8 +3819,12 @@ function handlePopState() {
 function applyRoute() {
   resetMobileDetailPageSwipe()
   const segments = window.location.pathname.split('/').filter(Boolean).map(segment => decodeURIComponent(segment))
+  const preservedDetail = segments[0] === 'post' && segments[1] && masonryDetailPost.value
+    && String(masonryDetailPost.value.id) === segments.slice(1).join('/')
+    ? masonryDetailPost.value
+    : null
   showSettings.value = false
-  masonryDetailPost.value = null
+  masonryDetailPost.value = preservedDetail
   selectedAuthor.value = null
   selectedTag.value = ''
   pendingPostId.value = ''

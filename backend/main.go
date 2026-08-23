@@ -3674,13 +3674,15 @@ func (b *BilibiliStore) fetchBilibiliFavoriteOpusPosts(feed SourceConfig, full b
 				continue
 			}
 			posts = append(posts, post)
-			time.Sleep(350 * time.Millisecond)
+			// 收藏专栏详情页接口较重，放慢请求节奏，避免连续拉取触发限流
+			time.Sleep(900 * time.Millisecond)
 		}
 		if len(payload.Data.Items) == 0 || payload.Data.Offset == "" || payload.Data.Offset == offset {
 			break
 		}
 		offset = payload.Data.Offset
-		time.Sleep(500 * time.Millisecond)
+		// 翻页也留出更长间隔，尤其是一次获取全部历史时
+		time.Sleep(1200 * time.Millisecond)
 	}
 	if len(posts) == 0 && lastDetailError != nil {
 		return nil, fmt.Errorf("无法读取收藏专栏详情: %w", lastDetailError)
@@ -4451,6 +4453,7 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 				if major.Archive != nil {
 					captionParts = append(captionParts, major.Archive.Title, major.Archive.Desc)
 					if feed.IncludeVideos {
+						time.Sleep(260 * time.Millisecond)
 						videoURL, videoErr := fetchBilibiliVideoURL(major.Archive.BVID, credentials, proxyURL)
 						if videoErr != nil {
 							log.Printf("unable to resolve Bilibili video %s: %v", major.Archive.BVID, videoErr)
@@ -4463,6 +4466,8 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 			captionParts = append(captionParts, bilibiliCaptionFromRaw(rawItem))
 			caption := combineRemoteText(captionParts...)
 			if shouldFetchBilibiliDynamicDetail(item.Type, caption) {
+				// 动态详情接口与专栏页面共享 B 站限流策略，避免一批动态连续请求。
+				time.Sleep(260 * time.Millisecond)
 				detailCaption := b.fetchBilibiliDynamicCaption(item.ID, credentials, proxyURL)
 				caption = mergeDetailedRemoteText(caption, detailCaption)
 			}
