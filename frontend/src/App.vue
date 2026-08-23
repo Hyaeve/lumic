@@ -546,10 +546,13 @@ const mobileDetailReturnPreviewStyle = computed(() => {
     transition: mobileDetailReturnFading.value ? 'opacity .18s ease-out' : 'none'
   }
   const width = typeof window === 'undefined' ? 390 : Math.max(1, window.innerWidth)
-  const progress = Math.min(1, Math.max(0, mobileAuthorPageDragX.value) / width)
+  const dragX = mobileAuthorPageDragX.value
+  const progress = Math.min(1, Math.abs(dragX) / width)
+  const fromRight = dragX < 0
   return {
+    zIndex: 2,
     opacity: String(.7 + progress * .3),
-    transform: `translate3d(${-100 + progress * 100}%, 0, 0)`,
+    transform: `translate3d(${fromRight ? 100 - progress * 100 : -100 + progress * 100}%, 0, 0)`,
     transition: mobileAuthorPageDragging.value ? 'none' : mobileAuthorPageAnimating.value ? 'transform .32s cubic-bezier(.16,.88,.22,1)' : 'none'
   }
 })
@@ -3310,6 +3313,11 @@ function beginMobileAuthorPageSwipe(event) {
   mobileAuthorPageTouch = { x: touch.clientX, y: touch.clientY, time: event.timeStamp, axis: '', fromTimeline, prevX: touch.clientX, prevTime: event.timeStamp, lastX: touch.clientX, lastTime: event.timeStamp }
   mobileAuthorPageDragging.value = false
   mobileAuthorPageAnimating.value = false
+  if (fromAuthorPage && mobileAuthorDetailState.value?.returnToDetail !== false) {
+    const detailPost = mobileAuthorDetailState.value.post
+    preloadMobileDetailPost(detailPost)
+    void preloadPostAvatar(detailPost)
+  }
   if (fromAuthorPage && mobileAuthorDetailState.value?.returnToDetail === false) {
     mobileTimelineReturnPreviewPost.value = mobileAuthorDetailState.value.post
     mobileReturnTimelinePosts.value.slice(0, 24).forEach(preloadMobileDetailPost)
@@ -3324,7 +3332,9 @@ function updateMobileAuthorPageSwipe(event) {
     mobileAuthorPageTouch.axis = Math.abs(dx) > Math.abs(dy) * 1.12 ? 'horizontal' : 'vertical'
   }
   if (mobileAuthorPageTouch.axis !== 'horizontal') return
-  if ((!mobileAuthorPageTouch.fromTimeline && dx <= 0) || (mobileAuthorPageTouch.fromTimeline && dx >= 0)) return
+  // Timeline -> author is a left swipe. Author -> its source detail page can
+  // be swiped in either direction; the destination preview follows that edge.
+  if (mobileAuthorPageTouch.fromTimeline && dx >= 0) return
   event.preventDefault()
   mobileAuthorPageDragging.value = true
   mobileAuthorPageTouch.prevX = mobileAuthorPageTouch.lastX
@@ -3350,9 +3360,9 @@ function finishMobileAuthorPageSwipe(event) {
   const threshold = Math.min(112, window.innerWidth * .28)
   const fastReturn = dx > 36 && velocityX > .78
   const fastForward = dx < -36 && velocityX < -.78
-  if (!cancelled && horizontal && !touchState.fromTimeline && (dx > threshold || fastReturn)) {
+  if (!cancelled && horizontal && !touchState.fromTimeline && (Math.abs(dx) > threshold || Math.abs(velocityX) > .78)) {
     if (mobileAuthorDetailState.value) mobileAuthorDetailState.value.authorScrollY = mobileAuthorScrollY
-    mobileAuthorPageDragX.value = window.innerWidth
+    mobileAuthorPageDragX.value = dx < 0 ? -window.innerWidth : window.innerWidth
     mobileAuthorPageTimer = window.setTimeout(() => {
       mobileAuthorPageTimer = 0
       returnToMobileDetailFromAuthor()
@@ -4044,7 +4054,7 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
       </div>
     </aside>
 
-    <aside v-if="phonePortrait && mobileAuthorDetailState?.returnToDetail !== false && (authorProfile || mobileDetailReturnHandoff)" class="mobile-detail-return-preview" :style="mobileDetailReturnPreviewStyle" aria-hidden="true">
+    <aside v-if="phonePortrait && mobileAuthorDetailState?.post && mobileAuthorDetailState?.returnToDetail !== false && (authorProfile || mobileDetailReturnHandoff || mobileAuthorPageDragging || mobileAuthorPageAnimating)" class="mobile-detail-return-preview" :style="mobileDetailReturnPreviewStyle" aria-hidden="true">
       <div class="mobile-detail-return-content" :style="mobileDetailReturnContentStyle">
       <header class="mobile-post-detail-head"><span class="mobile-detail-preview-back"><svg viewBox="0 0 24 24"><path d="m15 5-7 7 7 7"/></svg></span><div class="mobile-post-author"><img :src="postAvatar(mobileAuthorDetailState.post)" :alt="mobileAuthorDetailState.post.author"><strong>{{ mobileAuthorDetailState.post.author }}</strong></div><span :class="['source-pill', 'mobile-post-source', sourceMeta[mobileAuthorDetailState.post.source].color]"><img class="source-icon" :src="sourceIconFor(mobileAuthorDetailState.post.source)" alt="">{{ sourceMeta[mobileAuthorDetailState.post.source].label }}</span></header>
       <section v-if="mobileDetailPreviewMedia(mobileAuthorDetailState.post)" :class="['mobile-detail-preview-media', { 'video-media': mobileDetailPreviewMedia(mobileAuthorDetailState.post).type === 'video' }]" :style="mobileDetailPreviewMedia(mobileAuthorDetailState.post).type === 'video' ? postVideoFrameStyle(mobileAuthorDetailState.post) : undefined"><img v-if="mobileDetailPreviewCover(mobileAuthorDetailState.post)" :src="previewMedia(mobileDetailPreviewCover(mobileAuthorDetailState.post))" :alt="mobileAuthorDetailState.post.author" loading="eager" decoding="async" fetchpriority="low"><span v-else class="mobile-detail-preview-video-mark"><svg viewBox="0 0 24 24"><path d="m9 7 8 5-8 5Z"/></svg></span></section>
