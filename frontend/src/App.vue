@@ -2621,7 +2621,33 @@ function openMasonryPost(post, event) {
     const returnPath = `${window.location.pathname}${window.location.search}`
     mobilePostReturnPath.value = window.location.pathname.startsWith('/post/') ? '/' : returnPath
     mobilePostReturnScrollY.value = window.scrollY
-    if (!returnPath.startsWith('/author/')) mobileAuthorDetailState.value = null
+    if (returnPath.startsWith('/author/') && mobileAuthorDetailState.value) {
+      mobileAuthorDetailState.value.authorScrollY = window.scrollY
+      mobileAuthorDetailState.value.detailScrollY = 0
+      mobileAuthorDetailState.value.returnToDetail = true
+      mobileAuthorScrollY = window.scrollY
+    }
+    if (!returnPath.startsWith('/author/') && !returnPath.startsWith('/tag/')) mobileAuthorDetailState.value = null
+    if (returnPath.startsWith('/tag/')) {
+      const tag = decodeURIComponent(returnPath.slice('/tag/'.length).split('?')[0])
+      const state = mobileAuthorDetailState.value || {
+        post,
+        tag,
+        authorPath: returnPath,
+        authorScrollY: window.scrollY,
+        detailScrollY: 0,
+        returnPath,
+        returnTitle: `#${tag}`,
+        returnPostIds: filteredPosts.value.map(item => item.id),
+        returnToDetail: true
+      }
+      state.post = post
+      state.tag = tag
+      state.authorScrollY = window.scrollY
+      state.detailScrollY = 0
+      state.returnToDetail = true
+      mobileAuthorDetailState.value = state
+    }
     updateRoute(`/post/${encodeURIComponent(post.id)}`, false, { lumicMobileDetail: true, lumicReturnPath: returnPath })
     window.scrollTo({ top: 0, behavior: 'auto' })
   }
@@ -2834,6 +2860,7 @@ function startMobileDetailReturnHandoff() {
   let previousSignature = ''
   const targetScrollY = Math.max(0, mobileAuthorDetailState.value?.detailScrollY || 0)
   const waitForDetailPage = () => {
+    window.scrollTo({ top: targetScrollY, behavior: 'auto' })
     const page = document.querySelector('.mobile-post-detail-page')
     const currentMedia = page?.querySelector('.mobile-post-media-slide.current img, .mobile-post-media-slide.current video')
     const mediaReady = !currentMedia
@@ -3802,8 +3829,9 @@ function handlePopState() {
   const leavingDetail = phonePortrait.value && Boolean(masonryDetailPost.value)
   const departingDetailPost = masonryDetailPost.value
   const returningToTimeline = leavingDetail && !window.location.pathname.startsWith('/post/') && !window.location.pathname.startsWith('/author/')
+  const returningFromDetailToPage = leavingDetail && !window.location.pathname.startsWith('/post/')
   const gestureTimelineReturn = returningToTimeline && mobileDetailGestureReturnPending
-  const detailRouteExit = returningToTimeline && !gestureTimelineReturn ? captureMobileDetailRouteExit(departingDetailPost) : null
+  const detailRouteExit = returningFromDetailToPage && !gestureTimelineReturn ? captureMobileDetailRouteExit(departingDetailPost) : null
   const currentPath = window.location.pathname + window.location.search
   const forwardDetailState = mobileForwardPageAvailable.value
     && mobileForwardPageState.value?.kind === 'detail'
@@ -3875,14 +3903,26 @@ function handlePopState() {
   }
   if (returningFromAuthor && window.location.pathname.startsWith('/post/')) startMobileDetailReturnHandoff()
   else if (returningFromAuthor && mobileAuthorDetailState.value?.returnToDetail === false) startMobileTimelineReturnHandoff(mobileAuthorDetailState.value.post)
-  if (returningToTimeline && (gestureTimelineReturn || !detailRouteExit)) startMobileTimelineReturnHandoff(departingDetailPost)
+  if (returningToTimeline && departingDetailPost) startMobileTimelineReturnHandoff(departingDetailPost)
+  if (returningFromDetailToPage && !returningToTimeline && departingDetailPost
+    && (window.location.pathname.startsWith('/author/') || window.location.pathname.startsWith('/tag/'))) {
+    // Prepare the complete destination page before the detail route is
+    // reconciled, so the back gesture uses the same continuous handoff as a
+    // detail -> timeline return instead of exposing a blank/old page.
+    startMobileAuthorPreviewHandoff(departingDetailPost)
+  }
   applyRoute()
   mobileDetailGestureReturnPending = false
   resetMobileAuthorPageSwipe()
   if (returningFromAuthor && window.location.pathname.startsWith('/post/') && mobileAuthorDetailState.value) restoreMobileScroll(mobileAuthorDetailState.value.detailScrollY)
   else if (returningFromAuthor && mobileAuthorDetailState.value?.returnToDetail === false) restoreMobileScroll(mobileAuthorDetailState.value.detailScrollY)
   else if (returningToTimeline) {
-    restoreMobileScroll(mobilePostReturnScrollY.value)
+    // The handoff owns scroll locking; a second restore here causes the
+    // browser's stale position to paint for one frame before snapping back.
+    if (detailRouteExit) runMobileDetailRouteExit(detailRouteExit)
+  }
+  else if (returningFromDetailToPage && mobileAuthorDetailState) {
+    restoreMobileScroll(mobileAuthorDetailState.authorScrollY || 0)
     if (detailRouteExit) runMobileDetailRouteExit(detailRouteExit)
   }
   if (forwardPagedState && (authorProfile.value || selectedTag.value)) {
@@ -4018,7 +4058,7 @@ watch(platformCards, cards => {
   if (!selectedPlatform.value) return
   selectedPlatform.value = cards.find(platform => platform.key === selectedPlatform.value.key) || null
 })
-onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; timelineView.value = localStorage.getItem('lumic-timeline-view') === 'masonry' ? 'masonry' : 'list'; loadRememberedLogin(); document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#080a0e' : '#fbf7ea'); phonePortraitQuery = window.matchMedia('(max-width: 760px)'); phonePortrait.value = isPhonePortraitScreen(); phonePortraitQuery.addEventListener('change', updatePhonePortrait); window.addEventListener('orientationchange', updatePhonePortrait); document.addEventListener('pointerover', useRoundedTooltip, true); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = postById.value.get(String(entry.target.dataset.postId)); const borderBox = Array.isArray(entry.borderBoxSize) ? entry.borderBoxSize[0] : entry.borderBoxSize; if (post) measurePostElement(post, entry.target, entry.target.dataset.layout || 'list', borderBox?.blockSize || entry.contentRect.height) }; scheduleTimelineWindow() }); initializeFeedListResizeObserver(); applyRoute(); if (phonePortrait.value && window.location.pathname === '/') openPhoneDefaultTimeline(); ensurePhoneExitBoundary(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', handlePopState); window.addEventListener('scroll', handleWindowScroll, { passive: true }); window.addEventListener('resize', handleWindowResize); scheduleTimelineWindow(); if (phonePortrait.value) showMobileControls() })
+onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; timelineView.value = localStorage.getItem('lumic-timeline-view') === 'masonry' ? 'masonry' : 'list'; if ('scrollRestoration' in window.history) window.history.scrollRestoration = 'manual'; loadRememberedLogin(); document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#080a0e' : '#fbf7ea'); phonePortraitQuery = window.matchMedia('(max-width: 760px)'); phonePortrait.value = isPhonePortraitScreen(); phonePortraitQuery.addEventListener('change', updatePhonePortrait); window.addEventListener('orientationchange', updatePhonePortrait); document.addEventListener('pointerover', useRoundedTooltip, true); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = postById.value.get(String(entry.target.dataset.postId)); const borderBox = Array.isArray(entry.borderBoxSize) ? entry.borderBoxSize[0] : entry.borderBoxSize; if (post) measurePostElement(post, entry.target, entry.target.dataset.layout || 'list', borderBox?.blockSize || entry.contentRect.height) }; scheduleTimelineWindow() }); initializeFeedListResizeObserver(); applyRoute(); if (phonePortrait.value && window.location.pathname === '/') openPhoneDefaultTimeline(); ensurePhoneExitBoundary(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', handlePopState); window.addEventListener('scroll', handleWindowScroll, { passive: true }); window.addEventListener('resize', handleWindowResize); scheduleTimelineWindow(); if (phonePortrait.value) showMobileControls() })
 onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLoop(); if (sessionPollTimer) window.clearInterval(sessionPollTimer); if (mobileControlsTimer) window.clearTimeout(mobileControlsTimer); if (mobileAuthorHandoffTimer) window.clearTimeout(mobileAuthorHandoffTimer); if (mobileDetailReturnHandoffTimer) window.clearTimeout(mobileDetailReturnHandoffTimer); if (mobileTimelineReturnHandoffTimer) window.clearTimeout(mobileTimelineReturnHandoffTimer); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); window.removeEventListener('orientationchange', updatePhonePortrait); document.removeEventListener('pointerover', useRoundedTooltip, true); postResizeObserver?.disconnect(); feedListResizeObserver?.disconnect(); observedPostElements.clear(); preloadedPreviewUrls.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); clearMobileDetailAnimation(); resetMobileDetailPageSwipe(); cleanupMobileDetailRouteExit(); lightboxHistoryActive = false; resetLightboxState(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', handlePopState); window.removeEventListener('scroll', handleWindowScroll); window.removeEventListener('resize', handleWindowResize); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (masonryMetricsFrame) window.cancelAnimationFrame(masonryMetricsFrame); if (confirmResolver) closeConfirmDialog(false) })
 </script>
 
