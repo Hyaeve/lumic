@@ -232,6 +232,8 @@ let meteorBurstTimer = 0
 let meteorCleanupTimer = 0
 let meteorBurstSequence = 0
 let mobileDetailTouch = null
+const mobileDetailPointers = new Map()
+let mobileDetailTwoFinger = null
 let mobileDetailSwipeClickBlocked = false
 let mobileDetailAnimationTimer = 0
 let mobileDetailAnimationFrame = 0
@@ -3003,6 +3005,8 @@ function finishMobileDetailTransition(commit = true) {
 }
 function resetMobileDetailTrack() {
   clearMobileDetailAnimation()
+  mobileDetailPointers.clear()
+  mobileDetailTwoFinger = null
   mobileDetailDragX.value = 0
   mobileDetailTrackShift.value = 0
   mobileDetailDragging.value = false
@@ -3041,6 +3045,26 @@ function openMobileDetailImage() {
   }
   openLightbox(masonryDetailPost.value, mobileDetailIndex.value)
 }
+function updateMobileDetailTwoFinger(event) {
+  if (!mobileDetailTwoFinger) return true
+  const pointer = mobileDetailPointers.get(event.pointerId)
+  if (!pointer) return true
+  pointer.x = event.clientX
+  pointer.y = event.clientY
+  const points = [...mobileDetailPointers.values()].slice(0, 2)
+  if (points.length < 2 || !lightbox.value.open) return true
+  const center = lightboxPointerCenter(points)
+  const distance = Math.max(1, lightboxPointerDistance(points))
+  const ratio = distance / mobileDetailTwoFinger.startDistance
+  lightbox.value.fit = true
+  lightbox.value.scale = Math.min(lightboxMaximumScale(), Math.max(0.25, Number((mobileDetailTwoFinger.startScale * ratio).toFixed(3))))
+  lightbox.value.x = mobileDetailTwoFinger.startX + center.x - mobileDetailTwoFinger.startCenter.x
+  lightbox.value.y = mobileDetailTwoFinger.startY + center.y - mobileDetailTwoFinger.startCenter.y
+  lightbox.value.dragging = true
+  scheduleLightboxScaleUpdate()
+  event.preventDefault?.()
+  return true
+}
 function mobileGesturePoint(event) {
   const touch = event.touches?.[0] || event.changedTouches?.[0]
   if (touch) return touch
@@ -3048,7 +3072,19 @@ function mobileGesturePoint(event) {
 }
 function beginMobileDetailSwipe(event) {
   const touch = mobileGesturePoint(event)
-  if (!touch || mobileDetailMedia.value.length < 2) return
+  if (!touch || !masonryDetailPost.value) return
+  mobileDetailPointers.set(event.pointerId, { id: event.pointerId, x: touch.clientX, y: touch.clientY })
+  if (mobileDetailPointers.size >= 2 && mobileDetailCurrentMedia.value?.type === 'image') {
+    const points = [...mobileDetailPointers.values()].slice(0, 2)
+    openLightbox(masonryDetailPost.value, mobileDetailIndex.value)
+    mobileDetailTwoFinger = { startDistance: Math.max(1, lightboxPointerDistance(points)), startCenter: lightboxPointerCenter(points), startScale: 1, startX: 0, startY: 0 }
+    mobileDetailTouch = null
+    mobileDetailDragging.value = false
+    mobileDetailSwipeClickBlocked = true
+    event.preventDefault?.()
+    return
+  }
+  if (mobileDetailMedia.value.length < 2) return
   if (mobileDetailAnimating.value) finishMobileDetailTransition(true)
   mobileDetailSwipeClickBlocked = false
   mobileDetailDragX.value = 0
@@ -3057,6 +3093,10 @@ function beginMobileDetailSwipe(event) {
   mobileDetailTouch = { x: touch.clientX, y: touch.clientY, time: event.timeStamp, prevX: touch.clientX, prevTime: event.timeStamp, lastX: touch.clientX, lastTime: event.timeStamp, axis: '' }
 }
 function updateMobileDetailSwipe(event) {
+  if (mobileDetailTwoFinger) {
+    updateMobileDetailTwoFinger(event)
+    return
+  }
   const touch = mobileGesturePoint(event)
   if (!touch || !mobileDetailTouch) return
   const deltaX = touch.clientX - mobileDetailTouch.x
@@ -3074,6 +3114,17 @@ function updateMobileDetailSwipe(event) {
   mobileDetailDragX.value = Math.max(-limit, Math.min(limit, deltaX))
 }
 function finishMobileDetailSwipe(event) {
+  if (mobileDetailPointers.has(event.pointerId)) mobileDetailPointers.delete(event.pointerId)
+  if (mobileDetailTwoFinger) {
+    if (mobileDetailPointers.size < 2) {
+      mobileDetailTwoFinger = null
+      if (lightbox.value.open) {
+        lightbox.value.dragging = false
+        clampMobileLightboxPosition(false)
+      }
+    }
+    return
+  }
   const touch = mobileGesturePoint(event)
   if (!touch || !mobileDetailTouch) return
   const deltaX = touch.clientX - mobileDetailTouch.x
@@ -3098,6 +3149,8 @@ function finishMobileDetailSwipe(event) {
   }, 205)
 }
 function cancelMobileDetailSwipe() {
+  mobileDetailPointers.clear()
+  mobileDetailTwoFinger = null
   if (!mobileDetailTouch) return
   mobileDetailTouch = null
   mobileDetailDragging.value = false
