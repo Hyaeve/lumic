@@ -3089,9 +3089,14 @@ function applyMobileDetailTwoFinger(points, event) {
     activateMobileDetailTwoFinger()
   }
   if (!lightbox.value.open) return true
-  const ratio = distance / mobileDetailTwoFinger.startDistance
+  // Use a damped *delta* from the default-fit scale instead of applying the
+  // complete finger-distance ratio. This keeps a small pinch subtle and lets
+  // the image grow progressively with the gesture.
+  const distanceDelta = distance - mobileDetailTwoFinger.startDistance
+  const pinchSensitivity = 0.72
+  const ratio = 1 + (distanceDelta / Math.max(120, mobileDetailTwoFinger.startDistance)) * pinchSensitivity
   lightbox.value.fit = true
-  lightbox.value.scale = Math.min(lightboxMaximumScale(), Math.max(0.25, Number((mobileDetailTwoFinger.startScale * ratio).toFixed(3))))
+  lightbox.value.scale = Math.min(lightboxMaximumScale(), Math.max(1, Number((mobileDetailTwoFinger.startScale * ratio).toFixed(3))))
   lightbox.value.x = mobileDetailTwoFinger.startX + center.x - mobileDetailTwoFinger.startCenter.x
   lightbox.value.y = mobileDetailTwoFinger.startY + center.y - mobileDetailTwoFinger.startCenter.y
   lightbox.value.dragging = true
