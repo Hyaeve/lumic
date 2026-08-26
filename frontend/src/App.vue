@@ -3047,6 +3047,7 @@ function openMobileDetailImage() {
 }
 function beginMobileDetailTwoFinger(points) {
   if (!masonryDetailPost.value || mobileDetailCurrentMedia.value?.type !== 'image' || points.length < 2) return false
+  if (mobileDetailTwoFinger || lightbox.value.open) return true
   openLightbox(masonryDetailPost.value, mobileDetailIndex.value)
   mobileDetailTwoFinger = {
     startDistance: Math.max(1, lightboxPointerDistance(points)),
@@ -3062,14 +3063,8 @@ function beginMobileDetailTwoFinger(points) {
   mobileDetailSwipeClickBlocked = true
   return true
 }
-function updateMobileDetailTwoFinger(event) {
-  if (!mobileDetailTwoFinger) return true
-  const pointer = mobileDetailPointers.get(event.pointerId)
-  if (!pointer) return true
-  pointer.x = event.clientX
-  pointer.y = event.clientY
-  const points = [...mobileDetailPointers.values()].slice(0, 2)
-  if (points.length < 2 || !lightbox.value.open) return true
+function applyMobileDetailTwoFinger(points, event) {
+  if (!mobileDetailTwoFinger || points.length < 2 || !lightbox.value.open) return true
   const center = lightboxPointerCenter(points)
   const distance = Math.max(1, lightboxPointerDistance(points))
   const ratio = distance / mobileDetailTwoFinger.startDistance
@@ -3081,6 +3076,44 @@ function updateMobileDetailTwoFinger(event) {
   scheduleLightboxScaleUpdate()
   event.preventDefault?.()
   return true
+}
+function updateMobileDetailTwoFinger(event) {
+  if (!mobileDetailTwoFinger) return true
+  const pointer = mobileDetailPointers.get(event.pointerId)
+  if (!pointer) return true
+  pointer.x = event.clientX
+  pointer.y = event.clientY
+  return applyMobileDetailTwoFinger([...mobileDetailPointers.values()].slice(0, 2), event)
+}
+function touchPoints(event) {
+  return [...(event.touches || [])].slice(0, 2).map(touch => ({ id: touch.identifier, x: touch.clientX, y: touch.clientY }))
+}
+function beginMobileDetailTouch(event) {
+  if (!phonePortrait.value || !masonryDetailPost.value || (event.touches?.length || 0) < 2 || mobileDetailCurrentMedia.value?.type !== 'image') return
+  if (mobileDetailTwoFinger || lightbox.value.open) return
+  const points = touchPoints(event)
+  mobileDetailPointers.clear()
+  points.forEach(point => mobileDetailPointers.set(point.id, point))
+  beginMobileDetailTwoFinger(points)
+  event.preventDefault()
+}
+function updateMobileDetailTouch(event) {
+  if (!mobileDetailTwoFinger || (event.touches?.length || 0) < 2) return
+  const points = touchPoints(event)
+  mobileDetailPointers.clear()
+  points.forEach(point => mobileDetailPointers.set(point.id, point))
+  applyMobileDetailTwoFinger(points, event)
+}
+function finishMobileDetailTouch(event) {
+  if (!mobileDetailTwoFinger) return
+  if ((event.touches?.length || 0) < 2) {
+    mobileDetailPointers.clear()
+    mobileDetailTwoFinger = null
+    if (lightbox.value.open) {
+      lightbox.value.dragging = false
+      clampMobileLightboxPosition(false)
+    }
+  }
 }
 function mobileGesturePoint(event) {
   const touch = event.touches?.[0] || event.changedTouches?.[0]
@@ -3249,6 +3282,10 @@ function commitMobileDetailVerticalSwipe(step, velocityY) {
   return true
 }
 function beginMobileDetailPageSwipe(event) {
+  if ((event.touches?.length || 0) >= 2) {
+    beginMobileDetailTouch(event)
+    return
+  }
   const touch = mobileGesturePoint(event)
   const target = event.target
   if (!touch || !masonryDetailPost.value || target?.closest?.('button, a, input, textarea, select, label')) return
@@ -3290,6 +3327,10 @@ function beginMobileDetailPageSwipe(event) {
   mobileReturnPreviewPosts.value.forEach(preloadMobileDetailPost)
 }
 function updateMobileDetailPageSwipe(event) {
+  if (mobileDetailTwoFinger || (event.touches?.length || 0) >= 2) {
+    updateMobileDetailTouch(event)
+    return
+  }
   if (mobileDetailTwoFinger) {
     updateMobileDetailTwoFinger(event)
     return
@@ -3346,6 +3387,10 @@ function updateMobileDetailPageSwipe(event) {
   mobileDetailPageDragY.value = resistedY
 }
 function finishMobileDetailPageSwipe(event) {
+  if (mobileDetailTwoFinger || event.touches) {
+    finishMobileDetailTouch(event)
+    if (mobileDetailTwoFinger || (event.touches?.length || 0) > 0) return
+  }
   if (mobileDetailPointers.has(event.pointerId)) mobileDetailPointers.delete(event.pointerId)
   if (mobileDetailTwoFinger) {
     if (mobileDetailPointers.size < 2) {
