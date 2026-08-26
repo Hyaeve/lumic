@@ -3067,15 +3067,29 @@ function activateMobileDetailTwoFinger() {
   if (!mobileDetailTwoFinger?.pending || lightbox.value.open) return
   openLightbox(masonryDetailPost.value, mobileDetailIndex.value)
   mobileDetailTwoFinger.pending = false
+  // The lightbox opens at its default fit scale. Keep the distance at the
+  // moment of activation as the new pinch baseline so the first move does
+  // not multiply the scale by the full distance between the two fingers.
+  const points = [...mobileDetailPointers.values()].slice(0, 2)
+  if (points.length >= 2) {
+    mobileDetailTwoFinger.startDistance = Math.max(1, lightboxPointerDistance(points))
+    mobileDetailTwoFinger.startCenter = lightboxPointerCenter(points)
+    mobileDetailTwoFinger.startScale = 1
+    mobileDetailTwoFinger.startX = 0
+    mobileDetailTwoFinger.startY = 0
+  }
 }
 function applyMobileDetailTwoFinger(points, event) {
   if (!mobileDetailTwoFinger || points.length < 2) return true
   const center = lightboxPointerCenter(points)
   const distance = Math.max(1, lightboxPointerDistance(points))
-  const ratio = distance / mobileDetailTwoFinger.startDistance
   const centerDelta = Math.hypot(center.x - mobileDetailTwoFinger.startCenter.x, center.y - mobileDetailTwoFinger.startCenter.y)
-  if (mobileDetailTwoFinger.pending && (Math.abs(distance - mobileDetailTwoFinger.startDistance) > 3 || centerDelta > 3)) activateMobileDetailTwoFinger()
+  if (mobileDetailTwoFinger.pending) {
+    if (Math.abs(distance - mobileDetailTwoFinger.startDistance) <= 3 && centerDelta <= 3) return true
+    activateMobileDetailTwoFinger()
+  }
   if (!lightbox.value.open) return true
+  const ratio = distance / mobileDetailTwoFinger.startDistance
   lightbox.value.fit = true
   lightbox.value.scale = Math.min(lightboxMaximumScale(), Math.max(0.25, Number((mobileDetailTwoFinger.startScale * ratio).toFixed(3))))
   lightbox.value.x = mobileDetailTwoFinger.startX + center.x - mobileDetailTwoFinger.startCenter.x
