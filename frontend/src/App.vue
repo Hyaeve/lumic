@@ -3045,6 +3045,23 @@ function openMobileDetailImage() {
   }
   openLightbox(masonryDetailPost.value, mobileDetailIndex.value)
 }
+function beginMobileDetailTwoFinger(points) {
+  if (!masonryDetailPost.value || mobileDetailCurrentMedia.value?.type !== 'image' || points.length < 2) return false
+  openLightbox(masonryDetailPost.value, mobileDetailIndex.value)
+  mobileDetailTwoFinger = {
+    startDistance: Math.max(1, lightboxPointerDistance(points)),
+    startCenter: lightboxPointerCenter(points),
+    startScale: 1,
+    startX: 0,
+    startY: 0
+  }
+  mobileDetailTouch = null
+  mobileDetailPageTouch = null
+  mobileDetailDragging.value = false
+  mobileDetailPageDragging.value = false
+  mobileDetailSwipeClickBlocked = true
+  return true
+}
 function updateMobileDetailTwoFinger(event) {
   if (!mobileDetailTwoFinger) return true
   const pointer = mobileDetailPointers.get(event.pointerId)
@@ -3076,11 +3093,7 @@ function beginMobileDetailSwipe(event) {
   mobileDetailPointers.set(event.pointerId, { id: event.pointerId, x: touch.clientX, y: touch.clientY })
   if (mobileDetailPointers.size >= 2 && mobileDetailCurrentMedia.value?.type === 'image') {
     const points = [...mobileDetailPointers.values()].slice(0, 2)
-    openLightbox(masonryDetailPost.value, mobileDetailIndex.value)
-    mobileDetailTwoFinger = { startDistance: Math.max(1, lightboxPointerDistance(points)), startCenter: lightboxPointerCenter(points), startScale: 1, startX: 0, startY: 0 }
-    mobileDetailTouch = null
-    mobileDetailDragging.value = false
-    mobileDetailSwipeClickBlocked = true
+    beginMobileDetailTwoFinger(points)
     event.preventDefault?.()
     return
   }
@@ -3239,6 +3252,12 @@ function beginMobileDetailPageSwipe(event) {
   const touch = mobileGesturePoint(event)
   const target = event.target
   if (!touch || !masonryDetailPost.value || target?.closest?.('button, a, input, textarea, select, label')) return
+  mobileDetailPointers.set(event.pointerId, { id: event.pointerId, x: touch.clientX, y: touch.clientY })
+  if (mobileDetailPointers.size >= 2 && mobileDetailCurrentMedia.value?.type === 'image') {
+    beginMobileDetailTwoFinger([...mobileDetailPointers.values()].slice(0, 2))
+    event.preventDefault?.()
+    return
+  }
   const systemGestureEdge = Math.max(22, Math.min(30, window.innerWidth * .065))
   if (touch.clientX <= systemGestureEdge || touch.clientX >= window.innerWidth - systemGestureEdge) return
   if (mobileDetailPageTimer) window.clearTimeout(mobileDetailPageTimer)
@@ -3271,6 +3290,10 @@ function beginMobileDetailPageSwipe(event) {
   mobileReturnPreviewPosts.value.forEach(preloadMobileDetailPost)
 }
 function updateMobileDetailPageSwipe(event) {
+  if (mobileDetailTwoFinger) {
+    updateMobileDetailTwoFinger(event)
+    return
+  }
   const touch = mobileGesturePoint(event)
   if (!touch || !mobileDetailPageTouch) return
   const dx = touch.clientX - mobileDetailPageTouch.x
@@ -3323,6 +3346,17 @@ function updateMobileDetailPageSwipe(event) {
   mobileDetailPageDragY.value = resistedY
 }
 function finishMobileDetailPageSwipe(event) {
+  if (mobileDetailPointers.has(event.pointerId)) mobileDetailPointers.delete(event.pointerId)
+  if (mobileDetailTwoFinger) {
+    if (mobileDetailPointers.size < 2) {
+      mobileDetailTwoFinger = null
+      if (lightbox.value.open) {
+        lightbox.value.dragging = false
+        clampMobileLightboxPosition(false)
+      }
+    }
+    return
+  }
   const touch = mobileGesturePoint(event)
   if (!touch || !mobileDetailPageTouch) return
   const touchState = mobileDetailPageTouch
@@ -3343,8 +3377,8 @@ function finishMobileDetailPageSwipe(event) {
   mobileDetailPageDragging.value = false
   mobileDetailPageAnimating.value = true
   if (!cancelled && touchState.verticalActive) {
-    const threshold = Math.min(196, window.innerHeight * .24)
-    const fastVertical = Math.abs(dy) > 64 && Math.abs(velocityY) > .82
+    const threshold = Math.min(250, window.innerHeight * .32)
+    const fastVertical = Math.abs(dy) > 96 && Math.abs(velocityY) > .95
     const step = dy < 0 ? 1 : -1
     if ((Math.abs(dy) >= threshold || fastVertical) && commitMobileDetailVerticalSwipe(step, velocityY)) return
     mobileDetailPageTransitionMs.value = Math.max(210, Math.min(280, 220 + Math.abs(mobileDetailPageDragY.value) * .16))
