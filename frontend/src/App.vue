@@ -213,6 +213,7 @@ const mobileLightboxEntering = ref(false)
 const mobileLightboxDotsVisible = ref(false)
 const lightboxZoomAnimating = ref(false)
 const mobileLightboxMenu = ref({ open: false, x: 0, y: 0 })
+const mobileDetailTwoFingerPreparing = ref(false)
 const meteorBurst = ref([])
 const lightboxPointers = new Map()
 let lightboxGesture = null
@@ -3056,6 +3057,7 @@ function beginMobileDetailTwoFinger(points) {
     startX: 0,
     startY: 0
   }
+  mobileDetailTwoFingerPreparing.value = true
   mobileDetailTouch = null
   mobileDetailPageTouch = null
   mobileDetailDragging.value = false
@@ -3067,6 +3069,7 @@ function activateMobileDetailTwoFinger() {
   if (!mobileDetailTwoFinger?.pending || lightbox.value.open) return
   openLightbox(masonryDetailPost.value, mobileDetailIndex.value)
   mobileDetailTwoFinger.pending = false
+  mobileDetailTwoFingerPreparing.value = false
   // The lightbox opens at its default fit scale. Keep the distance at the
   // moment of activation as the new pinch baseline so the first move does
   // not multiply the scale by the full distance between the two fingers.
@@ -3127,6 +3130,7 @@ function beginMobileDetailTouch(event) {
 }
 function updateMobileDetailTouch(event) {
   if (!mobileDetailTwoFinger || (event.touches?.length || 0) < 2) return
+  event.preventDefault()
   const points = touchPoints(event)
   mobileDetailPointers.clear()
   points.forEach(point => mobileDetailPointers.set(point.id, point))
@@ -3138,6 +3142,7 @@ function finishMobileDetailTouch(event) {
     // No outward pinch occurred: the two-finger preparation is cancelled.
     mobileDetailPointers.clear()
     mobileDetailTwoFinger = null
+    mobileDetailTwoFingerPreparing.value = false
     if (lightbox.value.open) {
       lightbox.value.dragging = false
       clampMobileLightboxPosition(false)
@@ -3152,6 +3157,7 @@ function mobileGesturePoint(event) {
 function beginMobileDetailSwipe(event) {
   const touch = mobileGesturePoint(event)
   if (!touch || !masonryDetailPost.value) return
+  if (event.pointerType !== 'touch') return
   mobileDetailPointers.set(event.pointerId, { id: event.pointerId, x: touch.clientX, y: touch.clientY })
   if (mobileDetailPointers.size >= 2 && mobileDetailCurrentMedia.value?.type === 'image') {
     const points = [...mobileDetailPointers.values()].slice(0, 2)
@@ -3195,6 +3201,7 @@ function finishMobileDetailSwipe(event) {
       // Pointer/touch ended before the outward pinch threshold: remain in the
       // detail page and do not enter view mode from a simple two-finger tap.
       mobileDetailTwoFinger = null
+      mobileDetailTwoFingerPreparing.value = false
       if (lightbox.value.open) {
         lightbox.value.dragging = false
         clampMobileLightboxPosition(false)
@@ -3228,6 +3235,7 @@ function finishMobileDetailSwipe(event) {
 function cancelMobileDetailSwipe() {
   mobileDetailPointers.clear()
   mobileDetailTwoFinger = null
+  mobileDetailTwoFingerPreparing.value = false
   if (!mobileDetailTouch) return
   mobileDetailTouch = null
   mobileDetailDragging.value = false
@@ -3250,6 +3258,7 @@ function resetMobileDetailPageSwipe() {
   mobileDetailPageAnimating.value = false
   mobileDetailPageTransitionMs.value = 320
   mobileDetailPageTransitionEasing.value = 'cubic-bezier(.2, .78, .18, 1)'
+  mobileDetailTwoFingerPreparing.value = false
 }
 function mobileDetailAdjacentPost(step) {
   return step > 0 ? mobileDetailNextPost.value : mobileDetailPreviousPost.value
@@ -3320,11 +3329,13 @@ function beginMobileDetailPageSwipe(event) {
   const touch = mobileGesturePoint(event)
   const target = event.target
   if (!touch || !masonryDetailPost.value || target?.closest?.('button, a, input, textarea, select, label')) return
-  mobileDetailPointers.set(event.pointerId, { id: event.pointerId, x: touch.clientX, y: touch.clientY })
-  if (mobileDetailPointers.size >= 2 && mobileDetailCurrentMedia.value?.type === 'image') {
-    beginMobileDetailTwoFinger([...mobileDetailPointers.values()].slice(0, 2))
-    event.preventDefault?.()
-    return
+  if (event.pointerType === 'touch' && event.pointerId != null) {
+    mobileDetailPointers.set(event.pointerId, { id: event.pointerId, x: touch.clientX, y: touch.clientY })
+    if (mobileDetailPointers.size >= 2 && mobileDetailCurrentMedia.value?.type === 'image') {
+      beginMobileDetailTwoFinger([...mobileDetailPointers.values()].slice(0, 2))
+      event.preventDefault?.()
+      return
+    }
   }
   const systemGestureEdge = Math.max(22, Math.min(30, window.innerWidth * .065))
   if (touch.clientX <= systemGestureEdge || touch.clientX >= window.innerWidth - systemGestureEdge) return
@@ -4537,7 +4548,7 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
       <section class="mobile-post-copy"><p v-if="mobileDetailNextPost.caption" class="caption">{{ mobileDetailNextPost.caption }}</p><div v-if="mobileDetailNextPost.tags?.length" class="tag-row"><span v-for="tag in mobileDetailNextPost.tags" :key="tag">#{{ tag }}</span></div></section>
       <footer class="mobile-post-detail-foot"><time :datetime="mobileDetailNextPost.published">{{ postDateTime(mobileDetailNextPost.published) }}</time><div class="mobile-detail-preview-actions"><i></i><i></i></div></footer>
     </aside>
-    <main v-if="phonePortrait && masonryDetailPost" :class="['content', 'mobile-post-detail-page', { 'page-dragging': mobileDetailPageDragging }]" :style="mobileDetailPageStyle" @touchstart="beginMobileDetailPageSwipe" @touchmove="updateMobileDetailPageSwipe" @touchend="finishMobileDetailPageSwipe" @touchcancel="finishMobileDetailPageSwipe">
+    <main v-if="phonePortrait && masonryDetailPost" :class="['content', 'mobile-post-detail-page', { 'page-dragging': mobileDetailPageDragging, 'mobile-detail-two-finger-preparing': mobileDetailTwoFingerPreparing }]" :style="mobileDetailPageStyle" @touchstart="beginMobileDetailPageSwipe" @touchmove="updateMobileDetailPageSwipe" @touchend="finishMobileDetailPageSwipe" @touchcancel="finishMobileDetailPageSwipe">
       <header class="mobile-post-detail-head">
         <button class="mobile-post-back" type="button" title="返回动态页" aria-label="返回动态页" @click="closePostDetail"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg></button>
         <button class="mobile-post-author" type="button" @click="openAuthor(masonryDetailPost)"><img :src="postAvatar(masonryDetailPost)" data-fallback-index="0" :alt="masonryDetailPost.author" referrerpolicy="no-referrer" @error="handlePostAvatarError($event, masonryDetailPost)"><strong>{{ masonryDetailPost.author }}</strong></button>
@@ -4546,7 +4557,7 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
       <section v-if="mobileDetailCurrentMedia" :class="['mobile-post-media-stage', { 'video-media': mobileDetailCurrentMedia.type === 'video' }, mobileDetailCurrentMedia.type === 'video' ? postVideoFrameClass(masonryDetailPost) : '']" :style="mobileDetailCurrentMedia.type === 'video' ? postVideoFrameStyle(masonryDetailPost) : undefined" @touchstart="beginMobileDetailTouch" @touchmove="updateMobileDetailTouch" @touchend="finishMobileDetailTouch" @touchcancel="finishMobileDetailTouch" @pointerdown.stop="beginMobileDetailSwipe" @pointermove.stop="updateMobileDetailSwipe" @pointerup.stop="finishMobileDetailSwipe" @pointercancel.stop="cancelMobileDetailSwipe">
         <div class="mobile-post-media-track" :style="mobileDetailTrackStyle">
           <div v-for="slide in mobileDetailSlides" :key="`${slide.position}:${slide.media.key}`" :class="['mobile-post-media-slide', { current: slide.position === 0 }]">
-            <img v-if="slide.media.type === 'image'" :src="previewMedia(slide.media.src)" :alt="`${masonryDetailPost.author} 的第 ${slide.index + 1} 张图片`" :loading="slide.position === 0 ? 'eager' : 'lazy'" decoding="async" :fetchpriority="slide.position === 0 ? 'high' : 'low'" @click="slide.position === 0 && openMobileDetailImage()">
+            <img v-if="slide.media.type === 'image'" :src="previewMedia(slide.media.src)" :alt="`${masonryDetailPost.author} 的第 ${slide.index + 1} 张图片`" :loading="slide.position === 0 ? 'eager' : 'lazy'" decoding="async" :fetchpriority="slide.position === 0 ? 'high' : 'low'">
             <video v-else :src="slide.media.src" :poster="slide.media.poster ? previewMedia(slide.media.poster) : undefined" :controls="slide.position === 0" playsinline :autoplay="slide.position === 0" muted :preload="slide.position === 0 ? 'metadata' : 'none'" @loadedmetadata="slide.position === 0 && setPostVideoRatio(masonryDetailPost, $event)"></video>
           </div>
         </div>

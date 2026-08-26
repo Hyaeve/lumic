@@ -2030,6 +2030,8 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
 .mobile-detail-route-exit-media { position: fixed; z-index: 2; display: grid; place-items: center; overflow: hidden; transform-origin: left top; will-change: transform, border-radius, box-shadow; }
 .mobile-detail-route-exit-media > :is(img, video) { display: block; width: 100%; height: 100%; max-width: none; max-height: none; background: inherit; object-fit: contain; }
 .mobile-post-detail-page { position: relative; z-index: 1; min-height: 100dvh; background: #fbf7ea; box-shadow: -16px 0 38px #17130b24; }
+.mobile-post-detail-page.mobile-detail-two-finger-preparing > :not(.mobile-post-media-stage) { filter: blur(12px) saturate(.86); transition: filter .16s ease; }
+.dark .mobile-post-detail-page.mobile-detail-two-finger-preparing > :not(.mobile-post-media-stage) { filter: blur(14px) saturate(.82); }
 .mobile-post-detail-head { display: flex; align-items: center; gap: 7px; min-height: 58px; padding: 8px 12px; background: color-mix(in srgb, var(--card) 96%, transparent); border-bottom: 1px solid var(--line); backdrop-filter: blur(16px); }
 .mobile-post-back { display: grid; place-items: center; width: 34px; height: 38px; flex: none; padding: 0; color: var(--ink); background: transparent; border-radius: 7px; }
 .mobile-post-back svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
