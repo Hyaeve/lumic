@@ -2037,7 +2037,7 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
 .mobile-post-author img { width: 38px; height: 38px; flex: none; border-radius: 50%; object-fit: cover; }
 .mobile-post-author strong { overflow: hidden; font-size: 14px; font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
 .mobile-post-source { margin-left: auto; flex: none; max-width: 108px; }
-.mobile-post-media-stage { position: relative; display: grid; place-items: center; overflow: hidden; width: 100%; min-height: 240px; max-height: 72dvh; background: var(--mobile-detail-media-bg, #f2ead8); touch-action: pan-y; }
+.mobile-post-media-stage { position: relative; display: grid; place-items: center; overflow: hidden; width: 100%; min-height: 240px; max-height: 72dvh; background: var(--mobile-detail-media-bg, #f2ead8); touch-action: none; }
 .mobile-post-media-stage.video-media { aspect-ratio: var(--post-video-ratio, 16 / 9); }
 .mobile-post-media-track { display: flex; align-items: center; width: 100%; min-height: inherit; will-change: transform; backface-visibility: hidden; }
 .mobile-post-media-slide { display: grid; place-items: center; min-width: 0; flex: 0 0 100%; min-height: inherit; background: var(--mobile-detail-media-bg, #f2ead8); }

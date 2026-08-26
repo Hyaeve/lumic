@@ -3048,8 +3048,8 @@ function openMobileDetailImage() {
 function beginMobileDetailTwoFinger(points) {
   if (!masonryDetailPost.value || mobileDetailCurrentMedia.value?.type !== 'image' || points.length < 2) return false
   if (mobileDetailTwoFinger || lightbox.value.open) return true
-  openLightbox(masonryDetailPost.value, mobileDetailIndex.value)
   mobileDetailTwoFinger = {
+    pending: true,
     startDistance: Math.max(1, lightboxPointerDistance(points)),
     startCenter: lightboxPointerCenter(points),
     startScale: 1,
@@ -3063,11 +3063,19 @@ function beginMobileDetailTwoFinger(points) {
   mobileDetailSwipeClickBlocked = true
   return true
 }
+function activateMobileDetailTwoFinger() {
+  if (!mobileDetailTwoFinger?.pending || lightbox.value.open) return
+  openLightbox(masonryDetailPost.value, mobileDetailIndex.value)
+  mobileDetailTwoFinger.pending = false
+}
 function applyMobileDetailTwoFinger(points, event) {
-  if (!mobileDetailTwoFinger || points.length < 2 || !lightbox.value.open) return true
+  if (!mobileDetailTwoFinger || points.length < 2) return true
   const center = lightboxPointerCenter(points)
   const distance = Math.max(1, lightboxPointerDistance(points))
   const ratio = distance / mobileDetailTwoFinger.startDistance
+  const centerDelta = Math.hypot(center.x - mobileDetailTwoFinger.startCenter.x, center.y - mobileDetailTwoFinger.startCenter.y)
+  if (mobileDetailTwoFinger.pending && (Math.abs(distance - mobileDetailTwoFinger.startDistance) > 3 || centerDelta > 3)) activateMobileDetailTwoFinger()
+  if (!lightbox.value.open) return true
   lightbox.value.fit = true
   lightbox.value.scale = Math.min(lightboxMaximumScale(), Math.max(0.25, Number((mobileDetailTwoFinger.startScale * ratio).toFixed(3))))
   lightbox.value.x = mobileDetailTwoFinger.startX + center.x - mobileDetailTwoFinger.startCenter.x
@@ -3107,6 +3115,7 @@ function updateMobileDetailTouch(event) {
 function finishMobileDetailTouch(event) {
   if (!mobileDetailTwoFinger) return
   if ((event.touches?.length || 0) < 2) {
+    if (mobileDetailTwoFinger.pending) activateMobileDetailTwoFinger()
     mobileDetailPointers.clear()
     mobileDetailTwoFinger = null
     if (lightbox.value.open) {
@@ -3163,6 +3172,7 @@ function finishMobileDetailSwipe(event) {
   if (mobileDetailPointers.has(event.pointerId)) mobileDetailPointers.delete(event.pointerId)
   if (mobileDetailTwoFinger) {
     if (mobileDetailPointers.size < 2) {
+      if (mobileDetailTwoFinger.pending) activateMobileDetailTwoFinger()
       mobileDetailTwoFinger = null
       if (lightbox.value.open) {
         lightbox.value.dragging = false
@@ -3422,8 +3432,8 @@ function finishMobileDetailPageSwipe(event) {
   mobileDetailPageDragging.value = false
   mobileDetailPageAnimating.value = true
   if (!cancelled && touchState.verticalActive) {
-    const threshold = Math.min(250, window.innerHeight * .32)
-    const fastVertical = Math.abs(dy) > 96 && Math.abs(velocityY) > .95
+    const threshold = Math.min(320, window.innerHeight * .4)
+    const fastVertical = Math.abs(dy) > 128 && Math.abs(velocityY) > 1.1
     const step = dy < 0 ? 1 : -1
     if ((Math.abs(dy) >= threshold || fastVertical) && commitMobileDetailVerticalSwipe(step, velocityY)) return
     mobileDetailPageTransitionMs.value = Math.max(210, Math.min(280, 220 + Math.abs(mobileDetailPageDragY.value) * .16))
@@ -4512,7 +4522,7 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
         <button class="mobile-post-author" type="button" @click="openAuthor(masonryDetailPost)"><img :src="postAvatar(masonryDetailPost)" data-fallback-index="0" :alt="masonryDetailPost.author" referrerpolicy="no-referrer" @error="handlePostAvatarError($event, masonryDetailPost)"><strong>{{ masonryDetailPost.author }}</strong></button>
         <span :class="['source-pill', 'mobile-post-source', sourceMeta[masonryDetailPost.source].color]"><img :class="['source-icon', { 'twitter-night-icon': masonryDetailPost.source === 'twitter' && isDark }]" :src="sourceIconFor(masonryDetailPost.source)" :alt="`${sourceMeta[masonryDetailPost.source].label}图标`">{{ sourceMeta[masonryDetailPost.source].label }}</span>
       </header>
-      <section v-if="mobileDetailCurrentMedia" :class="['mobile-post-media-stage', { 'video-media': mobileDetailCurrentMedia.type === 'video' }, mobileDetailCurrentMedia.type === 'video' ? postVideoFrameClass(masonryDetailPost) : '']" :style="mobileDetailCurrentMedia.type === 'video' ? postVideoFrameStyle(masonryDetailPost) : undefined" @pointerdown.stop="beginMobileDetailSwipe" @pointermove.stop="updateMobileDetailSwipe" @pointerup.stop="finishMobileDetailSwipe" @pointercancel.stop="cancelMobileDetailSwipe">
+      <section v-if="mobileDetailCurrentMedia" :class="['mobile-post-media-stage', { 'video-media': mobileDetailCurrentMedia.type === 'video' }, mobileDetailCurrentMedia.type === 'video' ? postVideoFrameClass(masonryDetailPost) : '']" :style="mobileDetailCurrentMedia.type === 'video' ? postVideoFrameStyle(masonryDetailPost) : undefined" @touchstart="beginMobileDetailTouch" @touchmove="updateMobileDetailTouch" @touchend="finishMobileDetailTouch" @touchcancel="finishMobileDetailTouch" @pointerdown.stop="beginMobileDetailSwipe" @pointermove.stop="updateMobileDetailSwipe" @pointerup.stop="finishMobileDetailSwipe" @pointercancel.stop="cancelMobileDetailSwipe">
         <div class="mobile-post-media-track" :style="mobileDetailTrackStyle">
           <div v-for="slide in mobileDetailSlides" :key="`${slide.position}:${slide.media.key}`" :class="['mobile-post-media-slide', { current: slide.position === 0 }]">
             <img v-if="slide.media.type === 'image'" :src="previewMedia(slide.media.src)" :alt="`${masonryDetailPost.author} 的第 ${slide.index + 1} 张图片`" :loading="slide.position === 0 ? 'eager' : 'lazy'" decoding="async" :fetchpriority="slide.position === 0 ? 'high' : 'low'" @click="slide.position === 0 && openMobileDetailImage()">
