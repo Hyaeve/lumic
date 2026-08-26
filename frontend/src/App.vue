@@ -3083,16 +3083,17 @@ function applyMobileDetailTwoFinger(points, event) {
   if (!mobileDetailTwoFinger || points.length < 2) return true
   const center = lightboxPointerCenter(points)
   const distance = Math.max(1, lightboxPointerDistance(points))
-  const centerDelta = Math.hypot(center.x - mobileDetailTwoFinger.startCenter.x, center.y - mobileDetailTwoFinger.startCenter.y)
+  const distanceDelta = distance - mobileDetailTwoFinger.startDistance
   if (mobileDetailTwoFinger.pending) {
-    if (Math.abs(distance - mobileDetailTwoFinger.startDistance) <= 3 && centerDelta <= 3) return true
+    // A two-finger tap only arms the gesture. Do not open the lightbox until
+    // the fingers actually spread apart; a tap, pan, or pinch-in is cancelled.
+    if (distanceDelta <= 8) return true
     activateMobileDetailTwoFinger()
   }
   if (!lightbox.value.open) return true
   // Use a damped *delta* from the default-fit scale instead of applying the
   // complete finger-distance ratio. This keeps a small pinch subtle and lets
   // the image grow progressively with the gesture.
-  const distanceDelta = distance - mobileDetailTwoFinger.startDistance
   const pinchSensitivity = 0.72
   const ratio = 1 + (distanceDelta / Math.max(120, mobileDetailTwoFinger.startDistance)) * pinchSensitivity
   lightbox.value.fit = true
@@ -3134,7 +3135,7 @@ function updateMobileDetailTouch(event) {
 function finishMobileDetailTouch(event) {
   if (!mobileDetailTwoFinger) return
   if ((event.touches?.length || 0) < 2) {
-    if (mobileDetailTwoFinger.pending) activateMobileDetailTwoFinger()
+    // No outward pinch occurred: the two-finger preparation is cancelled.
     mobileDetailPointers.clear()
     mobileDetailTwoFinger = null
     if (lightbox.value.open) {
@@ -3191,7 +3192,8 @@ function finishMobileDetailSwipe(event) {
   if (mobileDetailPointers.has(event.pointerId)) mobileDetailPointers.delete(event.pointerId)
   if (mobileDetailTwoFinger) {
     if (mobileDetailPointers.size < 2) {
-      if (mobileDetailTwoFinger.pending) activateMobileDetailTwoFinger()
+      // Pointer/touch ended before the outward pinch threshold: remain in the
+      // detail page and do not enter view mode from a simple two-finger tap.
       mobileDetailTwoFinger = null
       if (lightbox.value.open) {
         lightbox.value.dragging = false
