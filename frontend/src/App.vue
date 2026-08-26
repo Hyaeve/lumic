@@ -1997,9 +1997,25 @@ function mobileLightboxBounds() {
   const image = currentLightboxImage()
   if (!image) return { x: 0, y: 0 }
   const scale = Math.max(.01, lightbox.value.scale)
+  const viewportWidth = Math.max(1, window.innerWidth)
+  const viewportHeight = Math.max(1, window.innerHeight)
+  const naturalWidth = Number(image.naturalWidth) || image.clientWidth
+  const naturalHeight = Number(image.naturalHeight) || image.clientHeight
+  let contentWidth = image.clientWidth * scale
+  let contentHeight = image.clientHeight * scale
+  if (naturalWidth > 0 && naturalHeight > 0) {
+    if (lightbox.value.fit) {
+      const fitScale = Math.min(viewportWidth / naturalWidth, viewportHeight / naturalHeight)
+      contentWidth = naturalWidth * fitScale * scale
+      contentHeight = naturalHeight * fitScale * scale
+    } else {
+      contentWidth = naturalWidth * scale
+      contentHeight = naturalHeight * scale
+    }
+  }
   return {
-    x: Math.max(0, (image.clientWidth * scale - window.innerWidth) / 2),
-    y: Math.max(0, (image.clientHeight * scale - window.innerHeight) / 2)
+    x: Math.max(0, (contentWidth - viewportWidth) / 2),
+    y: Math.max(0, (contentHeight - viewportHeight) / 2)
   }
 }
 function dampBeyond(value, limit, resistance = .24) {
@@ -2048,7 +2064,7 @@ function startMobileLightboxInertia(velocityX, velocityY) {
     const settledX = settleAxis(lightbox.value.x, vx, bounds.x)
     const settledY = settleAxis(lightbox.value.y, vy, bounds.y)
     lightbox.value.x = settledX.value
-    lightbox.value.y = settledY.value
+    lightbox.value.y = Math.max(-bounds.y, Math.min(bounds.y, settledY.value))
     vx = settledX.velocity * Math.pow(.91, elapsed / 16)
     vy = settledY.velocity * Math.pow(.91, elapsed / 16)
     if (Math.hypot(vx, vy) < .025 && Math.abs(lightbox.value.x) <= bounds.x + .8 && Math.abs(lightbox.value.y) <= bounds.y + .8) {
@@ -2147,7 +2163,9 @@ function moveLightboxGesture(event) {
       const edgeOverscroll = lightboxGesture.axis === 'horizontal' ? mobileLightboxEdgeOverscroll(rawX, bounds) : 0
       lightboxGesture.edgeOverscroll = edgeOverscroll
       lightbox.value.x = dampBeyond(rawX, bounds.x)
-      lightbox.value.y = dampBeyond(rawY, bounds.y)
+      // Keep vertical movement inside the actual image content. Horizontal
+      // overscroll remains available for the adjacent-image gesture.
+      lightbox.value.y = Math.max(-bounds.y, Math.min(bounds.y, rawY))
       if (Math.abs(edgeOverscroll) > 28 && lightbox.value.media.length > 1) {
         mobileLightboxDragging.value = true
         mobileLightboxDragX.value = edgeOverscroll * .32
@@ -3103,6 +3121,7 @@ function applyMobileDetailTwoFinger(points, event) {
   lightbox.value.scale = Math.min(lightboxMaximumScale(), Math.max(1, Number((mobileDetailTwoFinger.startScale * ratio).toFixed(3))))
   lightbox.value.x = mobileDetailTwoFinger.startX + center.x - mobileDetailTwoFinger.startCenter.x
   lightbox.value.y = mobileDetailTwoFinger.startY + center.y - mobileDetailTwoFinger.startCenter.y
+  clampMobileLightboxPosition(false)
   lightbox.value.dragging = true
   scheduleLightboxScaleUpdate()
   event.preventDefault?.()
