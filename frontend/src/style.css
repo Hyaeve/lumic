@@ -1943,6 +1943,10 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
 .dark .masonry-detail-modal { background: #15171ded; border-color: #30343e; box-shadow: 0 30px 90px #000c; }
 
 .mobile-author-swipe-preview { position: fixed; inset: 0; z-index: 0; overflow: hidden; padding: calc(max(12px, env(safe-area-inset-top)) + 20px) 12px 20px; background: #fbf7ea; pointer-events: none; content-visibility: visible; contain: layout paint style; will-change: transform, opacity; }
+.mobile-detail-swipe-preview { position: fixed; inset: 0; z-index: 3; overflow: hidden; min-height: 100dvh; padding-top: env(safe-area-inset-top); background: #fbf7ea; pointer-events: none; content-visibility: visible; contain: layout paint style; box-shadow: -16px 0 38px #17130b24; will-change: transform, opacity; }
+.mobile-detail-swipe-preview .mobile-post-detail-head { position: relative; top: auto; }
+.mobile-detail-swipe-preview .mobile-post-copy { min-height: 96px; }
+.dark .mobile-detail-swipe-preview { background: #0e1015; box-shadow: -16px 0 42px #0008; }
 .mobile-timeline-returning { visibility: hidden; }
 .mobile-transition-page-content { min-height: 100dvh; will-change: transform; }
 .mobile-transition-page-content > header { display: flex; align-items: center; gap: 10px; min-height: 58px; padding: 7px 4px 12px; border-bottom: 1px solid var(--line); }

@@ -396,6 +396,20 @@ const mobileDetailPageStyle = computed(() => {
   }
 })
 const mobileAuthorPreviewDisplayPost = computed(() => masonryDetailPost.value || mobileAuthorPreviewPost.value || mobileForwardPageState.value?.post || null)
+const mobileTimelineDetailPreviewPost = computed(() => {
+  if (!mobileTimelineCanReturn.value || mobileForwardPageState.value?.kind !== 'detail') return null
+  return mobileForwardPageState.value.post || null
+})
+const mobileTimelineDetailPreviewStyle = computed(() => {
+  const width = typeof window === 'undefined' ? 390 : Math.max(1, window.innerWidth)
+  const progress = Math.min(1, Math.max(0, -mobileAuthorPageDragX.value) / width)
+  return {
+    zIndex: 3,
+    opacity: String(.96 + progress * .04),
+    transform: `translate3d(${100 - progress * 100}%, 0, 0)`,
+    transition: mobileAuthorPageDragging.value ? 'none' : mobileAuthorPageAnimating.value ? 'transform .32s cubic-bezier(.16,.88,.22,1)' : 'none'
+  }
+})
 const mobileAuthorTimelinePosts = computed(() => {
   const post = mobileAuthorPreviewDisplayPost.value
   if (!post) return []
@@ -3543,6 +3557,11 @@ function beginMobileAuthorPageSwipe(event) {
   mobileAuthorPageTouch = { x: touch.clientX, y: touch.clientY, time: event.timeStamp, axis: '', fromTimeline, prevX: touch.clientX, prevTime: event.timeStamp, lastX: touch.clientX, lastTime: event.timeStamp }
   mobileAuthorPageDragging.value = false
   mobileAuthorPageAnimating.value = false
+  if (fromTimeline && mobileForwardPageState.value?.kind === 'detail') {
+    const detailPost = mobileForwardPageState.value.post
+    preloadMobileDetailPost(detailPost)
+    void preloadPostAvatar(detailPost)
+  }
   if (fromAuthorPage && mobileAuthorDetailState.value?.returnToDetail !== false) {
     const detailPost = mobileAuthorDetailState.value.post
     preloadMobileDetailPost(detailPost)
@@ -4489,7 +4508,21 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
         <button type="button" :disabled="subscriptionPage >= subscriptionPageCount" title="下一页" aria-label="下一页" @click="subscriptionPage++"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 5 7 7-7 7"/></svg></button>
       </nav>
     </main>
-    <aside v-if="phonePortrait && mobileAuthorPreviewDisplayPost && !mobileDetailForwardHandoff && (mobileAuthorPreviewHandoff || mobileDetailPageDragging || mobileDetailPageAnimating || (mobileTimelineCanReturn && (mobileAuthorPageDragging || mobileAuthorPageAnimating)))" class="mobile-author-swipe-preview" :style="mobileAuthorPreviewStyle" aria-hidden="true">
+    <aside v-if="phonePortrait && mobileTimelineDetailPreviewPost && !mobileDetailForwardHandoff && (mobileAuthorPageDragging || mobileAuthorPageAnimating)" class="mobile-detail-swipe-preview" :style="mobileTimelineDetailPreviewStyle" aria-hidden="true">
+      <header class="mobile-post-detail-head">
+        <span class="mobile-detail-preview-back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg></span>
+        <div class="mobile-post-author"><img :src="postAvatar(mobileTimelineDetailPreviewPost)" :alt="mobileTimelineDetailPreviewPost.author" referrerpolicy="no-referrer"><strong>{{ mobileTimelineDetailPreviewPost.author }}</strong></div>
+        <span :class="['source-pill', 'mobile-post-source', sourceMeta[mobileTimelineDetailPreviewPost.source].color]"><img class="source-icon" :src="sourceIconFor(mobileTimelineDetailPreviewPost.source)" alt="">{{ sourceMeta[mobileTimelineDetailPreviewPost.source].label }}</span>
+      </header>
+      <section v-if="mobileDetailPreviewMedia(mobileTimelineDetailPreviewPost)" :class="['mobile-detail-preview-media', { 'video-media': mobileDetailPreviewMedia(mobileTimelineDetailPreviewPost).type === 'video' }]" :style="mobileDetailPreviewMedia(mobileTimelineDetailPreviewPost).type === 'video' ? postVideoFrameStyle(mobileTimelineDetailPreviewPost) : undefined">
+        <img v-if="mobileDetailPreviewMedia(mobileTimelineDetailPreviewPost).type === 'image'" :src="previewMedia(mobileDetailPreviewMedia(mobileTimelineDetailPreviewPost).src)" alt="" loading="eager" decoding="async" fetchpriority="high">
+        <img v-else-if="mobileDetailPreviewMedia(mobileTimelineDetailPreviewPost).poster" :src="previewMedia(mobileDetailPreviewMedia(mobileTimelineDetailPreviewPost).poster)" alt="" loading="eager" decoding="async" fetchpriority="high">
+        <span v-else class="mobile-detail-preview-video-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m9 7 8 5-8 5Z"/></svg></span>
+      </section>
+      <section class="mobile-post-copy"><p v-if="mobileTimelineDetailPreviewPost.caption" class="caption">{{ mobileTimelineDetailPreviewPost.caption }}</p><div v-if="mobileTimelineDetailPreviewPost.tags?.length" class="tag-row"><span v-for="tag in mobileTimelineDetailPreviewPost.tags" :key="tag">#{{ tag }}</span></div></section>
+      <footer class="mobile-post-detail-foot"><time :datetime="mobileTimelineDetailPreviewPost.published">{{ postDateTime(mobileTimelineDetailPreviewPost.published) }}</time><div class="mobile-detail-preview-actions"><i></i><i></i></div></footer>
+    </aside>
+    <aside v-if="phonePortrait && mobileAuthorPreviewDisplayPost && !mobileTimelineCanReturn && !mobileDetailForwardHandoff && (mobileAuthorPreviewHandoff || mobileDetailPageDragging || mobileDetailPageAnimating || (mobileTimelineCanReturn && (mobileAuthorPageDragging || mobileAuthorPageAnimating)))" class="mobile-author-swipe-preview" :style="mobileAuthorPreviewStyle" aria-hidden="true">
       <div class="mobile-transition-page-content" :style="mobileAuthorPreviewContentStyle">
       <header class="topbar author-page-header mobile-author-preview-head"><div class="author-profile-main"><img :key="'preview:' + authorAvatarKey(mobileAuthorPreviewDisplayPost) + ':' + postAvatar(mobileAuthorPreviewDisplayPost)" :src="postAvatar(mobileAuthorPreviewDisplayPost)" :alt="mobileAuthorPreviewDisplayPost.author" @load="handlePostAvatarLoad($event, mobileAuthorPreviewDisplayPost)" @error="handlePostAvatarError($event, mobileAuthorPreviewDisplayPost)"><div><p class="eyebrow">AUTHOR TIMELINE · {{ sourceMeta[mobileAuthorPreviewDisplayPost.source].label }}</p><h1>{{ mobileAuthorPreviewDisplayPost.author }}</h1><p class="subtitle">共 {{ mobileAuthorTimelinePosts.length }} 条已拉取动态</p></div></div></header>
       <div class="section-heading mobile-author-preview-heading"><div class="filters"><button class="timeline-sort-button" type="button" tabindex="-1"><span class="timeline-sort-symbol" :style="{ '--nav-mask': `url(${timelineSort === 'newest' ? newestSortIcon : oldestSortIcon})` }"></span></button><button class="timeline-view-button timeline-toolbar-button" type="button" tabindex="-1"><span :class="['timeline-view-symbol', { 'list-view-symbol': !isMasonryView }]" :style="{ '--nav-mask': `url(${isMasonryView ? masonryViewIcon : listViewIcon})` }"></span></button><button class="timeline-refresh-button timeline-toolbar-button" type="button" tabindex="-1"><span class="timeline-refresh-symbol" :style="{ '--nav-mask': `url(${refreshIcon})` }"></span></button></div><div class="timeline-tools"><label class="timeline-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><input type="search" value="" placeholder="搜索" tabindex="-1" readonly></label></div></div>
