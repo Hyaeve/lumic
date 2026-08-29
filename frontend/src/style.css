@@ -46,7 +46,7 @@ a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color
 .pull-avatar-static { width: 48px; height: 48px; flex: none; }
 .app-shell > .sidebar, .app-shell > .content, .app-shell > .settings-page, .app-shell > .add-fab, .app-shell > .masonry-detail-backdrop { transition: filter .22s ease; }
 .app-shell.lightbox-active > .sidebar, .app-shell.lightbox-active > .content, .app-shell.lightbox-active > .settings-page, .app-shell.lightbox-active > .add-fab, .app-shell.lightbox-active > .masonry-detail-backdrop { filter: blur(18px) brightness(.72) saturate(.78); pointer-events: none; }
-.lightbox-layer { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; overflow: hidden; padding: 38px 54px 104px; background: #10161470; backdrop-filter: blur(11px); -webkit-backdrop-filter: blur(11px); animation: lightbox-layer-in .25s cubic-bezier(.2,.8,.2,1) both; }
+.lightbox-layer { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; overflow: hidden; padding: 38px 54px 104px; background: #10161470; backdrop-filter: blur(11px); animation: lightbox-layer-in .25s cubic-bezier(.2,.8,.2,1) both; }
 .lightbox-layer.closing { animation: lightbox-layer-out .3s cubic-bezier(.22,.72,.2,1) both; pointer-events: none; }
 .lightbox-layer.closing .lightbox-image-stage { animation: lightbox-image-return .36s cubic-bezier(.16,.88,.22,1) both; }
 .lightbox-layer figure { display: grid; place-items: center; min-width: 100%; min-height: 100%; margin: 0; }
@@ -122,7 +122,7 @@ a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color
 @keyframes mobile-lightbox-layer-out { to { opacity: 0; backdrop-filter: blur(3px) saturate(.82); } }
 @keyframes mobile-lightbox-content-in { from { opacity: .96; } to { opacity: 1; } }
 @keyframes mobile-lightbox-content-out { from { opacity: 1; transform: translate3d(0, 0, 0) scale(1); filter: blur(0); } 38% { opacity: .92; transform: translate3d(0, 5px, 0) scale(.97); filter: blur(0); } to { opacity: 0; transform: translate3d(0, 22px, 0) scale(.89); filter: blur(1.4px); } }
-.phone-ui .lightbox-layer { padding: 0; background: rgba(7, 9, 14, .30); backdrop-filter: blur(22px) saturate(.86) brightness(.78); -webkit-backdrop-filter: blur(22px) saturate(.86) brightness(.78); }
+.phone-ui .lightbox-layer { padding: 0; background: rgba(7, 9, 14, .30); backdrop-filter: blur(22px) saturate(.86) brightness(.78); }
 .phone-ui.lightbox-active > :is(.sidebar, .content, .settings-page, .add-fab, .masonry-detail-backdrop) { filter: blur(16px) brightness(.76) saturate(.80); }
 .phone-ui .lightbox-layer.mobile-entering { animation: none; }
 .phone-ui .lightbox-layer.closing { animation: mobile-lightbox-layer-out .22s cubic-bezier(.28,.76,.26,1) both; }
@@ -1328,7 +1328,6 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
     border-radius: 10px;
     box-shadow: 0 12px 30px #54452a22, inset 0 1px 0 #ffffffb8, inset 0 -1px 0 #8b70451c;
     backdrop-filter: blur(24px) saturate(150%);
-    -webkit-backdrop-filter: blur(24px) saturate(150%);
   }
   .phone-ui .mobile-timeline-toggle {
     position: fixed;
@@ -1348,7 +1347,6 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
     border-radius: 10px;
     box-shadow: 0 12px 30px #54452a22, inset 0 1px 0 #ffffffb8, inset 0 -1px 0 #8b70451c;
     backdrop-filter: blur(24px) saturate(150%);
-    -webkit-backdrop-filter: blur(24px) saturate(150%);
   }
   .phone-ui .mobile-menu-toggle svg { width: 24px; height: 24px; }
   .phone-ui .mobile-timeline-toggle .nav-mask-symbol { width: 24px!important; height: 24px; }
@@ -1362,9 +1360,8 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
     border-color: rgba(225, 233, 255, .34);
     box-shadow: 0 12px 32px #0009, 0 0 16px #7189cd30, inset 0 1px 0 #eef3ff45, inset 0 -1px 0 #02050a45;
     backdrop-filter: blur(26px) saturate(155%);
-    -webkit-backdrop-filter: blur(26px) saturate(155%);
   }
-  .phone-ui.dark .mobile-timeline-toggle.active { color: #f4e5a5; filter: none; }
+  .phone-ui.dark .mobile-timeline-toggle.active { color: #f4e5a5; }
   .phone-ui.dark .mobile-timeline-toggle.open { --mobile-glass-background: linear-gradient(142deg, rgba(112, 124, 167, .63), rgba(52, 61, 91, .58) 55%, rgba(29, 35, 59, .64)); color: #f7f2df; background: transparent; border-color: rgba(218, 228, 255, .56); box-shadow: 0 0 18px #758de34a, 0 12px 32px #0007, inset 0 1px 0 #edf1ff4a; }
   .phone-ui .mobile-menu-toggle .menu-line {
     transform-box: fill-box;
@@ -1381,7 +1378,6 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
     border-color: rgba(225, 233, 255, .34);
     box-shadow: 0 12px 32px #0009, 0 0 16px #7189cd30, inset 0 1px 0 #eef3ff45, inset 0 -1px 0 #02050a45;
     backdrop-filter: blur(26px) saturate(155%);
-    -webkit-backdrop-filter: blur(26px) saturate(155%);
   }
   .phone-ui .mobile-menu-toggle.open {
     --mobile-glass-background: linear-gradient(142deg, rgba(112, 124, 167, .63), rgba(52, 61, 91, .58) 55%, rgba(29, 35, 59, .64));
@@ -1590,10 +1586,14 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
   .phone-ui .settings-window-grid,
   .phone-ui .settings-page .platform-auth-grid { grid-template-columns: 1fr; }
   .phone-ui .add-fab { right: 12px; bottom: max(14px, env(safe-area-inset-bottom)); }
-  .phone-ui .scroll-top-button { --mobile-glass-background: linear-gradient(142deg, rgba(255, 255, 255, .68) 0%, rgba(255, 248, 229, .43) 48%, rgba(232, 213, 181, .40) 100%); right: 12px; bottom: max(14px, env(safe-area-inset-bottom)); width: 44px; height: 44px; color: #6c765f; background: transparent; border-color: rgba(255, 255, 255, .78); border-radius: 10px; box-shadow: 0 12px 30px #54452a22, inset 0 1px 0 #ffffffb8, inset 0 -1px 0 #8b70451c; backdrop-filter: blur(24px) saturate(150%); -webkit-backdrop-filter: blur(24px) saturate(150%); transition: opacity .3s ease, transform .34s cubic-bezier(.16,.88,.22,1), filter .3s ease, background .22s ease, border-color .22s ease, box-shadow .28s ease; }
+  .phone-ui .scroll-top-button { --mobile-glass-background: linear-gradient(142deg, rgba(255, 255, 255, .68) 0%, rgba(255, 248, 229, .43) 48%, rgba(232, 213, 181, .40) 100%); right: 12px; bottom: max(14px, env(safe-area-inset-bottom)); width: 44px; height: 44px; color: #6c765f; background: transparent; border-color: rgba(255, 255, 255, .78); border-radius: 10px; box-shadow: 0 12px 30px #54452a22, inset 0 1px 0 #ffffffb8, inset 0 -1px 0 #8b70451c; backdrop-filter: blur(24px) saturate(150%); transition: opacity .3s ease, transform .34s cubic-bezier(.16,.88,.22,1), filter .3s ease, background .22s ease, border-color .22s ease, box-shadow .28s ease; }
   .phone-ui .scroll-top-button > span { width: 22px; height: 22px; }
-  .phone-ui.dark .scroll-top-button { --mobile-glass-background: linear-gradient(142deg, rgba(67, 76, 100, .62) 0%, rgba(18, 24, 38, .58) 50%, rgba(11, 15, 25, .66) 100%); color: #dfe7f8; background: transparent; border-color: rgba(225, 233, 255, .34); box-shadow: 0 12px 32px #0009, 0 0 16px #7189cd30, inset 0 1px 0 #eef3ff45, inset 0 -1px 0 #02050a45; backdrop-filter: blur(26px) saturate(155%); -webkit-backdrop-filter: blur(26px) saturate(155%); }
-  /* One real frosted material for all three mobile floating controls. */
+  .phone-ui.dark .scroll-top-button { --mobile-glass-background: linear-gradient(142deg, rgba(67, 76, 100, .62) 0%, rgba(18, 24, 38, .58) 50%, rgba(11, 15, 25, .66) 100%); color: #dfe7f8; background: transparent; border-color: rgba(225, 233, 255, .34); box-shadow: 0 12px 32px #0009, 0 0 16px #7189cd30, inset 0 1px 0 #eef3ff45, inset 0 -1px 0 #02050a45; backdrop-filter: blur(26px) saturate(155%); }
+  /* One real frosted material for all three mobile floating controls.
+     Only write the standard `backdrop-filter`. The CSS minifier re-emits the
+     -webkit- prefix on its own, but when a rule already carries both spellings
+     it keeps just the prefixed one, and Android WebView only understands the
+     unprefixed property, so hand-written prefixes silently kill the frost. */
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control {
     --mobile-frosted-surface: linear-gradient(145deg, rgba(255, 255, 255, .46), rgba(255, 250, 237, .25) 56%, rgba(211, 196, 164, .19));
     position: fixed;
@@ -1604,7 +1604,6 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
     border: 0!important;
     box-shadow: 0 10px 25px rgba(70, 52, 31, .17), inset 0 1px 0 rgba(255, 255, 255, .34), inset 0 -1px 0 rgba(101, 78, 44, .08)!important;
     backdrop-filter: blur(8px) saturate(142%) contrast(.97)!important;
-    -webkit-backdrop-filter: blur(8px) saturate(142%) contrast(.97)!important;
   }
   .phone-ui.dark :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control {
     --mobile-frosted-surface: linear-gradient(145deg, rgba(205, 217, 246, .22), rgba(78, 91, 124, .15) 52%, rgba(8, 12, 22, .24));
@@ -1612,7 +1611,6 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
     background: var(--mobile-frosted-surface)!important;
     box-shadow: 0 11px 28px rgba(0, 0, 0, .38), 0 0 17px rgba(102, 126, 192, .12), inset 0 1px 0 rgba(220, 229, 255, .18), inset 0 -1px 0 rgba(1, 3, 8, .20)!important;
     backdrop-filter: blur(8px) saturate(142%) contrast(.97)!important;
-    -webkit-backdrop-filter: blur(8px) saturate(142%) contrast(.97)!important;
   }
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control::before,
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control::after {
@@ -1623,7 +1621,7 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
     content: '';
     pointer-events: none;
   }
-  .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control::before { z-index: 0; background: var(--mobile-frosted-surface); backdrop-filter: blur(8px) saturate(142%) contrast(.97); -webkit-backdrop-filter: blur(8px) saturate(142%) contrast(.97); transform: translateZ(0); }
+  .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control::before { z-index: 0; background: var(--mobile-frosted-surface); backdrop-filter: blur(8px) saturate(142%) contrast(.97); transform: translateZ(0); }
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control::after { z-index: 1; background: radial-gradient(circle at 24% 12%, rgba(255, 255, 255, .20), transparent 46%); }
   .phone-ui.dark :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control::after { background: radial-gradient(circle at 24% 12%, rgba(224, 232, 255, .14), transparent 46%); }
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-frosted-control > * { position: relative; z-index: 2; }
@@ -1631,31 +1629,32 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
   .phone-ui.dark :is(.mobile-menu-toggle, .mobile-timeline-toggle).open { --mobile-frosted-surface: linear-gradient(142deg, rgba(143, 157, 204, .28), rgba(64, 75, 111, .20) 55%, rgba(25, 31, 53, .22)); color: #f7f2df; box-shadow: 0 0 18px #758de340, 0 12px 32px #0006, inset 0 1px 0 #edf1ff38!important; }
   /* The timeline button deliberately shares the exact same frosted material as
      the menu and scroll-top controls. Only the platform icon is specialized. */
-  .phone-ui .mobile-timeline-toggle.mobile-frosted-control > .sidebar-source-icon { opacity: 1; filter: grayscale(1) brightness(0) invert(.38) opacity(.96) drop-shadow(0 1px 2px rgba(255, 255, 255, .44))!important; }
-  .phone-ui .mobile-timeline-toggle.mobile-frosted-control > .nav-mask-symbol { color: #52606c!important; filter: drop-shadow(0 1px 2px rgba(255, 255, 255, .44)); }
-  .phone-ui .mobile-timeline-toggle.mobile-frosted-control > .mobile-platform-mask { display: block; width: 24px; height: 24px; color: #52606c; background: currentColor; filter: drop-shadow(0 1px 2px rgba(255, 255, 255, .44)); -webkit-mask: var(--mobile-platform-mask) center / contain no-repeat; mask: var(--mobile-platform-mask) center / contain no-repeat; }
+  .phone-ui .mobile-timeline-toggle.mobile-frosted-control > .nav-mask-symbol { color: #52606c!important; }
+  .phone-ui .mobile-timeline-toggle.mobile-frosted-control > .mobile-platform-mask { display: block; width: 24px; height: 24px; color: #52606c; background: currentColor; -webkit-mask: var(--mobile-platform-mask) center / contain no-repeat; mask: var(--mobile-platform-mask) center / contain no-repeat; }
   .phone-ui .mobile-timeline-toggle.mobile-frosted-control.active { color: #795f24; }
-  .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control > .sidebar-source-icon { filter: grayscale(1) brightness(0) invert(.94) opacity(.98) drop-shadow(0 0 4px rgba(211, 224, 255, .46))!important; }
-  .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control > .nav-mask-symbol { color: #e9effd!important; filter: drop-shadow(0 0 4px rgba(211, 224, 255, .46)); }
-  .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control > .mobile-platform-mask { color: #eef3ff; filter: drop-shadow(0 0 4px rgba(211, 224, 255, .46)); }
+  .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control > .nav-mask-symbol { color: #e9effd!important; }
+  .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control > .mobile-platform-mask { color: #eef3ff; }
   .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control.active { color: #f5e4a4; }
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle) { transition: opacity .3s ease, transform .34s cubic-bezier(.16,.88,.22,1), color .22s ease, background .22s ease, box-shadow .28s ease; }
-  .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-control-hidden { opacity: 0; pointer-events: none; transform: translateY(-12px) scale(.86); filter: blur(.4px); }
+  .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-control-hidden { opacity: 0; pointer-events: none; transform: translateY(-12px) scale(.86); }
   .phone-ui .scroll-top-button.mobile-control-hidden { transform: translateY(16px) scale(.86); }
-  .phone-ui :is(.mobile-timeline-toggle.mobile-frosted-control, .mobile-source-shortcuts) .sidebar-source-icon {
+  .phone-ui .mobile-source-shortcuts .sidebar-source-icon {
     filter: grayscale(1) brightness(0) invert(.38) opacity(.96) drop-shadow(0 1px 2px rgba(255, 255, 255, .44))!important;
   }
-  .phone-ui :is(.mobile-timeline-toggle.mobile-frosted-control, .mobile-source-shortcuts) .nav-mask-symbol {
+  .phone-ui .mobile-source-shortcuts .nav-mask-symbol {
     color: #52606c!important;
     filter: drop-shadow(0 1px 2px rgba(255, 255, 255, .44));
   }
-  .phone-ui.dark :is(.mobile-timeline-toggle.mobile-frosted-control, .mobile-source-shortcuts) .sidebar-source-icon {
+  .phone-ui.dark .mobile-source-shortcuts .sidebar-source-icon {
     filter: grayscale(1) brightness(0) invert(.94) opacity(.98) drop-shadow(0 0 4px rgba(211, 224, 255, .46))!important;
   }
-  .phone-ui.dark :is(.mobile-timeline-toggle.mobile-frosted-control, .mobile-source-shortcuts) .nav-mask-symbol {
+  .phone-ui.dark .mobile-source-shortcuts .nav-mask-symbol {
     color: #e9effd!important;
     filter: drop-shadow(0 0 4px rgba(211, 224, 255, .46));
   }
+  /* The frosted buttons keep their icons filter-free: a filtered child gets its
+     own render surface and can knock the parent out of the backdrop snapshot. */
+  .phone-ui .mobile-timeline-toggle.mobile-frosted-control :is(.sidebar-source-icon, .nav-mask-symbol, .mobile-platform-mask) { filter: none!important; }
 }
 
 @keyframes mobile-menu-enter {
@@ -1868,7 +1867,7 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.masonry-author strong { color: var(--ink); font-size: 10px; font-weight: 600; }
+.masonry-author strong { min-width: 0; color: var(--ink); font-size: 10px; font-weight: 600; }
 .masonry-author small { margin-top: 3px; color: var(--muted); font-size: 8px; }
 .masonry-like-button {
   display: grid;
@@ -1992,7 +1991,7 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
 .mobile-author-preview-card .masonry-author { gap: 5px; min-width: 0; }
 .mobile-author-preview-card .masonry-author > img { width: 23px; height: 23px; min-height: 0; flex: none; border-radius: 50%; object-fit: cover; }
 .mobile-author-preview-card .masonry-author strong { overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-.mobile-author-preview-card .masonry-author small { font-size: 7px; }
+.mobile-author-preview-card .masonry-author small { margin-top: 0; font-size: 7px; }
 .mobile-preview-like { display: grid; place-items: center; width: 26px; height: 26px; flex: none; color: #919995; }
 .mobile-preview-like.liked { color: #ba5961; }
 .mobile-preview-like .post-action-mask { width: 16px; height: 16px; }
@@ -2092,7 +2091,9 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
   .phone-ui .masonry-author { gap: 5px; }
   .phone-ui .masonry-author > img { width: 23px; height: 23px; }
   .phone-ui .masonry-author strong { font-size: 9px; }
-  .phone-ui .masonry-author small { font-size: 7px; }
+  /* Phones show only the date, so the name and date share one row. */
+  .phone-ui .masonry-author > span { display: flex; align-items: center; gap: 5px; }
+  .phone-ui .masonry-author small { flex: none; margin-top: 0; font-size: 7px; }
   .phone-ui .masonry-like-button { width: 26px; height: 26px; }
   .phone-ui .masonry-like-button .post-action-mask { width: 16px; height: 16px; }
   .phone-ui .masonry-media-count { top: 6px; right: 6px; min-width: 31px; height: 20px; padding: 0 5px; }

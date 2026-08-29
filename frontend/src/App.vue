@@ -1,4 +1,4 @@
-﻿<script setup>
+<script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import QRCode from 'qrcode'
 import bilibiliIcon from '../icon/bilibili.png'
@@ -1363,6 +1363,14 @@ async function restoreConfiguration(event) {
     proxyMessage.value = '配置已恢复，请使用备份中的账号信息重新登录'
     await loadData()
   } catch (error) { settingsError.value = error.message } finally { settingsBusy.value = false }
+}
+function postDateOnly(date) {
+  return new Date(date).toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
+}
+// Masonry cards are narrow, so phones show the date alone and keep the author
+// name and the date on one line. Desktop cards still carry the clock time.
+function masonryDate(date) {
+  return phonePortrait.value ? postDateOnly(date) : postDateTime(date)
 }
 function postDateTime(date) {
   return new Date(date).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
@@ -4470,7 +4478,7 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
     <p v-if="item.post.caption" class="masonry-caption">{{ item.post.caption }}</p>
     <div v-if="item.post.tags?.length" class="masonry-tags"><button v-for="tag in item.post.tags.slice(0, 2)" :key="tag" type="button" @click.stop="openTag(tag)">#{{ tag }}</button><span v-if="item.post.tags.length > 2">+{{ item.post.tags.length - 2 }}</span></div>
     <footer class="masonry-meta">
-      <button class="masonry-author" type="button" :title="`查看 ${item.post.author} 的动态`" @click.stop="openAuthor(item.post)"><img :key="`${item.post.id}:${postAvatar(item.post)}`" :src="postAvatar(item.post)" data-fallback-index="0" :alt="item.post.author" referrerpolicy="no-referrer" @load="handlePostAvatarLoad($event, item.post)" @error="handlePostAvatarError($event, item.post)"><span><strong>{{ item.post.author }}</strong><small>{{ postDateTime(item.post.published) }}</small></span></button>
+      <button class="masonry-author" type="button" :title="`查看 ${item.post.author} 的动态`" @click.stop="openAuthor(item.post)"><img :key="`${item.post.id}:${postAvatar(item.post)}`" :src="postAvatar(item.post)" data-fallback-index="0" :alt="item.post.author" referrerpolicy="no-referrer" @load="handlePostAvatarLoad($event, item.post)" @error="handlePostAvatarError($event, item.post)"><span><strong>{{ item.post.author }}</strong><small>{{ masonryDate(item.post.published) }}</small></span></button>
       <button :class="['masonry-like-button', { liked: item.post.liked }]" type="button" :disabled="postActionBusy === `like:${item.post.id}`" :title="item.post.liked ? '取消收藏' : '收藏'" @click.stop="togglePostLike(item.post)"><span class="post-action-mask post-favorite-symbol" :style="{ '--post-action-mask': `url(${favoriteNavIcon})` }" aria-hidden="true"></span></button>
     </footer>
   </div>
@@ -4541,7 +4549,7 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
           <div class="masonry-card-body">
             <p v-if="item.post.caption" class="masonry-caption">{{ item.post.caption }}</p>
             <div v-if="item.post.tags?.length" class="masonry-tags"><button v-for="tag in item.post.tags.slice(0, 2)" :key="tag" type="button" tabindex="-1">#{{ tag }}</button><span v-if="item.post.tags.length > 2">+{{ item.post.tags.length - 2 }}</span></div>
-            <footer class="masonry-meta"><span class="masonry-author"><img :src="postAvatar(item.post)" alt=""><span><strong>{{ item.post.author }}</strong><small>{{ postDateTime(item.post.published) }}</small></span></span><span :class="['masonry-like-button', { liked: item.post.liked }]"><span class="post-action-mask post-favorite-symbol" :style="{ '--post-action-mask': `url(${favoriteNavIcon})` }"></span></span></footer>
+            <footer class="masonry-meta"><span class="masonry-author"><img :src="postAvatar(item.post)" alt=""><span><strong>{{ item.post.author }}</strong><small>{{ masonryDate(item.post.published) }}</small></span></span><span :class="['masonry-like-button', { liked: item.post.liked }]"><span class="post-action-mask post-favorite-symbol" :style="{ '--post-action-mask': `url(${favoriteNavIcon})` }"></span></span></footer>
           </div>
         </article>
       </section>
@@ -4566,7 +4574,7 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
           <div class="masonry-card-body">
             <p v-if="item.post.caption" class="masonry-caption">{{ item.post.caption }}</p>
             <div v-if="item.post.tags?.length" class="masonry-tags"><span v-for="tag in item.post.tags.slice(0, 2)" :key="tag">#{{ tag }}</span><span v-if="item.post.tags.length > 2">+{{ item.post.tags.length - 2 }}</span></div>
-            <footer class="masonry-meta"><span class="masonry-author"><img :src="postAvatar(item.post)" alt=""><span><strong>{{ item.post.author }}</strong><small>{{ postDateTime(item.post.published) }}</small></span></span><span :class="['masonry-like-button', { liked: item.post.liked }]"><span class="post-action-mask post-favorite-symbol" :style="{ '--post-action-mask': `url(${favoriteNavIcon})` }"></span></span></footer>
+            <footer class="masonry-meta"><span class="masonry-author"><img :src="postAvatar(item.post)" alt=""><span><strong>{{ item.post.author }}</strong><small>{{ masonryDate(item.post.published) }}</small></span></span><span :class="['masonry-like-button', { liked: item.post.liked }]"><span class="post-action-mask post-favorite-symbol" :style="{ '--post-action-mask': `url(${favoriteNavIcon})` }"></span></span></footer>
           </div>
         </article>
       </section>
