@@ -2159,9 +2159,16 @@ function moveLightboxGesture(event) {
     const points = [...lightboxPointers.values()].slice(0, 2)
     const center = lightboxPointerCenter(points)
     const ratio = lightboxPointerDistance(points) / lightboxGesture.startDistance
-    lightbox.value.scale = Math.min(lightboxMaximumScale(), Math.max(0.25, Number((lightboxGesture.startScale * ratio).toFixed(3))))
-    lightbox.value.x = lightboxGesture.imageX + center.x - lightboxGesture.startCenter.x
-    lightbox.value.y = lightboxGesture.imageY + center.y - lightboxGesture.startCenter.y
+    // Keep the pinch continuous: avoid rounding each pointer event and keep
+    // the content beneath the two-finger center anchored while it scales.
+    const nextScale = Math.min(lightboxMaximumScale(), Math.max(0.25, lightboxGesture.startScale * ratio))
+    const viewportCenterX = window.innerWidth / 2
+    const viewportCenterY = window.innerHeight / 2
+    const anchorX = lightboxGesture.startCenter.x - viewportCenterX
+    const anchorY = lightboxGesture.startCenter.y - viewportCenterY
+    lightbox.value.scale = nextScale
+    lightbox.value.x = lightboxGesture.imageX + (center.x - lightboxGesture.startCenter.x) + anchorX * (lightboxGesture.startScale - nextScale)
+    lightbox.value.y = lightboxGesture.imageY + (center.y - lightboxGesture.startCenter.y) + anchorY * (lightboxGesture.startScale - nextScale)
     scheduleLightboxScaleUpdate()
     return
   }
@@ -3164,9 +3171,14 @@ function applyMobileDetailTwoFinger(points, event) {
   const pinchSensitivity = 0.72
   const ratio = 1 + (distanceDelta / Math.max(120, mobileDetailTwoFinger.startDistance)) * pinchSensitivity
   lightbox.value.fit = true
-  lightbox.value.scale = Math.min(lightboxMaximumScale(), Math.max(1, Number((mobileDetailTwoFinger.startScale * ratio).toFixed(3))))
-  lightbox.value.x = mobileDetailTwoFinger.startX + center.x - mobileDetailTwoFinger.startCenter.x
-  lightbox.value.y = mobileDetailTwoFinger.startY + center.y - mobileDetailTwoFinger.startCenter.y
+  const nextScale = Math.min(lightboxMaximumScale(), Math.max(1, mobileDetailTwoFinger.startScale * ratio))
+  const viewportCenterX = window.innerWidth / 2
+  const viewportCenterY = window.innerHeight / 2
+  const anchorX = mobileDetailTwoFinger.startCenter.x - viewportCenterX
+  const anchorY = mobileDetailTwoFinger.startCenter.y - viewportCenterY
+  lightbox.value.scale = nextScale
+  lightbox.value.x = mobileDetailTwoFinger.startX + center.x - mobileDetailTwoFinger.startCenter.x + anchorX * (mobileDetailTwoFinger.startScale - nextScale)
+  lightbox.value.y = mobileDetailTwoFinger.startY + center.y - mobileDetailTwoFinger.startCenter.y + anchorY * (mobileDetailTwoFinger.startScale - nextScale)
   clampMobileLightboxPosition(false)
   lightbox.value.dragging = true
   scheduleLightboxScaleUpdate()
