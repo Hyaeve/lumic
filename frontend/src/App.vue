@@ -1969,17 +1969,17 @@ function dismissMobileLightboxMenu() {
 }
 function scheduleLightboxScaleUpdate() {
   if (typeof window === 'undefined') return
-  if (lightboxScaleFrame) window.cancelAnimationFrame(lightboxScaleFrame)
-  nextTick(() => {
-    lightboxScaleFrame = window.requestAnimationFrame(() => {
-      lightboxScaleFrame = 0
-      const image = currentLightboxImage()
-      if (!image?.naturalWidth) return
-      const baseScale = lightbox.value.fit ? image.clientWidth / image.naturalWidth : 1
-      const renderedScale = baseScale * lightbox.value.scale
-      lightboxScalePercent.value = Math.max(1, Math.round(renderedScale * 100))
-      lightboxAtOriginalSize.value = Math.abs(renderedScale - 1) < 0.015
-    })
+  // Coalesce high-frequency touch events into one paint. Re-queuing a
+  // nextTick for every pointermove makes pinch gestures visibly stutter.
+  if (lightboxScaleFrame) return
+  lightboxScaleFrame = window.requestAnimationFrame(() => {
+    lightboxScaleFrame = 0
+    const image = currentLightboxImage()
+    if (!image?.naturalWidth) return
+    const baseScale = lightbox.value.fit ? image.clientWidth / image.naturalWidth : 1
+    const renderedScale = baseScale * lightbox.value.scale
+    lightboxScalePercent.value = Math.max(1, Math.round(renderedScale * 100))
+    lightboxAtOriginalSize.value = Math.abs(renderedScale - 1) < 0.015
   })
 }
 function currentLightboxImage() {
@@ -2125,7 +2125,8 @@ function beginLightboxPinch() {
   lightboxGesture = {
     type: 'pinch', startDistance: Math.max(1, lightboxPointerDistance(points)),
     startCenter: lightboxPointerCenter(points), startScale: lightbox.value.scale,
-    imageX: lightbox.value.x, imageY: lightbox.value.y
+    imageX: lightbox.value.x, imageY: lightbox.value.y,
+    maxScale: lightboxMaximumScale()
   }
 }
 function startLightboxGesture(event) {
@@ -2161,7 +2162,7 @@ function moveLightboxGesture(event) {
     const ratio = lightboxPointerDistance(points) / lightboxGesture.startDistance
     // Keep the pinch continuous: avoid rounding each pointer event and keep
     // the content beneath the two-finger center anchored while it scales.
-    const nextScale = Math.min(lightboxMaximumScale(), Math.max(0.25, lightboxGesture.startScale * ratio))
+    const nextScale = Math.min(lightboxGesture.maxScale || lightboxMaximumScale(), Math.max(0.25, lightboxGesture.startScale * ratio))
     const viewportCenterX = window.innerWidth / 2
     const viewportCenterY = window.innerHeight / 2
     const anchorX = lightboxGesture.startCenter.x - viewportCenterX
