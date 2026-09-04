@@ -202,6 +202,9 @@ const lightboxClosing = ref(false)
 const lightboxTransitioning = ref(false)
 const lightboxDisplaySource = ref('')
 const lightboxOriginalLoaded = ref(false)
+// Mobile detail pages keep the preview mounted while the full-resolution image
+// loads over it, preventing a layout flash or a jump when the source changes.
+const mobileDetailOriginalLoaded = ref({})
 const mobileLightboxDragX = ref(0)
 const mobileLightboxTrackShift = ref(0)
 const mobileLightboxDragging = ref(false)
@@ -2658,9 +2661,11 @@ function openMasonryPost(post, event) {
     } : null
   }
   masonryDetailPost.value = post
+  mobileDetailOriginalLoaded.value = {}
   mobileDetailIndex.value = 0
   resetMobileDetailTrack()
   if (phonePortrait.value) {
+    preloadMobileDetailOriginals(post)
     const returnPath = `${window.location.pathname}${window.location.search}`
     mobilePostReturnPath.value = window.location.pathname.startsWith('/post/') ? '/' : returnPath
     mobilePostReturnScrollY.value = window.scrollY
@@ -2694,6 +2699,25 @@ function openMasonryPost(post, event) {
     updateRoute(`/post/${encodeURIComponent(post.id)}`, false, { lumicMobileDetail: true, lumicReturnPath: returnPath })
     window.scrollTo({ top: 0, behavior: 'auto' })
   }
+}
+function mobileDetailOriginalSource(media) {
+  const source = String(media?.src || media || '')
+  return source
+}
+function markMobileDetailOriginalLoaded(key) {
+  mobileDetailOriginalLoaded.value = { ...mobileDetailOriginalLoaded.value, [key]: true }
+}
+function preloadMobileDetailOriginals(post) {
+  const media = postDetailMedia(post).filter(item => item.type === 'image')
+  media.slice(0, 3).forEach((item, index) => {
+    const source = mobileDetailOriginalSource(item)
+    if (!source) return
+    const image = new Image()
+    image.decoding = 'async'
+    image.fetchPriority = index === 0 ? 'high' : 'low'
+    image.onload = () => markMobileDetailOriginalLoaded(item.key)
+    image.src = source
+  })
 }
 function restoreMobileScroll(top = 0) {
   const target = Math.max(0, Number(top) || 0)
@@ -4617,7 +4641,10 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
       <section v-if="mobileDetailCurrentMedia" :class="['mobile-post-media-stage', { 'video-media': mobileDetailCurrentMedia.type === 'video' }, mobileDetailCurrentMedia.type === 'video' ? postVideoFrameClass(masonryDetailPost) : '']" :style="mobileDetailCurrentMedia.type === 'video' ? postVideoFrameStyle(masonryDetailPost) : undefined" @touchstart="beginMobileDetailTouch" @touchmove="updateMobileDetailTouch" @touchend="finishMobileDetailTouch" @touchcancel="finishMobileDetailTouch" @pointerdown="beginMobileDetailSwipe" @pointermove="updateMobileDetailSwipe" @pointerup="finishMobileDetailSwipe" @pointercancel="cancelMobileDetailSwipe">
         <div class="mobile-post-media-track" :style="mobileDetailTrackStyle">
           <div v-for="slide in mobileDetailSlides" :key="`${slide.position}:${slide.media.key}`" :class="['mobile-post-media-slide', { current: slide.position === 0 }]">
-            <img v-if="slide.media.type === 'image'" :src="previewMedia(slide.media.src)" :alt="`${masonryDetailPost.author} 的第 ${slide.index + 1} 张图片`" :loading="slide.position === 0 ? 'eager' : 'lazy'" decoding="async" :fetchpriority="slide.position === 0 ? 'high' : 'low'" @click="slide.position === 0 && openMobileDetailImage()">
+            <template v-if="slide.media.type === 'image'">
+              <img class="mobile-detail-preview-image" :src="previewMedia(slide.media.src)" :alt="`${masonryDetailPost.author} 的第 ${slide.index + 1} 张图片`" :loading="slide.position === 0 ? 'eager' : 'lazy'" decoding="async" :fetchpriority="slide.position === 0 ? 'high' : 'low'" @click="slide.position === 0 && openMobileDetailImage()">
+              <img class="mobile-detail-original-image" :class="{ loaded: mobileDetailOriginalLoaded[slide.media.key] }" :src="mobileDetailOriginalSource(slide.media)" alt="" aria-hidden="true" decoding="async" draggable="false" @load="markMobileDetailOriginalLoaded(slide.media.key)">
+            </template>
             <video v-else :src="slide.media.src" :poster="slide.media.poster ? previewMedia(slide.media.poster) : undefined" :controls="slide.position === 0" playsinline :autoplay="slide.position === 0" muted :preload="slide.position === 0 ? 'metadata' : 'none'" @loadedmetadata="slide.position === 0 && setPostVideoRatio(masonryDetailPost, $event)"></video>
           </div>
         </div>
