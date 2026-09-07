@@ -3638,21 +3638,22 @@ func (b *BilibiliStore) fetchBilibiliFavoriteOpusPosts(feed SourceConfig, full b
 	if full {
 		pageLimit = 100
 	}
-	offset := ""
+	pageNumber := 1
 	posts := make([]Post, 0)
 	seen := make(map[string]bool)
 	var lastDetailError error
 	for page := 0; page < pageLimit; page++ {
-		query := url.Values{"page_size": {"20"}}
-		if offset != "" {
-			query.Set("offset", offset)
-		}
+		// The current Bilibili opus favorites endpoint requires page-based
+		// pagination; sending the legacy offset parameter can be rejected for
+		// some accounts even when the session cookie is valid.
+		query := url.Values{"page": {strconv.Itoa(pageNumber)}, "page_size": {"20"}}
 		var payload struct {
 			Code    int    `json:"code"`
 			Message string `json:"message"`
 			Data    struct {
-				Items  []map[string]any `json:"items"`
-				Offset string           `json:"offset"`
+				Items   []map[string]any `json:"items"`
+				Offset  string           `json:"offset"`
+				HasMore *bool            `json:"has_more"`
 			} `json:"data"`
 		}
 		endpoint := "https://api.bilibili.com/x/polymer/web-dynamic/v1/opus/feed/fav?" + query.Encode()
@@ -3677,10 +3678,22 @@ func (b *BilibiliStore) fetchBilibiliFavoriteOpusPosts(feed SourceConfig, full b
 			// 收藏专栏详情页接口较重，放慢请求节奏，避免连续拉取触发限流
 			time.Sleep(900 * time.Millisecond)
 		}
-		if len(payload.Data.Items) == 0 || payload.Data.Offset == "" || payload.Data.Offset == offset {
+		if len(payload.Data.Items) == 0 {
 			break
 		}
-		offset = payload.Data.Offset
+		if payload.Data.HasMore != nil {
+			if !*payload.Data.HasMore {
+				break
+			}
+			pageNumber++
+			continue
+		}
+		// Older responses did not expose has_more. Continue by page number when
+		// they return a full page; an empty/short page terminates naturally.
+		pageNumber++
+		if len(payload.Data.Items) < 20 {
+			break
+		}
 		// 翻页也留出更长间隔，尤其是一次获取全部历史时
 		time.Sleep(1200 * time.Millisecond)
 	}
