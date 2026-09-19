@@ -2324,3 +2324,27 @@ func TestLogoutRevokesSessionAndClearsCookie(t *testing.T) {
 		t.Fatalf("logout did not clear cookie: %#v", cookies)
 	}
 }
+
+func TestLoginKeepLoggedInControlsCookiePersistence(t *testing.T) {
+	for _, keep := range []bool{false, true} {
+		sessions := &SessionStore{tokens: make(map[string]time.Time)}
+		auth := &AuthConfig{Username: "lumic", PasswordHash: hashPassword("correct-password", []byte("lumic-default-salt-v1"))}
+		body := fmt.Sprintf(`{"username":"lumic","password":"correct-password","keepLoggedIn":%t}`, keep)
+		response := httptest.NewRecorder()
+		loginHandler(sessions, auth)(response, httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(body)))
+		cookies := response.Result().Cookies()
+		if response.Code != http.StatusOK || len(cookies) != 1 {
+			t.Fatalf("login failed: %d %s", response.Code, response.Body.String())
+		}
+		cookie := cookies[0]
+		if !cookie.HttpOnly || cookie.SameSite != http.SameSiteLaxMode || !sessions.valid(cookie.Value) {
+			t.Fatalf("invalid session cookie: %#v", cookie)
+		}
+		if keep && (cookie.MaxAge != 86400 || cookie.Expires.IsZero()) {
+			t.Fatal("persistent login must retain the existing 24-hour expiry")
+		}
+		if !keep && (cookie.MaxAge != 0 || !cookie.Expires.IsZero()) {
+			t.Fatal("unchecked login must use a browser-session cookie")
+		}
+	}
+}

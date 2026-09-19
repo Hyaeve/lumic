@@ -61,7 +61,7 @@ const confirmDialog = ref({ open: false, title: '', message: '', confirmText: '�
 let confirmResolver = null
 const loginBusy = ref(false)
 const credentials = ref({ username: '', password: '' })
-const rememberPassword = ref(false)
+const keepLoggedIn = ref(false)
 const passwordVisible = ref(false)
 const activeNav = ref('all')
 const activeSource = ref('all')
@@ -992,10 +992,13 @@ async function login() {
   loginError.value = ''
   loginBusy.value = true
   try {
-    const response = await fetch('/api/login', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(credentials.value) })
+    const response = await fetch('/api/login', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...credentials.value, keepLoggedIn: keepLoggedIn.value }) })
     if (!response.ok) throw new Error('账号或密码不正确')
-    if (rememberPassword.value) localStorage.setItem('lumic-remembered-login', JSON.stringify(credentials.value))
-    else localStorage.removeItem('lumic-remembered-login')
+    try {
+      localStorage.removeItem('lumic-remembered-login')
+      localStorage.setItem('lumic-keep-login', String(keepLoggedIn.value))
+    } catch {}
+    credentials.value.password = ''
     authenticated.value = true
     await loadData()
     await loadPlatformAccounts()
@@ -1008,6 +1011,7 @@ async function logout() {
     await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' })
   } finally {
     passwordVisible.value = false
+    credentials.value.password = ''
     showBrandMenu.value = false
     mobileMenuOpen.value = false
     mobileSourcesOpen.value = false
@@ -1025,12 +1029,11 @@ async function logout() {
 }
 function loadRememberedLogin() {
   try {
-    const saved = JSON.parse(localStorage.getItem('lumic-remembered-login') || 'null')
-    if (!saved?.username || !saved?.password) return
-    credentials.value = { username: String(saved.username), password: String(saved.password) }
-    rememberPassword.value = true
+    keepLoggedIn.value = localStorage.getItem('lumic-keep-login') === 'true'
   } catch {
-    localStorage.removeItem('lumic-remembered-login')
+    keepLoggedIn.value = false
+  } finally {
+    try { localStorage.removeItem('lumic-remembered-login') } catch {}
   }
 }
 function publishPostPage(items, preserveLocalState = true) {
@@ -4534,11 +4537,9 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
 </div>
       <p class="login-project-note">拾起散落在时光里的片刻，珍藏每一次心动。</p>
       <form class="login-form" @submit.prevent="login" autocomplete="on">
-        <label for="username">账号</label>
-        <input id="username" v-model="credentials.username" type="text" name="username" autocomplete="username" required autofocus>
-        <label for="password">密码</label>
-        <div class="login-password-field"><input id="password" v-model="credentials.password" :type="passwordVisible ? 'text' : 'password'" name="password" autocomplete="current-password" required><button type="button" :title="passwordVisible ? '隐藏密码' : '显示密码'" :aria-label="passwordVisible ? '隐藏密码' : '显示密码'" @click="passwordVisible = !passwordVisible"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.8 12s3.2-5.2 9.2-5.2S21.2 12 21.2 12s-3.2 5.2-9.2 5.2S2.8 12 2.8 12Z"/><circle cx="12" cy="12" r="2.5"/><path v-if="!passwordVisible" d="m4 4 16 16"/></svg></button></div>
-        <label class="remember-password"><input v-model="rememberPassword" type="checkbox"><span>记住密码</span></label>
+        <div class="login-input-field"><svg class="login-field-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="7" r="3.5"/><path d="M4 21v-2a8 6 0 0 1 16 0v2Z"/></svg><input id="username" v-model="credentials.username" type="text" name="username" aria-label="用户名" placeholder="用户名" autocomplete="username" required autofocus></div>
+        <div class="login-input-field login-password-field"><svg class="login-field-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="10" width="15" height="11" rx="2"/><path d="M8 10V6a4 4 0 0 1 8 0v4M12 14v3"/></svg><input id="password" v-model="credentials.password" :type="passwordVisible ? 'text' : 'password'" name="password" aria-label="密码" placeholder="密码" autocomplete="current-password" required><button type="button" :aria-label="passwordVisible ? '隐藏密码' : '显示密码'" :aria-pressed="passwordVisible" @click="passwordVisible = !passwordVisible"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.8 12s3.2-5.2 9.2-5.2S21.2 12 21.2 12s-3.2 5.2-9.2 5.2S2.8 12 2.8 12Z"/><circle cx="12" cy="12" r="2.5"/><path v-if="!passwordVisible" d="m4 4 16 16"/></svg></button></div>
+        <label class="remember-password"><input v-model="keepLoggedIn" type="checkbox"><span>保持登录</span></label>
         <p v-if="loginError" class="login-error" role="alert">{{ loginError }}</p>
         <button class="login-button" type="submit" :disabled="loginBusy">{{ loginBusy ? '验证中…' : '登录拾光' }}</button>
       </form>

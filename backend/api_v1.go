@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"math/rand"
 	"net/http"
 	"sort"
 	"strconv"
@@ -287,7 +288,7 @@ func apiV1PostsHandler(store *Store) http.HandlerFunc {
 		var headerPostIDs map[string]string
 		var scopeStats *apiV1PostStat
 		if query.Cursor == nil && (query.Author != "" || query.Tag != "" || query.FeedID != "" || (query.Liked != nil && *query.Liked)) {
-			headerMedia = apiV1HeaderMedia(posts, query.FilterHash+strconv.FormatInt(time.Now().UnixNano(), 10))
+			headerMedia = apiV1HeaderMedia(posts, query.FilterHash+strconv.FormatUint(rand.Uint64(), 16))
 			headerPostIDs = make(map[string]string, len(headerMedia))
 			for _, media := range headerMedia {
 				headerPostIDs[media] = ""
@@ -359,7 +360,7 @@ func apiV1GalleryHandler(store *Store) http.HandlerFunc {
 		posts := append([]Post(nil), store.posts...)
 		store.RUnlock()
 		posts = filterAndSortAPIV1Posts(posts, query)
-		media := apiV1HeaderMedia(posts, strconv.FormatInt(time.Now().UnixNano(), 10))
+		media := apiV1HeaderMedia(posts, strconv.FormatUint(rand.Uint64(), 16))
 		owners := make(map[string]string, len(media))
 		for _, path := range media {
 			owners[path] = ""

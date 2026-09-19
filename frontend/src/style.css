@@ -19,6 +19,15 @@ a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color
 .login-password-field svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.65; stroke-linecap: round; stroke-linejoin: round; }
 .login-form .remember-password { display: inline-flex; align-items: center; gap: 9px; width: fit-content; margin: 0 0 17px; color: #7b8782; cursor: pointer; font-size: 12px; font-weight: 500; }
 .login-form .remember-password input { width: 18px; height: 18px; margin: 0; padding: 0; accent-color: #719b7f; }
+.login-input-field { position: relative; height: 56px; margin-bottom: 20px; border: 1px solid #bcb9c5; border-radius: 14px; background: #fff; color: #8b8796; transition: border-color .18s ease, box-shadow .18s ease; }
+.login-input-field:focus-within { border-color: #9990b1; box-shadow: 0 0 0 3px #a69ac21c; }
+.login-form .login-input-field input { height: 100%; min-height: 0; margin: 0; padding: 0 46px; border: 0; border-radius: inherit; background: transparent; color: #53505e; font-size: 16px; box-shadow: none; }
+.login-input-field input::placeholder { color: #96929f; opacity: 1; }
+.login-input-field .login-field-icon { position: absolute; left: 16px; top: 50%; transform: translateY(-50%); width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.65; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+.login-input-field button { right: 6px; width: 44px; height: 44px; color: #8b8796; }
+.login-input-field button:hover { color: #696078; background: #f3f1f7; }
+.login-form .remember-password { color: #827b91; font-size: 14px; font-weight: 400; }
+.login-form .remember-password input { accent-color: #8c7da5; }
 .app-shell { min-height: 100vh; display: flex; background: #f7faf7; transition: .3s ease; --ink: #34433f; --muted: #87938e; --line: #e5ebe5; --card: rgba(255,255,255,.8); --sidebar: #edf4ee; }
 .app-shell.dark { --ink: #e7eee9; --muted: #93a09a; --line: #35443e; --card: #26332f; --sidebar: #202c29; background: #17211f; }
 .sidebar { width: 258px; flex: none; display: flex; flex-direction: column; padding: 34px 20px 23px; background: var(--sidebar); border-right: 1px solid var(--line); user-select: none; -webkit-user-select: none; }.sidebar img { -webkit-user-drag: none; }

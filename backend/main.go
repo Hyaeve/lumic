@@ -1258,8 +1258,9 @@ func loginHandler(sessions *SessionStore, auth *AuthConfig) http.HandlerFunc {
 			return
 		}
 		var input struct {
-			Username string `json:"username"`
-			Password string `json:"password"`
+			Username     string `json:"username"`
+			Password     string `json:"password"`
+			KeepLoggedIn *bool  `json:"keepLoggedIn"`
 		}
 		auth.RLock()
 		username, storedHash := auth.Username, auth.PasswordHash
@@ -1273,7 +1274,13 @@ func loginHandler(sessions *SessionStore, auth *AuthConfig) http.HandlerFunc {
 			http.Error(w, "unable to create session", http.StatusInternalServerError)
 			return
 		}
-		http.SetCookie(w, &http.Cookie{Name: "lumic_session", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: os.Getenv("LUMIC_COOKIE_SECURE") == "true", MaxAge: int(sessionLifetime.Seconds()), Expires: time.Now().Add(sessionLifetime)})
+		cookie := &http.Cookie{Name: "lumic_session", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: os.Getenv("LUMIC_COOKIE_SECURE") == "true"}
+		// Omitted by older clients, which retain the existing persistent session.
+		if input.KeepLoggedIn == nil || *input.KeepLoggedIn {
+			cookie.MaxAge = int(sessionLifetime.Seconds())
+			cookie.Expires = time.Now().Add(sessionLifetime)
+		}
+		http.SetCookie(w, cookie)
 		writeJSON(w, map[string]string{"status": "ok"})
 	}
 }
