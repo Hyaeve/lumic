@@ -65,6 +65,7 @@ type apiV1PostPage struct {
 	Stats       *apiV1PostStats `json:"stats,omitempty"`
 	Total       int             `json:"total"`
 	HeaderMedia []string        `json:"headerMedia,omitempty"`
+	ScopeStats  *apiV1PostStat  `json:"scopeStats,omitempty"`
 }
 
 type apiV1PostStat struct {
@@ -281,8 +282,11 @@ func apiV1PostsHandler(store *Store) http.HandlerFunc {
 		posts = filterAndSortAPIV1Posts(posts, query)
 		total := len(posts)
 		var headerMedia []string
-		if query.Cursor == nil && (query.Author != "" || query.Tag != "" || query.FeedID != "") {
+		var scopeStats *apiV1PostStat
+		if query.Cursor == nil && (query.Author != "" || query.Tag != "" || query.FeedID != "" || (query.Liked != nil && *query.Liked)) {
 			headerMedia = apiV1HeaderMedia(posts, query.FilterHash)
+			scope := buildAPIV1PostStats(posts, r).All
+			scopeStats = &scope
 		}
 		if query.Cursor != nil {
 			remaining := posts[:0]
@@ -301,7 +305,7 @@ func apiV1PostsHandler(store *Store) http.HandlerFunc {
 		for _, post := range posts {
 			items = append(items, toAPIV1Post(post))
 		}
-		page := apiV1PostPage{Items: items, HasMore: hasMore, Limit: query.Limit, Stats: stats, Total: total, HeaderMedia: headerMedia}
+		page := apiV1PostPage{Items: items, HasMore: hasMore, Limit: query.Limit, Stats: stats, Total: total, HeaderMedia: headerMedia, ScopeStats: scopeStats}
 		if hasMore && len(posts) > 0 {
 			last := posts[len(posts)-1]
 			page.NextCursor, err = encodeAPIV1PostCursor(apiV1PostCursor{Version: 1, Published: last.Published, ID: last.ID, Order: query.Order, FilterHash: query.FilterHash})

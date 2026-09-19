@@ -5,6 +5,7 @@ import { createPostPager, postQueryKey } from './postPager'
 import PostTime from './components/PostTime.vue'
 import PostCaption from './components/PostCaption.vue'
 import GalleryBackdrop from './components/GalleryBackdrop.vue'
+import ScopedTimelineHeader from './components/ScopedTimelineHeader.vue'
 import bilibiliIcon from '../icon/bilibili.png'
 import bilibiliLineIcon from '../icon/bilibili-1.png'
 import pixivIcon from '../icon/Pixiv.png'
@@ -452,11 +453,11 @@ const mobileAuthorTimelinePosts = computed(() => {
 const mobilePreviewGallery = computed(() => {
   pagerRevision.value
   const post = mobileAuthorPreviewDisplayPost.value
-  if (!post) return { media: [], total: 0 }
+  if (!post) return { media: [], total: 0, stats: { total: 0, today: 0, favorites: 0 } }
   const tag = String(mobileAuthorDetailState.value?.tag || '').trim()
   const query = tag ? { ...authorPostQuery(post), source: 'all', author: '', tag } : authorPostQuery(post)
   const page = postPager.entry(query)
-  return { media: page.headerMedia, total: page.loaded ? page.total : mobileAuthorTimelinePosts.value.length }
+  return { media: page.headerMedia, total: page.loaded ? page.total : mobileAuthorTimelinePosts.value.length, stats: page.scopeStats || { total: page.total, today: 0, favorites: 0 } }
 })
 function buildMobilePreviewMasonrySnapshot(items, scrollY = 0) {
   const gap = 8
@@ -642,6 +643,14 @@ const activePostPage = computed(() => {
   return { ...postPager.entry(feedQuery.value) }
 })
 const headerGallery = computed(() => activePostPage.value.headerMedia)
+const galleryBackdropControl = ref(null)
+const galleryPresenting = ref(false)
+const isScopedTimeline = computed(() => Boolean(selectedAuthor.value || selectedTag.value || activeNav.value === 'liked'))
+const scopedTimelineStats = computed(() => activePostPage.value.scopeStats || {
+  total: activePostPage.value.total, today: 0,
+  favorites: activeNav.value === 'liked' ? activePostPage.value.total : 0
+})
+watch(feedQueryKey, () => galleryBackdropControl.value?.close())
 const filteredPosts = computed(() => {
   const byId = new Map(posts.value.map(post => [String(post.id), post]))
   const allPosts = activePostPage.value.ids.map(id => byId.get(id)).filter(Boolean)
@@ -679,6 +688,7 @@ const mobileTimelineMeta = computed(() => activeNav.value === 'source' && source
 const mobileTimelineTitle = computed(() => mobileTimelineMeta.value ? `${mobileTimelineMeta.value.label}动态` : '全部动态')
 const phoneOverlayKey = computed(() => {
   if (!phonePortrait.value) return ''
+  if (galleryPresenting.value) return 'gallery'
   if (mobileLightboxMenu.value.open) return 'lightbox-menu'
   if (lightbox.value.open) return ''
   if (confirmDialog.value.open) return 'confirm'
@@ -2519,7 +2529,8 @@ function clearPhoneOverlayHistoryForNavigation() {
 }
 function dismissPhoneOverlay(kind = phoneOverlayKey.value) {
   phoneOverlayDismissInProgress = true
-  if (kind === 'lightbox-menu') mobileLightboxMenu.value = { open: false, x: 0, y: 0 }
+  if (kind === 'gallery') galleryBackdropControl.value?.close()
+  else if (kind === 'lightbox-menu') mobileLightboxMenu.value = { open: false, x: 0, y: 0 }
   else if (kind === 'confirm') closeConfirmDialog(false)
   else if (kind === 'feed-settings') showFeedSettings.value = false
   else if (kind === 'credential-platform') credentialPlatform.value = null
@@ -4537,22 +4548,16 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
         <template v-else-if="localSeason === 'autumn'"><i class="autumn-glow"></i><i class="autumn-branch"></i><i class="autumn-leaf leaf-one"></i><i class="autumn-leaf leaf-two"></i><i class="autumn-leaf leaf-three"></i><i class="autumn-leaf leaf-four"></i><i class="autumn-leaf leaf-five"></i></template>
         <template v-else><i class="winter-haze"></i><i class="winter-branch"></i><i class="winter-plum plum-one"></i><i class="winter-plum plum-two"></i><i class="winter-plum plum-three"></i><i class="winter-snowman"></i><i class="winter-ice"></i><i class="winter-snowflake flake-one"></i><i class="winter-snowflake flake-two"></i><i class="winter-snowflake flake-three"></i><i class="winter-snowflake flake-four"></i><i class="winter-snowflake flake-five"></i></template>
       </div>
-      <header v-if="authorProfile" class="topbar author-page-header scoped-gallery-header">
-        <GalleryBackdrop :images="headerGallery" />
-        <div class="author-profile-main">
-          <img :key="`${authorProfile.source}:${authorProfile.name}:${postAvatar(authorProfile)}`" :src="postAvatar(authorProfile)" data-fallback-index="0" :alt="authorProfile.name" referrerpolicy="no-referrer" @load="handlePostAvatarLoad($event, authorProfile)" @error="handlePostAvatarError($event, authorProfile)">
-          <div><p class="eyebrow">AUTHOR TIMELINE · {{ sourceMeta[authorProfile.source].label }}</p><h1>{{ authorProfile.name }}</h1><p class="subtitle">共 {{ authorProfile.count }} 条已拉取动态</p></div>
-        </div>
-      </header>
-      <header v-else-if="activeNav !== 'liked'" class="topbar timeline-hero" :class="{ 'scoped-gallery-header': selectedTag }">
-<GalleryBackdrop v-if="selectedTag" :images="headerGallery" />
+      <GalleryBackdrop v-if="isScopedTimeline" ref="galleryBackdropControl" :images="headerGallery" interactive :mobile="phonePortrait" :dark="isDark" @present="galleryPresenting = $event" />
+      <ScopedTimelineHeader v-if="isScopedTimeline" :title="authorProfile ? authorProfile.name : selectedTag ? `#${selectedTag}` : '收藏'" :avatar="authorProfile ? postAvatar(authorProfile) : ''" :source-label="authorProfile ? sourceMeta[authorProfile.source].label : ''" :stats="scopedTimelineStats" :favorites-only="activeNav === 'liked' && !authorProfile && !selectedTag" @avatar-load="handlePostAvatarLoad($event, authorProfile)" @avatar-error="handlePostAvatarError($event, authorProfile)" />
+      <header v-else class="topbar timeline-hero">
 <div class="timeline-hero-copy">
 <p class="eyebrow">SAVED MOMENTS · {{ new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' }) }}</p>
-<h1>{{ selectedTag ? `#${selectedTag}` : `${localGreeting}，拾光者` }}</h1>
-<p class="subtitle">{{ selectedTag ? `这里汇总了所有带有 #${selectedTag} 的动态。` : '这里有你关注的世界，和刚刚发生的一切。' }}</p>
+<h1>{{ `${localGreeting}，拾光者` }}</h1>
+<p class="subtitle">这里有你关注的世界，和刚刚发生的一切。</p>
 </div>
 </header>
-      <section v-if="!authorProfile" class="stats">
+      <section v-if="!isScopedTimeline" class="stats">
 <div class="stat-card">
 <div class="stat-icon mint"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9h8M8 13h5"/></svg></div>
 <div>
@@ -4703,7 +4708,8 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
     </aside>
     <aside v-if="phonePortrait && mobileAuthorPreviewDisplayPost && !mobileTimelineCanReturn && !mobileDetailForwardHandoff && (mobileAuthorPreviewHandoff || mobileDetailPageDragging || mobileDetailPageAnimating || (mobileTimelineCanReturn && (mobileAuthorPageDragging || mobileAuthorPageAnimating)))" class="mobile-author-swipe-preview" :style="mobileAuthorPreviewStyle" aria-hidden="true">
       <div class="mobile-transition-page-content" :style="mobileAuthorPreviewContentStyle">
-      <header class="topbar author-page-header mobile-author-preview-head scoped-gallery-header"><GalleryBackdrop :images="mobilePreviewGallery.media" /><div class="author-profile-main"><img :key="'preview:' + authorAvatarKey(mobileAuthorPreviewDisplayPost) + ':' + postAvatar(mobileAuthorPreviewDisplayPost)" :src="postAvatar(mobileAuthorPreviewDisplayPost)" :alt="mobileAuthorPreviewDisplayPost.author" @load="handlePostAvatarLoad($event, mobileAuthorPreviewDisplayPost)" @error="handlePostAvatarError($event, mobileAuthorPreviewDisplayPost)"><div><p class="eyebrow">AUTHOR TIMELINE · {{ sourceMeta[mobileAuthorPreviewDisplayPost.source].label }}</p><h1>{{ mobileAuthorPreviewDisplayPost.author }}</h1><p class="subtitle">共 {{ mobilePreviewGallery.total }} 条已拉取动态</p></div></div></header>
+      <GalleryBackdrop :images="mobilePreviewGallery.media" />
+      <ScopedTimelineHeader :title="mobileAuthorPreviewDisplayPost.author" :avatar="postAvatar(mobileAuthorPreviewDisplayPost)" :source-label="sourceMeta[mobileAuthorPreviewDisplayPost.source].label" :stats="mobilePreviewGallery.stats" @avatar-load="handlePostAvatarLoad($event, mobileAuthorPreviewDisplayPost)" @avatar-error="handlePostAvatarError($event, mobileAuthorPreviewDisplayPost)" />
       <div class="section-heading mobile-author-preview-heading"><div class="filters"><button class="timeline-sort-button" type="button" tabindex="-1"><span class="timeline-sort-symbol" :style="{ '--nav-mask': `url(${timelineSort === 'newest' ? newestSortIcon : oldestSortIcon})` }"></span></button><button class="timeline-view-button timeline-toolbar-button" type="button" tabindex="-1"><span :class="['timeline-view-symbol', { 'list-view-symbol': !isMasonryView }]" :style="{ '--nav-mask': `url(${isMasonryView ? masonryViewIcon : listViewIcon})` }"></span></button><button class="timeline-refresh-button timeline-toolbar-button" type="button" tabindex="-1"><span class="timeline-refresh-symbol" :style="{ '--nav-mask': `url(${refreshIcon})` }"></span></button></div><div class="timeline-tools"><label class="timeline-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><input type="search" value="" placeholder="搜索" tabindex="-1" readonly></label></div></div>
       <section class="mobile-author-preview-feed feed-list masonry-feed" :style="mobileAuthorPreviewFeedStyle">
         <article v-for="item in mobileAuthorPreviewItems" :key="item.post.id" :class="['masonry-card', { 'text-only': !masonryCover(item.post) && !item.post.videos?.length }]" :style="mobilePreviewMasonryItemStyle(item)">

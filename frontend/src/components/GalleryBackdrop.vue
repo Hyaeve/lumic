@@ -1,6 +1,7 @@
 <script setup>
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
-const props = defineProps({ images: { type: Array, default: () => [] } })
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+const props = defineProps({ images: { type: Array, default: () => [] }, interactive: Boolean, mobile: Boolean, dark: Boolean })
+const emit = defineEmits(['present'])
 const layers = ref(['', ''])
 const active = ref(0)
 let timer
@@ -10,6 +11,123 @@ const anchor = ref(null)
 const host = ref(null)
 const backdropStyle = ref({})
 let observer
+const presenting = ref(false)
+const expanded = ref(false)
+const closing = ref(false)
+const presentationStyle = ref({})
+const presentationElement = ref(null)
+let closeTimer
+let expandFrame
+let previousFocus
+let touchStart = null
+let wheelDistance = 0
+let wheelTime = 0
+let lockedUntil = 0
+const excludedTarget = target => Boolean(target?.closest('button, a, input, textarea, video, .media-frame, .modal, .lightbox-layer'))
+
+function presentationBounds() {
+  const bounds = host.value?.getBoundingClientRect()
+  if (!bounds) return
+  presentationStyle.value = {
+    left: `${props.mobile ? 0 : bounds.left}px`,
+    width: `${props.mobile ? window.innerWidth : bounds.width}px`,
+    '--gallery-collapsed-height': backdropStyle.value.height || '320px',
+    '--gallery-fade-start': backdropStyle.value['--gallery-fade-start']
+  }
+}
+async function openPresentation() {
+  if (!props.interactive || presenting.value || !previous || window.scrollY > 2) return
+  previousFocus = document.activeElement
+  presentationBounds()
+  presenting.value = true
+  closing.value = false
+  document.documentElement.classList.add('gallery-presenting')
+  host.value.inert = true
+  emit('present', true)
+  lockedUntil = performance.now() + 450
+  await nextTick()
+  if (!presenting.value || closing.value || !presentationElement.value) return
+  // Commit the header-sized first frame before expanding it into the viewport.
+  presentationElement.value?.getBoundingClientRect()
+  expandFrame = requestAnimationFrame(() => {
+    expanded.value = true
+    presentationElement.value?.focus({ preventScroll: true })
+  })
+}
+function closePresentation() {
+  if (!presenting.value || closing.value) return
+  cancelAnimationFrame(expandFrame)
+  closing.value = true
+  expanded.value = false
+  emit('present', false)
+  closeTimer = setTimeout(() => {
+    presenting.value = false
+    closing.value = false
+    document.documentElement.classList.remove('gallery-presenting')
+    if (host.value) host.value.inert = false
+    previousFocus?.focus?.({ preventScroll: true })
+    lockedUntil = performance.now() + 350
+  }, matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 420)
+}
+function onWheel(event) {
+  if (event.ctrlKey || props.mobile || !props.interactive) return
+  if (!presenting.value && (window.scrollY > 2 || excludedTarget(event.target) || event.deltaY >= 0 || !previous)) return
+  event.preventDefault()
+  event.stopPropagation()
+  if (performance.now() < lockedUntil || closing.value) return
+  const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? window.innerHeight : 1)
+  const time = performance.now()
+  if (time - wheelTime > 220 || Math.sign(delta) !== Math.sign(wheelDistance)) wheelDistance = 0
+  wheelTime = time
+  wheelDistance += delta
+  if ((!presenting.value && wheelDistance < -64) || (presenting.value && wheelDistance > 64)) {
+    if (presenting.value) closePresentation()
+    else void openPresentation()
+    wheelDistance = 0
+  }
+}
+function onTouchStart(event) {
+  touchStart = null
+  if (!props.interactive || !props.mobile || event.touches.length !== 1 || closing.value) return
+  if (!presenting.value && (window.scrollY > 2 || excludedTarget(event.target) || !previous)) return
+  const point = event.touches[0]
+  touchStart = { x: point.clientX, y: point.clientY, distance: 0 }
+}
+function onTouchMove(event) {
+  if (!touchStart || event.touches.length !== 1) { touchStart = null; return }
+  const point = event.touches[0]
+  const dx = point.clientX - touchStart.x
+  const dy = point.clientY - touchStart.y
+  if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 10) { touchStart = null; return }
+  if ((!presenting.value && dy > 10) || presenting.value) {
+    if (event.cancelable) event.preventDefault()
+    event.stopPropagation()
+    touchStart.distance = dy
+  }
+}
+function onTouchEnd(event) {
+  if (!touchStart) return
+  const distance = touchStart.distance
+  touchStart = null
+  if (event.type === 'touchcancel' || performance.now() < lockedUntil) return
+  if ((!presenting.value && distance > 76) || (presenting.value && distance < -64)) {
+    event.stopPropagation()
+    if (presenting.value) closePresentation()
+    else void openPresentation()
+  }
+}
+function onKey(event) {
+  if (!presenting.value) return
+  if (event.key === 'Escape' || event.key === 'ArrowDown') {
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    closePresentation()
+  } else if (event.key === 'Tab') {
+    event.preventDefault()
+    presentationElement.value?.querySelector('button')?.focus()
+  }
+}
+defineExpose({ close: closePresentation })
 onMounted(() => {
   host.value = anchor.value?.closest('.content, .mobile-transition-page-content')
   if (!host.value) return
@@ -24,6 +142,15 @@ onMounted(() => {
   observer.observe(host.value)
   if (toolbar) observer.observe(toolbar)
   measure()
+  if (props.interactive) {
+    host.value.addEventListener('wheel', onWheel, { passive: false, capture: true })
+    host.value.addEventListener('touchstart', onTouchStart, { passive: true, capture: true })
+    host.value.addEventListener('touchmove', onTouchMove, { passive: false, capture: true })
+    host.value.addEventListener('touchend', onTouchEnd, true)
+    host.value.addEventListener('touchcancel', onTouchEnd, true)
+    window.addEventListener('keydown', onKey, true)
+    window.addEventListener('resize', presentationBounds)
+  }
 })
 async function advance(token) {
   const choices = props.images.filter(image => image !== previous)
@@ -44,9 +171,26 @@ watch(() => props.images.join('|'), () => {
   layers.value = ['', '']
   previous = ''
   void advance(token)
-  if (props.images.length > 1) timer = setInterval(() => advance(token), 60000)
+  if (props.images.length > 1) timer = setInterval(() => advance(token), 15000)
 }, { immediate: true })
-onBeforeUnmount(() => { version++; clearInterval(timer); observer?.disconnect() })
+onBeforeUnmount(() => {
+  version++
+  clearInterval(timer)
+  clearTimeout(closeTimer)
+  cancelAnimationFrame(expandFrame)
+  observer?.disconnect()
+  if (!props.interactive) return
+  host.value?.removeEventListener('wheel', onWheel, true)
+  host.value?.removeEventListener('touchstart', onTouchStart, true)
+  host.value?.removeEventListener('touchmove', onTouchMove, true)
+  host.value?.removeEventListener('touchend', onTouchEnd, true)
+  host.value?.removeEventListener('touchcancel', onTouchEnd, true)
+  window.removeEventListener('keydown', onKey, true)
+  window.removeEventListener('resize', presentationBounds)
+  document.documentElement.classList.remove('gallery-presenting')
+  if (host.value) host.value.inert = false
+  emit('present', false)
+})
 </script>
 
 <template>
@@ -56,6 +200,14 @@ onBeforeUnmount(() => { version++; clearInterval(timer); observer?.disconnect() 
     <img v-for="(image, index) in layers" :key="index" :src="image || undefined" :class="{ active: image && index === active }" alt="">
     <span></span>
   </div>
+  </Teleport>
+  <Teleport to="body">
+    <section v-if="presenting" ref="presentationElement" class="gallery-presentation" :class="{ expanded, closing, dark }" :style="presentationStyle" tabindex="-1" role="dialog" aria-modal="true" aria-label="背景图片幻灯片" @wheel="onWheel" @touchstart.passive="onTouchStart" @touchmove="onTouchMove" @touchend="onTouchEnd" @touchcancel="onTouchEnd">
+      <div class="gallery-presentation-images"><img v-for="(image, index) in layers" :key="index" :src="image || undefined" :class="{ active: image && index === active }" alt=""></div>
+      <div class="gallery-presentation-tint"></div>
+      <div class="gallery-presentation-fade"></div>
+      <button type="button" class="gallery-presentation-close" aria-label="退出背景幻灯片" @click="closePresentation"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+    </section>
   </Teleport>
 </template>
 
@@ -68,4 +220,22 @@ onBeforeUnmount(() => { version++; clearInterval(timer); observer?.disconnect() 
 .gallery-backdrop span { position: absolute; inset: 0; background: linear-gradient(90deg, #f6f8f9ed, #f6f8f94a 78%, #f6f8f960); }
 .dark .gallery-backdrop span { background: linear-gradient(90deg, #101319ed, #10131950 78%, #10131970); }
 @media (prefers-reduced-motion: reduce) { .gallery-backdrop img { transition: none; } }
+html.gallery-presenting, html.gallery-presenting body { overflow: hidden; overscroll-behavior: none; }
+.gallery-presentation { position: fixed; top: 0; height: var(--gallery-collapsed-height); z-index: 85; overflow: hidden; outline: none; touch-action: none; background: #f6f8f9; opacity: 0; transition: height .42s cubic-bezier(.22,.8,.24,1), opacity .42s ease; }
+.gallery-presentation.dark { background: #101319; }
+.gallery-presentation.expanded { height: 100dvh; opacity: 1; }
+.gallery-presentation-images { position: absolute; inset: 0; opacity: .5; transition: opacity .42s ease; }
+.gallery-presentation-images img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 1.4s ease; }
+.gallery-presentation-images img.active { opacity: 1; }
+.gallery-presentation-tint { position: absolute; inset: 0; background: linear-gradient(90deg, #f6f8f9ed, #f6f8f94a 78%, #f6f8f960); opacity: 1; transition: opacity .42s ease; }
+.gallery-presentation.dark .gallery-presentation-tint { background: linear-gradient(90deg, #101319ed, #10131950 78%, #10131970); }
+.gallery-presentation-fade { position: absolute; inset: 0; background: linear-gradient(to bottom, transparent var(--gallery-fade-start), #f6f8f9); opacity: 1; transition: opacity .42s ease; }
+.gallery-presentation.dark .gallery-presentation-fade { background: linear-gradient(to bottom, transparent var(--gallery-fade-start), #101319); }
+.gallery-presentation.expanded .gallery-presentation-images { opacity: 1; }
+.gallery-presentation.expanded :is(.gallery-presentation-tint, .gallery-presentation-fade) { opacity: 0; }
+.gallery-presentation-close { position: absolute; top: max(18px, env(safe-area-inset-top)); right: 18px; width: 44px; height: 44px; display: grid; place-items: center; padding: 0; color: white; background: #15182150; border-radius: 50%; opacity: 0; transition: opacity .2s; }
+.gallery-presentation.expanded .gallery-presentation-close { opacity: 1; }
+.gallery-presentation-close svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
+.gallery-presentation-close:hover, .gallery-presentation-close:focus-visible { background: #15182190; outline: 2px solid #c8b7ff; }
+@media (prefers-reduced-motion: reduce) { .gallery-presentation, .gallery-presentation * { transition: none!important; } }
 </style>

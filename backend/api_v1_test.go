@@ -254,6 +254,47 @@ func TestAPIV1PostFiltersOldestOrderAndLimitCap(t *testing.T) {
 	}
 }
 
+func TestAPIV1ScopedGalleryAndStatistics(t *testing.T) {
+	base := time.Date(2026, time.September, 19, 8, 0, 0, 0, time.UTC)
+	store := &Store{posts: []Post{
+		{ID: "a", Source: SourceWeibo, Author: "Alice", Tags: []string{"Art"}, Media: []string{"/flow/a.jpg"}, Liked: true, Published: base},
+		{ID: "b", Source: SourceWeibo, Author: "Alice", Tags: []string{"Art"}, Media: []string{"/flow/b.jpg"}, Published: base.Add(-24 * time.Hour)},
+		{ID: "c", Source: SourcePixiv, Author: "Beta", Media: []string{"/flow/c.jpg"}, Liked: true, Published: base},
+	}}
+	for _, filter := range []string{"author=Alice", "tag=Art", "liked=true"} {
+		response := httptest.NewRecorder()
+		apiV1PostsHandler(store)(response, httptest.NewRequest(http.MethodGet, "/api/v1/posts?"+filter+"&limit=1&statsDate=2026-09-19&tzOffset=0", nil))
+		var page apiV1PostPage
+		if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil {
+			t.Fatal(err)
+		}
+		if page.ScopeStats == nil || page.ScopeStats.Total != 2 || len(page.HeaderMedia) != 2 || page.Stats.All.Total != 3 {
+			t.Fatalf("%s: incomplete scoped metadata: %#v", filter, page)
+		}
+		expectedToday, expectedFavorites := 1, 1
+		if filter == "liked=true" {
+			expectedToday, expectedFavorites = 2, 2
+			for _, media := range page.HeaderMedia {
+				if media == "/flow/b.jpg" {
+					t.Fatal("favorites background included an unliked post")
+				}
+			}
+		}
+		if page.ScopeStats.Today != expectedToday || page.ScopeStats.Favorites != expectedFavorites {
+			t.Fatalf("%s: incorrect scoped statistics: %#v", filter, page.ScopeStats)
+		}
+		next := httptest.NewRecorder()
+		apiV1PostsHandler(store)(next, httptest.NewRequest(http.MethodGet, "/api/v1/posts?"+filter+"&limit=1&cursor="+url.QueryEscape(page.NextCursor), nil))
+		var later apiV1PostPage
+		if err := json.Unmarshal(next.Body.Bytes(), &later); err != nil {
+			t.Fatal(err)
+		}
+		if later.ScopeStats != nil || len(later.HeaderMedia) != 0 {
+			t.Fatal("later page repeated header metadata")
+		}
+	}
+}
+
 func TestAPIV1FeedsAreUnifiedAndHideStoragePaths(t *testing.T) {
 	store := &Store{feeds: []SourceConfig{{ID: "legacy", Source: SourceTwitter, Name: "Legacy", Enabled: true, StoragePath: "C:/private/legacy"}}}
 	platforms := &BilibiliStore{config: BilibiliConfig{

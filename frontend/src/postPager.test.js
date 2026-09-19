@@ -2,6 +2,21 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createPostPager } from './postPager.js'
 
+test('retains scoped statistics and gallery across pagination and cached returns', async () => {
+  const pager = createPostPager({
+    fetchPage: async (_, cursor) => cursor
+      ? { items: [{ id: 'second' }], total: 2, hasMore: false }
+      : { items: [{ id: 'first' }], total: 2, hasMore: true, nextCursor: 'next', headerMedia: ['/flow/a.jpg'], scopeStats: { total: 2, today: 1, favorites: 2 } },
+    onPage: () => {}
+  })
+  const query = { liked: 'true' }
+  await pager.ensure(query)
+  await pager.next(query)
+  await pager.ensure(query)
+  assert.deepEqual(pager.entry(query).scopeStats, { total: 2, today: 1, favorites: 2 })
+  assert.deepEqual(pager.entry(query).headerMedia, ['/flow/a.jpg'])
+})
+
 test('loads only requested pages and retains the origin order across navigation', async () => {
   const requests = []
   const pager = createPostPager({
