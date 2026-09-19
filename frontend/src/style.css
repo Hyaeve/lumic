@@ -347,6 +347,31 @@ button[data-tooltip]:hover > .app-tooltip, button[data-tooltip]:focus-visible > 
 .sync-latest-icon:disabled { opacity: .55; cursor: wait; }
 .pulls-page .subscription-list-heading { margin-top: 24px; }
 .pulls-page .pull-list { margin-top: 0; }
+@media (min-width: 761px) {
+  .pulls-page .pull-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pulls-page .pull-list > .empty { grid-column: 1 / -1; }
+  .pulls-page .pull-card {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr) auto;
+    grid-template-areas: 'avatar info action' 'avatar status action';
+    gap: 7px 12px;
+    min-width: 0;
+    padding: 16px;
+  }
+  .pulls-page .pull-avatar-button { grid-area: avatar; width: 44px; height: 44px; }
+  .pulls-page .pull-info { grid-area: info; }
+  .pulls-page .pull-title { flex-wrap: wrap; gap: 5px 8px; }
+  .pulls-page .pull-title strong { min-width: 0; max-width: 100%; }
+  .pulls-page .pull-title .source-pill { margin-left: 0; flex: none; }
+  .pulls-page .pull-handle, .pulls-page .pull-info small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pulls-page .pull-status { grid-area: status; min-width: 0; }
+  .pulls-page .pull-actions { grid-area: action; margin: 0; }
+}
+@media (min-width: 761px) and (max-width: 1100px) {
+  .pulls-page .pull-card { gap: 7px 8px; padding: 12px; }
+  .pulls-page .pull-action { display: grid; place-items: center; width: 36px; height: 36px; padding: 0; }
+  .pulls-page .pull-action span { display: none; }
+}
 .subscription-pagination { display: flex; align-items: center; justify-content: flex-start; gap: 8px; margin-top: 14px; }
 .subscription-pagination button { display: grid; place-items: center; width: 34px; height: 34px; padding: 0; color: var(--muted); background: var(--card); border: 1px solid var(--line); border-radius: 8px; transition: color .18s ease, border-color .18s ease, background .18s ease, transform .18s ease; }
 .subscription-pagination button:hover:not(:disabled) { color: #80611c; background: #f6eccf; border-color: #dccb9c; transform: translateX(-1px); }

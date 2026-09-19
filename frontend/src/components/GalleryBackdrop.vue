@@ -111,11 +111,15 @@ async function onWheel(event) {
   settleTimer = setTimeout(() => settleGesture(), 240)
 }
 function onTouchStart(event) {
+  if (event.touches.length !== 1 && tracking.value === 'touch') settleGesture(true)
   touchStart = null
   if (!props.interactive || !props.mobile || event.touches.length !== 1 || closing.value || performance.now() < lockedUntil) return
   if (!presenting.value && (window.scrollY > 2 || excludedTarget(event.target) || !previous)) return
   const point = event.touches[0]
-  touchStart = { x: point.clientX, y: point.clientY, progress: progress.value }
+  touchStart = {
+    x: point.clientX, y: point.clientY, progress: progress.value,
+    time: performance.now(), distance: 0, canTap: expanded.value
+  }
 }
 function onTouchMove(event) {
   if (!touchStart || event.touches.length !== 1) {
@@ -126,6 +130,8 @@ function onTouchMove(event) {
   const point = event.touches[0]
   const dx = point.clientX - touchStart.x
   const dy = point.clientY - touchStart.y
+  touchStart.distance = Math.max(touchStart.distance, Math.hypot(dx, dy))
+  if (touchStart.distance <= 10 && tracking.value !== 'touch') return
   if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 10) {
     if (tracking.value === 'touch') settleGesture(true)
     touchStart = null
@@ -141,7 +147,18 @@ function onTouchMove(event) {
 }
 function onTouchEnd(event) {
   if (!touchStart) return
+  const gesture = touchStart
   touchStart = null
+  const point = event.changedTouches[0]
+  const distance = Math.max(gesture.distance, point ? Math.hypot(point.clientX - gesture.x, point.clientY - gesture.y) : 0)
+  if (event.type !== 'touchcancel' && event.touches.length === 0 && gesture.canTap &&
+      expanded.value && distance <= 10 && performance.now() - gesture.time <= 350) {
+    // Consume the synthetic click so it cannot reach the restored timeline.
+    if (event.cancelable) event.preventDefault()
+    event.stopPropagation()
+    closePresentation()
+    return
+  }
   if (tracking.value === 'touch') {
     event.stopPropagation()
     settleGesture(event.type === 'touchcancel')
