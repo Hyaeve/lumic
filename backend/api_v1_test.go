@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -9,6 +10,91 @@ import (
 	"testing"
 	"time"
 )
+
+func TestAPIV1RandomPaginationAndScopedMetadata(t *testing.T) {
+	store := &Store{}
+	for i := 0; i < 83; i++ {
+		source := SourceWeibo
+		if i%2 == 0 {
+			source = SourcePixiv
+		}
+		store.posts = append(store.posts, Post{
+			ID: fmt.Sprintf("post-%03d", i), Source: source, Author: "Alice",
+			FeedIDs: []string{"collection"}, Tags: []string{"art"},
+			Media:     []string{fmt.Sprintf("/flow/test/%d.jpg", i)},
+			Published: time.Date(2026, 9, 1, 0, i, 0, 0, time.UTC),
+		})
+	}
+	handler := apiV1PostsHandler(store)
+	get := func(path string) apiV1PostPage {
+		t.Helper()
+		response := httptest.NewRecorder()
+		handler(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("request failed: %s", response.Body.String())
+		}
+		var page apiV1PostPage
+		if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil {
+			t.Fatal(err)
+		}
+		return page
+	}
+	first := get("/api/v1/posts?order=random&seed=one&limit=7")
+	repeat := get("/api/v1/posts?order=random&seed=one&limit=7")
+	different := get("/api/v1/posts?order=random&seed=two&limit=7")
+	if first.Items[0].ID != repeat.Items[0].ID {
+		t.Fatal("same seed changed order")
+	}
+	same := true
+	for i := range first.Items {
+		same = same && first.Items[i].ID == different.Items[i].ID
+	}
+	if same {
+		t.Fatal("different seed did not reshuffle")
+	}
+	seen := make(map[string]bool)
+	page := first
+	for {
+		if page.Total != 83 {
+			t.Fatalf("total is cursor-dependent: %d", page.Total)
+		}
+		for _, item := range page.Items {
+			if seen[item.ID] {
+				t.Fatalf("duplicate across random pages: %s", item.ID)
+			}
+			seen[item.ID] = true
+		}
+		if !page.HasMore {
+			break
+		}
+		page = get("/api/v1/posts?order=random&seed=one&limit=7&cursor=" + url.QueryEscape(page.NextCursor))
+	}
+	if len(seen) != 83 {
+		t.Fatalf("random pagination lost items: %d", len(seen))
+	}
+	bad := httptest.NewRecorder()
+	handler(bad, httptest.NewRequest(http.MethodGet, "/api/v1/posts?order=random&seed=two&cursor="+url.QueryEscape(first.NextCursor), nil))
+	if bad.Code != http.StatusBadRequest {
+		t.Fatal("accepted cursor from another random seed")
+	}
+	scoped := get("/api/v1/posts?feedId=collection&source=pixiv&author=Alice&tag=art&limit=2")
+	if scoped.Total != 42 || len(scoped.Items) != 2 || len(scoped.HeaderMedia) != 12 {
+		t.Fatalf("unexpected scoped metadata: %#v", scoped)
+	}
+	for _, media := range scoped.HeaderMedia {
+		if !strings.HasPrefix(media, "/preview/") {
+			t.Fatalf("header returned an original: %s", media)
+		}
+	}
+	absent := get("/api/v1/posts?feedId=missing")
+	if absent.Total != 0 || len(absent.Items) != 0 {
+		t.Fatal("collection filter ignored")
+	}
+	single := get("/api/v1/posts?id=post-080")
+	if single.Total != 1 || len(single.Items) != 1 || single.Items[0].ID != "post-080" {
+		t.Fatal("deep-linked post lookup failed")
+	}
+}
 
 func TestAPIV1BearerLoginAuthorizesAndLogoutRevokes(t *testing.T) {
 	sessions := &SessionStore{tokens: make(map[string]time.Time)}

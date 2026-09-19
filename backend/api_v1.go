@@ -58,11 +58,13 @@ type apiV1Feed struct {
 }
 
 type apiV1PostPage struct {
-	Items      []apiV1Post     `json:"items"`
-	NextCursor string          `json:"nextCursor,omitempty"`
-	HasMore    bool            `json:"hasMore"`
-	Limit      int             `json:"limit"`
-	Stats      *apiV1PostStats `json:"stats,omitempty"`
+	Items       []apiV1Post     `json:"items"`
+	NextCursor  string          `json:"nextCursor,omitempty"`
+	HasMore     bool            `json:"hasMore"`
+	Limit       int             `json:"limit"`
+	Stats       *apiV1PostStats `json:"stats,omitempty"`
+	Total       int             `json:"total"`
+	HeaderMedia []string        `json:"headerMedia,omitempty"`
 }
 
 type apiV1PostStat struct {
@@ -92,6 +94,9 @@ type apiV1PostQuery struct {
 	Author     string
 	Tag        string
 	Search     string
+	Seed       string
+	FeedID     string
+	ID         string
 	Cursor     *apiV1PostCursor
 	FilterHash string
 }
@@ -274,6 +279,11 @@ func apiV1PostsHandler(store *Store) http.HandlerFunc {
 			stats = buildAPIV1PostStats(posts, r)
 		}
 		posts = filterAndSortAPIV1Posts(posts, query)
+		total := len(posts)
+		var headerMedia []string
+		if query.Cursor == nil && (query.Author != "" || query.Tag != "" || query.FeedID != "") {
+			headerMedia = apiV1HeaderMedia(posts, query.FilterHash)
+		}
 		if query.Cursor != nil {
 			remaining := posts[:0]
 			for _, post := range posts {
@@ -291,7 +301,7 @@ func apiV1PostsHandler(store *Store) http.HandlerFunc {
 		for _, post := range posts {
 			items = append(items, toAPIV1Post(post))
 		}
-		page := apiV1PostPage{Items: items, HasMore: hasMore, Limit: query.Limit, Stats: stats}
+		page := apiV1PostPage{Items: items, HasMore: hasMore, Limit: query.Limit, Stats: stats, Total: total, HeaderMedia: headerMedia}
 		if hasMore && len(posts) > 0 {
 			last := posts[len(posts)-1]
 			page.NextCursor, err = encodeAPIV1PostCursor(apiV1PostCursor{Version: 1, Published: last.Published, ID: last.ID, Order: query.Order, FilterHash: query.FilterHash})
@@ -305,11 +315,12 @@ func apiV1PostsHandler(store *Store) http.HandlerFunc {
 }
 
 func apiV1QueryUsesStoredOrder(query apiV1PostQuery) bool {
-	return query.Order == "newest" && query.Source == "all" && query.Liked == nil && query.Author == "" && query.Tag == "" && query.Search == ""
+	return query.Order == "newest" && query.Source == "all" && query.Liked == nil && query.Author == "" && query.Tag == "" && query.Search == "" && query.FeedID == "" && query.ID == ""
 }
 
 func writeAPIV1StoredPostPage(w http.ResponseWriter, r *http.Request, store *Store, query apiV1PostQuery) {
 	store.RLock()
+	total := len(store.posts)
 	posts := make([]Post, 0, query.Limit+1)
 	var stats *apiV1PostStats
 	if query.Cursor == nil {
@@ -334,7 +345,7 @@ func writeAPIV1StoredPostPage(w http.ResponseWriter, r *http.Request, store *Sto
 	for _, post := range posts {
 		items = append(items, toAPIV1Post(post))
 	}
-	page := apiV1PostPage{Items: items, HasMore: hasMore, Limit: query.Limit, Stats: stats}
+	page := apiV1PostPage{Items: items, HasMore: hasMore, Limit: query.Limit, Stats: stats, Total: total}
 	if hasMore && len(posts) > 0 {
 		last := posts[len(posts)-1]
 		cursor, err := encodeAPIV1PostCursor(apiV1PostCursor{Version: 1, Published: last.Published, ID: last.ID, Order: query.Order, FilterHash: query.FilterHash})
@@ -390,12 +401,18 @@ func parseAPIV1PostQuery(r *http.Request) (apiV1PostQuery, error) {
 		Author: strings.TrimSpace(values.Get("author")),
 		Tag:    strings.TrimSpace(values.Get("tag")),
 		Search: strings.TrimSpace(values.Get("q")),
+		Seed:   strings.TrimSpace(values.Get("seed")),
+		FeedID: strings.TrimSpace(values.Get("feedId")),
+		ID:     strings.TrimSpace(values.Get("id")),
 	}
 	if query.Order == "" {
 		query.Order = "newest"
 	}
-	if query.Order != "newest" && query.Order != "oldest" {
-		return query, &apiV1QueryError{"order 仅支持 newest 或 oldest"}
+	if query.Order != "newest" && query.Order != "oldest" && query.Order != "random" {
+		return query, &apiV1QueryError{"order 仅支持 newest、oldest 或 random"}
+	}
+	if len(query.Seed) > 128 {
+		return query, &apiV1QueryError{"seed 不能超过 128 字节"}
 	}
 	if query.Source == "" {
 		query.Source = "all"
@@ -447,14 +464,19 @@ func apiV1PostFilterHash(query apiV1PostQuery) string {
 	if query.Liked != nil {
 		liked = strconv.FormatBool(*query.Liked)
 	}
-	canonical := strings.Join([]string{
+	fields := []string{
 		query.Order,
 		query.Source,
 		liked,
 		strings.ToLower(query.Author),
 		strings.ToLower(query.Tag),
 		strings.ToLower(query.Search),
-	}, "\x1f")
+	}
+	// Keep cursors from existing chronological clients valid after upgrading.
+	if query.Seed != "" || query.FeedID != "" || query.ID != "" {
+		fields = append(fields, query.Seed, query.FeedID, query.ID)
+	}
+	canonical := strings.Join(fields, "\x1f")
 	sum := sha256.Sum256([]byte(canonical))
 	return hex.EncodeToString(sum[:12])
 }
@@ -464,6 +486,12 @@ func filterAndSortAPIV1Posts(posts []Post, query apiV1PostQuery) []Post {
 	filtered := posts[:0]
 	for _, post := range posts {
 		if query.Source != "all" && string(post.Source) != query.Source {
+			continue
+		}
+		if query.ID != "" && post.ID != query.ID {
+			continue
+		}
+		if query.FeedID != "" && !containsExact(post.FeedIDs, query.FeedID) {
 			continue
 		}
 		if query.Liked != nil && post.Liked != *query.Liked {
@@ -497,7 +525,19 @@ func filterAndSortAPIV1Posts(posts []Post, query apiV1PostQuery) []Post {
 		}
 		filtered = append(filtered, post)
 	}
+	ranks := make(map[string]string)
+	if query.Order == "random" {
+		for _, post := range filtered {
+			ranks[post.ID] = apiV1RandomRank(query.FilterHash, post.ID)
+		}
+	}
 	sort.Slice(filtered, func(i, j int) bool {
+		if query.Order == "random" && ranks[filtered[i].ID] != ranks[filtered[j].ID] {
+			return ranks[filtered[i].ID] < ranks[filtered[j].ID]
+		}
+		if query.Order == "random" {
+			return filtered[i].ID < filtered[j].ID
+		}
 		if filtered[i].Published.Equal(filtered[j].Published) {
 			return filtered[i].ID < filtered[j].ID
 		}
@@ -510,6 +550,10 @@ func filterAndSortAPIV1Posts(posts []Post, query apiV1PostQuery) []Post {
 }
 
 func apiV1PostAfterCursor(post Post, cursor apiV1PostCursor, order string) bool {
+	if order == "random" {
+		rank, previous := apiV1RandomRank(cursor.FilterHash, post.ID), apiV1RandomRank(cursor.FilterHash, cursor.ID)
+		return rank > previous || (rank == previous && post.ID > cursor.ID)
+	}
 	if post.Published.Equal(cursor.Published) {
 		return post.ID > cursor.ID
 	}
@@ -517,6 +561,52 @@ func apiV1PostAfterCursor(post Post, cursor apiV1PostCursor, order string) bool 
 		return post.Published.After(cursor.Published)
 	}
 	return post.Published.Before(cursor.Published)
+}
+
+func apiV1RandomRank(seed, id string) string {
+	sum := sha256.Sum256([]byte(seed + "\x00" + id))
+	return hex.EncodeToString(sum[:])
+}
+
+func containsExact(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+// Keep only a small, deterministic gallery sample; header rotation never needs
+// the complete post collection or original-size media in the response.
+func apiV1HeaderMedia(posts []Post, seed string) []string {
+	type candidate struct{ path, rank string }
+	sample := make([]candidate, 0, 13)
+	seen := make(map[string]bool)
+	for _, post := range posts {
+		for _, media := range post.Media {
+			if media == "" || seen[media] {
+				continue
+			}
+			seen[media] = true
+			item := candidate{apiV1PreviewPath(media), apiV1RandomRank(seed, media)}
+			position := sort.Search(len(sample), func(i int) bool { return sample[i].rank >= item.rank })
+			if position >= 12 {
+				continue
+			}
+			sample = append(sample, candidate{})
+			copy(sample[position+1:], sample[position:])
+			sample[position] = item
+			if len(sample) > 12 {
+				sample = sample[:12]
+			}
+		}
+	}
+	result := make([]string, 0, len(sample))
+	for _, item := range sample {
+		result = append(result, item.path)
+	}
+	return result
 }
 
 func encodeAPIV1PostCursor(cursor apiV1PostCursor) (string, error) {

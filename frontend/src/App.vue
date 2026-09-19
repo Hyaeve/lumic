@@ -1,6 +1,10 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import QRCode from 'qrcode'
+import { createPostPager, postQueryKey } from './postPager'
+import PostTime from './components/PostTime.vue'
+import PostCaption from './components/PostCaption.vue'
+import GalleryBackdrop from './components/GalleryBackdrop.vue'
 import bilibiliIcon from '../icon/bilibili.png'
 import bilibiliLineIcon from '../icon/bilibili-1.png'
 import pixivIcon from '../icon/Pixiv.png'
@@ -111,7 +115,6 @@ const twitterError = ref('')
 const syncing = ref(false)
 const posts = ref([])
 const postStats = ref(null)
-const postsFullyLoaded = ref(false)
 const feeds = ref([])
 const resolvedAuthorAvatars = ref({})
 const postActionBusy = ref('')
@@ -121,6 +124,13 @@ const selectionAction = ref('delete')
 const selectedPostIds = ref([])
 const contextMenu = ref({ open: false, x: 0, y: 0, post: null })
 const timelineSort = ref('newest')
+const allTimelineOrder = ref('random')
+const randomSeed = ref(newRandomSeed())
+const pagerRevision = ref(0)
+const detailOriginQuery = ref(null)
+const expandedCaptions = ref({})
+const desktopDetailIndex = ref(0)
+let desktopDetailWheelAt = 0
 const timelineView = ref('list')
 const timelineSearch = ref('')
 const timelineSearchFocused = ref(false)
@@ -190,6 +200,7 @@ let pendingMasonryWidth = 0
 let sessionPollTimer = null
 const observedPostElements = new Map()
 const masonryColumnAssignments = new Map()
+const queryMasonryAssignments = new Map()
 const preloadedPreviewUrls = new Set()
 const transientTimers = new Set()
 const lightbox = ref({ open: false, media: [], index: 0, author: '', scale: 1, rotation: 0, fit: true, x: 0, y: 0, dragging: false, motion: 'enter' })
@@ -253,7 +264,6 @@ let mobilePostOriginVisual = null
 let mobileDetailRouteExitLayer = null
 let mobileDetailRouteExitTarget = null
 let mobileDetailGestureReturnPending = false
-let postLoadGeneration = 0
 let mobileLightboxAnimationTimer = 0
 let mobileLightboxAnimationFrame = 0
 let mobileLightboxTransitionStep = 0
@@ -339,16 +349,16 @@ const serverStats = computed(() => {
   if (!postStats.value) return null
   return activeSource.value === 'all' ? postStats.value.all : postStats.value.bySource?.[activeSource.value]
 })
-const totalStatsCount = computed(() => !postsFullyLoaded.value && serverStats.value ? serverStats.value.total : statsPosts.value.length)
+const totalStatsCount = computed(() => serverStats.value ? serverStats.value.total : statsPosts.value.length)
 const todayStatsCount = computed(() => {
-  if (!postsFullyLoaded.value && serverStats.value) return serverStats.value.today
+  if (serverStats.value) return serverStats.value.today
   const today = new Date()
   return statsPosts.value.filter(post => {
     const published = new Date(post.published)
     return !Number.isNaN(published.getTime()) && published.getFullYear() === today.getFullYear() && published.getMonth() === today.getMonth() && published.getDate() === today.getDate()
   }).length
 })
-const favoriteStatsCount = computed(() => !postsFullyLoaded.value && serverStats.value ? serverStats.value.favorites : statsPosts.value.filter(post => post.liked).length)
+const favoriteStatsCount = computed(() => serverStats.value ? serverStats.value.favorites : statsPosts.value.filter(post => post.liked).length)
 const selectedPostCount = computed(() => selectedPostIds.value.length)
 const mobileDetailMedia = computed(() => postDetailMedia(masonryDetailPost.value))
 const mobileDetailCurrentMedia = computed(() => mobileDetailMedia.value[mobileDetailIndex.value] || null)
@@ -417,6 +427,13 @@ const mobileAuthorTimelinePosts = computed(() => {
   const post = mobileAuthorPreviewDisplayPost.value
   if (!post) return []
   const tag = String(mobileAuthorDetailState.value?.tag || '').trim()
+  pagerRevision.value
+  const query = tag ? { ...authorPostQuery(post), source: 'all', author: '', tag } : authorPostQuery(post)
+  const page = postPager.entry(query)
+  if (page.loaded) {
+    const byId = new Map(posts.value.map(item => [String(item.id), item]))
+    return page.ids.map(id => byId.get(id)).filter(Boolean)
+  }
   let result = tag
     ? posts.value.filter(item => Array.isArray(item.tags) && item.tags.includes(tag))
     : posts.value.filter(item => item.source === post.source && item.author === post.author)
@@ -431,6 +448,15 @@ const mobileAuthorTimelinePosts = computed(() => {
     const difference = new Date(right.published).getTime() - new Date(left.published).getTime()
     return timelineSort.value === 'newest' ? difference : -difference
   })
+})
+const mobilePreviewGallery = computed(() => {
+  pagerRevision.value
+  const post = mobileAuthorPreviewDisplayPost.value
+  if (!post) return { media: [], total: 0 }
+  const tag = String(mobileAuthorDetailState.value?.tag || '').trim()
+  const query = tag ? { ...authorPostQuery(post), source: 'all', author: '', tag } : authorPostQuery(post)
+  const page = postPager.entry(query)
+  return { media: page.headerMedia.map(media => previewMedia(media)), total: page.loaded ? page.total : mobileAuthorTimelinePosts.value.length }
 })
 function buildMobilePreviewMasonrySnapshot(items, scrollY = 0) {
   const gap = 8
@@ -582,8 +608,43 @@ const mobileLightboxLayerStyle = computed(() => ({
   opacity: '1',
   transition: mobileLightboxExitDragging.value ? 'none' : mobileLightboxExitAnimating.value ? 'transform .34s cubic-bezier(.16,.88,.22,1)' : undefined
 }))
+const isAllFeed = computed(() => !selectedAuthor.value && !selectedTag.value && activeNav.value !== 'liked' && activeSource.value === 'all')
+const effectiveTimelineSort = computed(() => isAllFeed.value ? allTimelineOrder.value : timelineSort.value)
+const feedQuery = computed(() => {
+  if ((masonryDetailPost.value || pendingPostId.value) && detailOriginQuery.value) return detailOriginQuery.value
+  return {
+    source: activeSource.value,
+    order: effectiveTimelineSort.value,
+    seed: effectiveTimelineSort.value === 'random' ? randomSeed.value : '',
+    author: selectedAuthor.value?.feedId ? '' : selectedAuthor.value?.name || '',
+    feedId: selectedAuthor.value?.feedId || '',
+    tag: selectedTag.value,
+    liked: activeNav.value === 'liked' ? 'true' : '',
+    q: timelineSearch.value.trim()
+  }
+})
+const feedQueryKey = computed(() => postQueryKey(feedQuery.value))
+const postPager = createPostPager({
+  fetchPage: async (query, cursor) => {
+    const params = new URLSearchParams({ ...query, limit: '30', cursor, statsDate: startDateTodayKey(), tzOffset: String(new Date().getTimezoneOffset()) })
+    const response = await fetch(`/api/v1/posts?${params}`, { cache: 'no-store' })
+    if (!response.ok) throw new Error('动态加载失败，请重试')
+    return response.json()
+  },
+  onPage: page => {
+    if (page.stats) postStats.value = page.stats
+    publishPostPage(page.items, Boolean(postActionBusy.value))
+  },
+  onChange: () => { pagerRevision.value++; nextTick(scheduleTimelineWindow) }
+})
+const activePostPage = computed(() => {
+  pagerRevision.value
+  return { ...postPager.entry(feedQuery.value) }
+})
+const headerGallery = computed(() => activePostPage.value.headerMedia.map(media => previewMedia(media)))
 const filteredPosts = computed(() => {
-  const allPosts = Array.isArray(posts.value) ? posts.value : []
+  const byId = new Map(posts.value.map(post => [String(post.id), post]))
+  const allPosts = activePostPage.value.ids.map(id => byId.get(id)).filter(Boolean)
   const timeline = activeNav.value === 'liked' ? allPosts.filter(post => post.liked) : allPosts
   const sourceTimeline = activeSource.value === 'all' ? timeline : timeline.filter(post => post.source === activeSource.value)
   let result = sourceTimeline
@@ -596,10 +657,7 @@ const filteredPosts = computed(() => {
     const searchable = [post.caption, post.author, ...tags, ...tags.map(tag => `#${tag}`)].map(value => String(value || '').normalize('NFKC').toLocaleLowerCase())
     return keywords.every(keyword => searchable.some(value => value.includes(keyword)))
   })
-  return [...result].sort((left, right) => {
-    const difference = new Date(right.published).getTime() - new Date(left.published).getTime()
-    return timelineSort.value === 'newest' ? difference : -difference
-  })
+  return result
 })
 const postById = computed(() => new Map(posts.value.map(post => [String(post.id), post])))
 const effectiveTimelineView = computed(() => timelineView.value)
@@ -708,7 +766,7 @@ const authorProfile = computed(() => {
     ? posts.value.filter(post => post.source === selectedAuthor.value.source && post.feedIds?.includes(selectedAuthor.value.feedId))
     : posts.value.filter(post => post.source === selectedAuthor.value.source && post.author === selectedAuthor.value.name)
   const latest = authorPosts[0]
-  return { ...selectedAuthor.value, avatar: selectedAuthor.value.feedId ? selectedAuthor.value.avatar : (latest?.avatar || selectedAuthor.value.avatar), count: authorPosts.length }
+  return { ...selectedAuthor.value, avatar: selectedAuthor.value.feedId ? selectedAuthor.value.avatar : (latest?.avatar || selectedAuthor.value.avatar), count: activePostPage.value.loaded ? activePostPage.value.total : authorPosts.length }
 })
 const mobileTimelineCanReturn = computed(() => Boolean(phonePortrait.value && mobileForwardPageAvailable.value && !authorProfile.value && !selectedTag.value && !masonryDetailPost.value))
 const mobilePagedTransitionActive = computed(() => Boolean(phonePortrait.value && ((mobileAuthorDetailState.value && (authorProfile.value || selectedTag.value)) || mobileTimelineCanReturn.value)))
@@ -898,8 +956,10 @@ async function logout() {
     mobileSourcesOpen.value = false
     authenticated.value = false
     posts.value = []
+    postPager.clear()
+    queryMasonryAssignments.clear()
+    detailOriginQuery.value = null
     postStats.value = null
-    postsFullyLoaded.value = false
     feeds.value = []
     selectedPlatform.value = null
     credentialPlatform.value = null
@@ -917,71 +977,66 @@ function loadRememberedLogin() {
   }
 }
 function publishPostPage(items, preserveLocalState = true) {
-  if (!preserveLocalState) {
-    posts.value = items
-    warmPostAvatars(items)
-    resolveRoutedPost()
-    return
-  }
   const current = new Map(posts.value.map(post => [String(post.id), post]))
-  posts.value = items.map(post => {
+  for (const post of items) {
     const existing = current.get(String(post.id))
-    return existing ? { ...post, liked: existing.liked, favoriteExplicit: existing.favoriteExplicit ?? post.favoriteExplicit } : post
-  })
+    current.set(String(post.id), existing && preserveLocalState ? { ...post, liked: existing.liked, favoriteExplicit: existing.favoriteExplicit ?? post.favoriteExplicit } : post)
+  }
+  posts.value = [...current.values()]
   warmPostAvatars(items)
   resolveRoutedPost()
 }
-async function loadRemainingPostPages(generation, firstPage) {
-  const loaded = [...firstPage.items]
-  let cursor = firstPage.nextCursor || ''
-  let hasMore = Boolean(firstPage.hasMore && cursor)
-  let pagesSincePublish = 0
-  while (hasMore && generation === postLoadGeneration) {
-    await new Promise(resolve => window.setTimeout(resolve, 70))
-    if (generation !== postLoadGeneration) return
-    try {
-      const response = await fetch(`/api/v1/posts?limit=100&order=newest&cursor=${encodeURIComponent(cursor)}`, { cache: 'no-store' })
-      if (!response.ok) return
-      const page = await response.json()
-      if (generation !== postLoadGeneration || !Array.isArray(page.items)) return
-      loaded.push(...page.items)
-      cursor = page.nextCursor || ''
-      hasMore = Boolean(page.hasMore && cursor)
-      pagesSincePublish += 1
-      if (pagesSincePublish >= 4 || !hasMore) {
-        publishPostPage(loaded)
-        pagesSincePublish = 0
-      }
-    } catch {
-      return
-    }
-  }
-  if (generation === postLoadGeneration) postsFullyLoaded.value = true
+function newRandomSeed() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 }
 async function loadPostsIncrementally() {
-  const generation = ++postLoadGeneration
-  postsFullyLoaded.value = false
-  try {
-    const statsDate = startDateTodayKey()
-    const timezoneOffset = new Date().getTimezoneOffset()
-    const response = await fetch(`/api/v1/posts?limit=100&order=newest&statsDate=${encodeURIComponent(statsDate)}&tzOffset=${timezoneOffset}`, { cache: 'no-store' })
-    if (!response.ok) throw new Error('api unavailable')
-    const page = await response.json()
-    if (generation !== postLoadGeneration) return false
-    const items = Array.isArray(page.items) ? page.items : []
-    postStats.value = page.stats || null
-    publishPostPage(items, false)
-    if (page.hasMore && page.nextCursor) void loadRemainingPostPages(generation, { ...page, items })
-    else postsFullyLoaded.value = true
-    return true
-  } catch {
-    if (generation === postLoadGeneration) {
-      posts.value = []
-      postStats.value = null
-      postsFullyLoaded.value = true
-    }
-    return false
+  postPager.invalidate()
+  const page = await postPager.ensure(feedQuery.value)
+  if (pendingPostId.value && !posts.value.some(post => String(post.id) === pendingPostId.value)) {
+    await postPager.ensure({ id: pendingPostId.value, order: 'newest', source: 'all' })
   }
+  return !page.error
+}
+function toggleTimelineSort() {
+  if (isAllFeed.value) allTimelineOrder.value = allTimelineOrder.value === 'newest' ? 'oldest' : 'newest'
+  else timelineSort.value = timelineSort.value === 'newest' ? 'oldest' : 'newest'
+  window.scrollTo({ top: 0, behavior: 'auto' })
+}
+function reshuffleTimeline() {
+  if (!isAllFeed.value) return
+  allTimelineOrder.value = 'random'
+  randomSeed.value = newRandomSeed()
+  mobileForwardPageAvailable.value = false
+  mobileForwardPageState.value = null
+  window.scrollTo({ top: 0, behavior: 'auto' })
+  showMobileControls()
+}
+function authorPostQuery(post) {
+  return { source: post.source, order: timelineSort.value, seed: '', author: post.author, feedId: '', tag: '', liked: '', q: timelineSearch.value.trim() }
+}
+function prefetchAuthorPosts(post) {
+  if (!post?.author) return
+  void postPager.ensure(authorPostQuery(post)).then(() => {
+    if (mobileAuthorPreviewPost.value?.id === post.id || masonryDetailPost.value?.id === post.id) {
+      captureMobileAuthorPreviewSnapshot(mobileAuthorDetailState.value?.authorScrollY || 0)
+    }
+  })
+}
+async function refreshFeedMetadata() {
+  const query = { ...feedQuery.value }
+  try {
+    const params = new URLSearchParams({ ...query, limit: '1', statsDate: startDateTodayKey(), tzOffset: String(new Date().getTimezoneOffset()) })
+    const response = await fetch(`/api/v1/posts?${params}`, { cache: 'no-store' })
+    if (!response.ok) return
+    const page = await response.json()
+    if (page.stats) postStats.value = page.stats
+    postPager.entry(query).total = page.total
+    pagerRevision.value++
+  } catch {}
+}
+function invalidateOtherFavorites() {
+  const current = feedQueryKey.value
+  postPager.invalidate(query => query.liked === 'true' && postQueryKey(query) !== current)
 }
 async function loadData() {
   await loadPostsIncrementally()
@@ -1042,6 +1097,10 @@ function useRoundedTooltip(event) {
   if (phonePortrait.value || !(event.target instanceof Element)) return
   const button = event.target.closest('button[title]')
   if (!button || button.dataset.tooltipDisabled === 'true') return
+  if (button.matches('.post-author-avatar, .post-author-name, .masonry-author, .post-like-button, .post-visit-button, .timeline-sort-button, .timeline-view-button, .timeline-refresh-button, .scroll-top-button')) {
+    button.removeAttribute('title')
+    return
+  }
   const label = button.getAttribute('title')
   if (!label) return
   button.dataset.tooltip = label
@@ -1367,13 +1426,9 @@ async function restoreConfiguration(event) {
     await loadData()
   } catch (error) { settingsError.value = error.message } finally { settingsBusy.value = false }
 }
-function postDateOnly(date) {
-  return new Date(date).toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
-}
-// Masonry cards are narrow, so phones show the date alone and keep the author
-// name and the date on one line. Desktop cards still carry the clock time.
 function masonryDate(date) {
-  return phonePortrait.value ? postDateOnly(date) : postDateTime(date)
+  const value = new Date(date)
+  return `${String(value.getMonth() + 1).padStart(2, '0')}/${String(value.getDate()).padStart(2, '0')}`
 }
 function postDateTime(date) {
   return new Date(date).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
@@ -2348,11 +2403,14 @@ function preventModalWheel(event) {
   const layer = target?.closest('.modal-backdrop, .confirm-dialog-layer')
   if (!layer) return
   const panel = target.closest('.modal, .masonry-detail-modal, .confirm-dialog')
+  if (panel && target.closest('.desktop-detail-gallery')) return
   if (panel) {
-    // Keep scrolling inside an overflowing modal, but stop the wheel event
-    // from bubbling into the page behind it.
-    event.stopPropagation()
-    return
+    for (let node = target; node && node !== layer; node = node.parentElement) {
+      const overflow = getComputedStyle(node).overflowY
+      if (/(auto|scroll)/.test(overflow) && node.scrollHeight > node.clientHeight + 1) {
+        if ((event.deltaY < 0 && node.scrollTop > 0) || (event.deltaY > 0 && node.scrollTop + node.clientHeight < node.scrollHeight - 1)) return
+      }
+    }
   }
   event.preventDefault()
   event.stopPropagation()
@@ -2444,6 +2502,7 @@ async function deletePost(post) {
     const response = await fetch(`/api/posts?id=${encodeURIComponent(post.id)}`, { method: 'DELETE' })
     if (!response.ok) throw new Error(await responseError(response, '删除动态失败'))
     posts.value = posts.value.filter(item => item.id !== post.id)
+    void refreshFeedMetadata()
     timelineMessage.value = '动态已从时间线删除'
     scheduleTransient(() => { if (timelineMessage.value === '动态已从时间线删除') timelineMessage.value = '' }, 2500)
   } catch (error) { timelineMessage.value = error.message } finally { postActionBusy.value = '' }
@@ -2485,9 +2544,9 @@ function handlePostSelectionClick(event, post) {
 function stopSelection() { selectionMode.value = false; selectionAction.value = 'delete'; selectedPostIds.value = [] }
 function closeContextMenu() { contextMenu.value = { open: false, x: 0, y: 0, post: null } }
 function openContextMenu(event, post = null) {
-  const width = 218
+  const width = activeNav.value === 'liked' ? 126 : 106
   const height = post ? 118 : 76
-  contextMenu.value = { open: true, x: Math.min(event.clientX, window.innerWidth - width - 12), y: Math.min(event.clientY, window.innerHeight - height - 12), post }
+  contextMenu.value = { open: true, x: Math.max(8, Math.min(event.clientX, window.innerWidth - width - 12)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - height - 12)), post }
 }
 function startMultiSelectMode() {
   const unfavoriteMode = activeNav.value === 'liked'
@@ -2526,6 +2585,7 @@ async function deleteSelectedPosts() {
     if (!response.ok) throw new Error(await responseError(response, '批量删除失败'))
     const removed = new Set(selectedPostIds.value)
     posts.value = posts.value.filter(post => !removed.has(post.id))
+    void refreshFeedMetadata()
     timelineMessage.value = `已删除 ${removed.size} 条动态`
     stopSelection()
   } catch (error) { timelineMessage.value = error.message } finally { postActionBusy.value = '' }
@@ -2539,13 +2599,15 @@ async function unfavoriteSelectedPosts() {
     if (!response.ok) throw new Error(await responseError(response, '批量取消收藏失败'))
     const selected = new Set(selectedPostIds.value)
     posts.value = posts.value.map(post => selected.has(post.id) ? { ...post, liked: false, favoriteExplicit: true } : post)
+    invalidateOtherFavorites()
+    void refreshFeedMetadata()
     timelineMessage.value = `已取消收藏 ${selected.size} 条动态`
     stopSelection()
   } catch (error) { timelineMessage.value = error.message } finally { postActionBusy.value = '' }
 }
 async function deleteAuthorPosts(source, author) {
   const count = posts.value.filter(post => post.source === source && post.author === author).length
-  const countText = count ? `全部 ${count} 条动态` : '全部动态记录'
+  const countText = '全部动态记录'
   const confirmed = await askConfirm({ title: '删除作者全部动态', message: `确定永久删除“${author}”的${countText}及其 /flow 内容目录吗？订阅关系会保留，后续同步仍可重新创建目录并拉取。`, confirmText: '删除动态及文件' })
   if (!confirmed) return
   postActionBusy.value = `author:${source}:${author}`
@@ -2554,6 +2616,7 @@ async function deleteAuthorPosts(source, author) {
     if (!response.ok) throw new Error(await responseError(response, '删除作者动态失败'))
     const result = await response.json()
     posts.value = posts.value.filter(post => post.source !== source || post.author !== author)
+    await loadPostsIncrementally()
     timelineMessage.value = `已删除 ${author} 的 ${result.count ?? count} 条动态及相关文件`
   } catch (error) { timelineMessage.value = error.message } finally { postActionBusy.value = '' }
 }
@@ -2646,6 +2709,23 @@ function postDetailMedia(post) {
   if (video) images.push({ type: 'video', src: video.url, poster: video.poster || '', key: `video:${video.url}` })
   return images
 }
+const desktopDetailMedia = computed(() => postDetailMedia(masonryDetailPost.value))
+const desktopCurrentMedia = computed(() => desktopDetailMedia.value[desktopDetailIndex.value])
+function moveDesktopDetailMedia(direction) {
+  const count = desktopDetailMedia.value.length
+  if (count < 2) return
+  desktopDetailIndex.value = Math.max(0, Math.min(count - 1, desktopDetailIndex.value + direction))
+}
+function wheelDesktopDetailMedia(event) {
+  if (Math.abs(event.deltaY) < 4 || desktopDetailMedia.value.length < 2) return
+  const now = performance.now()
+  if (now - desktopDetailWheelAt < 220) return
+  desktopDetailWheelAt = now
+  moveDesktopDetailMedia(event.deltaY > 0 ? 1 : -1)
+}
+function authorAccent(source) {
+  return { '--author-accent': { bilibili: '#fb7299', weibo: '#dcae22', pixiv: '#289be7', twitter: '#36a8ed' }[source] || '#49a99f' }
+}
 function setPostVideoRatio(post, event) {
   const video = event.target
   if (!video.videoWidth || !video.videoHeight) return
@@ -2669,6 +2749,10 @@ function toggleTimelineView(event) {
 }
 function openMasonryPost(post, event) {
   if (selectionMode.value) return
+  detailOriginQuery.value = { ...feedQuery.value }
+  desktopDetailIndex.value = 0
+  desktopDetailWheelAt = 0
+  if (phonePortrait.value) prefetchAuthorPosts(post)
   resetMobileDetailPageSwipe()
   mobileMenuOpen.value = false
   mobileSourcesOpen.value = false
@@ -3748,6 +3832,10 @@ async function updatePostFavorite(post, liked) {
     if (!response.ok) throw new Error(await responseError(response, '收藏状态保存失败'))
     const updated = await response.json()
     post.liked = Boolean(updated.liked)
+    const cachedPost = postById.value.get(String(post.id))
+    if (cachedPost) cachedPost.liked = post.liked
+    invalidateOtherFavorites()
+    void refreshFeedMetadata()
   } catch (error) {
     post.liked = previous
     timelineMessage.value = error.message
@@ -3758,6 +3846,7 @@ async function updatePostFavorite(post, liked) {
 function togglePostLike(post) { return updatePostFavorite(post, !post.liked) }
 function navigateTo(nav, source = activeSource.value) {
   clearPhoneOverlayHistoryForNavigation()
+  pendingPostId.value = ''
   resetMobileDetailPageSwipe()
   resetMobileAuthorPageSwipe()
   mobileAuthorDetailState.value = null
@@ -3781,6 +3870,7 @@ function navigateTo(nav, source = activeSource.value) {
 }
 function openTag(tag) {
   clearPhoneOverlayHistoryForNavigation()
+  pendingPostId.value = ''
   mobileForwardPageAvailable.value = false
   mobileForwardPageState.value = null
   const fromDetail = phonePortrait.value && Boolean(masonryDetailPost.value)
@@ -3916,6 +4006,7 @@ function updateTimelineWindow() {
   if (isMasonryView.value) {
     masonryViewportTop.value = Math.max(0, window.scrollY - feedListDocumentTop)
     masonryViewportBottom.value = masonryViewportTop.value + window.innerHeight
+    if (isTimelinePage.value && masonryViewportBottom.value + 1000 >= masonryLayout.value.height) void postPager.next(feedQuery.value)
     return
   }
   const viewportTop = Math.max(0, window.scrollY - feedListDocumentTop)
@@ -3926,6 +4017,7 @@ function updateTimelineWindow() {
   const overscan = phonePortrait.value ? 2 : timelineOverscan
   timelineStart.value = Math.max(0, first - overscan)
   timelineEnd.value = Math.min(filteredPosts.value.length, last + overscan)
+  if (isTimelinePage.value && viewportBottom + 1000 >= offsets[offsets.length - 1]) void postPager.next(feedQuery.value)
 }
 function scheduleTimelineWindow() {
   if (!timelineFrame) timelineFrame = window.requestAnimationFrame(updateTimelineWindow)
@@ -4011,6 +4103,7 @@ function openPhoneDefaultTimeline() {
 }
 function openAuthorPage(name, source, avatar = '', feedId = '', fromMobileDetail = false) {
   clearPhoneOverlayHistoryForNavigation()
+  pendingPostId.value = ''
   mobileSourcesOpen.value = false
   mobileMenuOpen.value = false
   selectedPlatform.value = null
@@ -4258,8 +4351,9 @@ function resolveRoutedPost() {
   if (!pendingPostId.value) return
   const post = posts.value.find(item => String(item.id) === pendingPostId.value)
   if (!post) return
+  if (masonryDetailPost.value?.id !== post.id) mobileDetailIndex.value = 0
   masonryDetailPost.value = post
-  mobileDetailIndex.value = 0
+  pendingPostId.value = ''
 }
 function formatFans(count) { return count >= 10000 ? `${(count / 10000).toFixed(1)}万` : count }
 function platformEmptyMessage(platformKey) {
@@ -4290,7 +4384,24 @@ async function checkSession(refreshData = true) {
     sessionChecked.value = true
   }
 }
-watch(filteredPosts, resetTimelineWindow)
+watch(feedQueryKey, (key, previousKey) => {
+  if (previousKey) queryMasonryAssignments.set(previousKey, { width: masonryColumnWidth.value, count: masonryColumnCount.value, columns: new Map(masonryColumnAssignments) })
+  resetTimelineWindow()
+  const previousLayout = queryMasonryAssignments.get(key)
+  if (previousLayout?.count === masonryColumnCount.value && Math.abs(previousLayout.width - masonryColumnWidth.value) < .5) {
+    masonryColumnAssignments.clear()
+    previousLayout.columns.forEach((column, id) => masonryColumnAssignments.set(id, column))
+    masonryAssignmentColumnCount = previousLayout.count
+  }
+  if (authenticated.value && !showSettings.value && activeNav.value !== 'pulls') void postPager.ensure(feedQuery.value)
+})
+watch(filteredPosts, () => nextTick(() => { scheduleMasonryMetrics(); scheduleTimelineWindow() }))
+watch(() => masonryDetailPost.value?.id, () => {
+  if (phonePortrait.value && masonryDetailPost.value) {
+    prefetchAuthorPosts(masonryDetailPost.value)
+    if (mobileDetailTimelineIndex.value >= filteredPosts.value.length - 4) void postPager.next(feedQuery.value)
+  }
+})
 watch(posts, prunePostCaches)
 watch(feedListElement, (element, previous) => {
   if (previous) feedListResizeObserver?.unobserve(previous)
@@ -4330,7 +4441,7 @@ watch(platformCards, cards => {
   selectedPlatform.value = cards.find(platform => platform.key === selectedPlatform.value.key) || null
 })
 onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; timelineView.value = localStorage.getItem('lumic-timeline-view') === 'masonry' ? 'masonry' : 'list'; if ('scrollRestoration' in window.history) window.history.scrollRestoration = 'manual'; loadRememberedLogin(); document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#080a0e' : '#fbf7ea'); phonePortraitQuery = window.matchMedia('(max-width: 760px)'); phonePortrait.value = isPhonePortraitScreen(); phonePortraitQuery.addEventListener('change', updatePhonePortrait); window.addEventListener('orientationchange', updatePhonePortrait); document.addEventListener('pointerover', useRoundedTooltip, true); document.addEventListener('wheel', preventModalWheel, { capture: true, passive: false }); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = postById.value.get(String(entry.target.dataset.postId)); const borderBox = Array.isArray(entry.borderBoxSize) ? entry.borderBoxSize[0] : entry.borderBoxSize; if (post) measurePostElement(post, entry.target, entry.target.dataset.layout || 'list', borderBox?.blockSize || entry.contentRect.height) }; scheduleTimelineWindow() }); initializeFeedListResizeObserver(); applyRoute(); if (phonePortrait.value && window.location.pathname === '/') openPhoneDefaultTimeline(); ensurePhoneExitBoundary(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', handlePopState); window.addEventListener('scroll', handleWindowScroll, { passive: true }); window.addEventListener('resize', handleWindowResize); scheduleTimelineWindow(); if (phonePortrait.value) showMobileControls() })
-onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLoop(); if (sessionPollTimer) window.clearInterval(sessionPollTimer); if (mobileControlsTimer) window.clearTimeout(mobileControlsTimer); if (mobileAuthorHandoffTimer) window.clearTimeout(mobileAuthorHandoffTimer); if (mobileDetailReturnHandoffTimer) window.clearTimeout(mobileDetailReturnHandoffTimer); if (mobileTimelineReturnHandoffTimer) window.clearTimeout(mobileTimelineReturnHandoffTimer); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); window.removeEventListener('orientationchange', updatePhonePortrait); document.removeEventListener('pointerover', useRoundedTooltip, true); document.removeEventListener('wheel', preventModalWheel, true); postResizeObserver?.disconnect(); feedListResizeObserver?.disconnect(); observedPostElements.clear(); preloadedPreviewUrls.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); clearMobileDetailAnimation(); resetMobileDetailPageSwipe(); cleanupMobileDetailRouteExit(); lightboxHistoryActive = false; resetLightboxState(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', handlePopState); window.removeEventListener('scroll', handleWindowScroll); window.removeEventListener('resize', handleWindowResize); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (masonryMetricsFrame) window.cancelAnimationFrame(masonryMetricsFrame); if (confirmResolver) closeConfirmDialog(false) })
+onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLoop(); if (sessionPollTimer) window.clearInterval(sessionPollTimer); if (mobileControlsTimer) window.clearTimeout(mobileControlsTimer); if (mobileAuthorHandoffTimer) window.clearTimeout(mobileAuthorHandoffTimer); if (mobileDetailReturnHandoffTimer) window.clearTimeout(mobileDetailReturnHandoffTimer); if (mobileTimelineReturnHandoffTimer) window.clearTimeout(mobileTimelineReturnHandoffTimer); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); window.removeEventListener('orientationchange', updatePhonePortrait); document.removeEventListener('pointerover', useRoundedTooltip, true); document.removeEventListener('wheel', preventModalWheel, true); postResizeObserver?.disconnect(); feedListResizeObserver?.disconnect(); observedPostElements.clear(); preloadedPreviewUrls.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); clearMobileDetailAnimation(); resetMobileDetailPageSwipe(); cleanupMobileDetailRouteExit(); lightboxHistoryActive = false; resetLightboxState(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', handlePopState); window.removeEventListener('scroll', handleWindowScroll); window.removeEventListener('resize', handleWindowResize); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (masonryMetricsFrame) window.cancelAnimationFrame(masonryMetricsFrame); if (confirmResolver) closeConfirmDialog(false) })
 </script>
 
 <template>
@@ -4416,21 +4527,23 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
       </div>
     </aside>
     <main v-if="!showSettings && activeNav !== 'pulls' && !(phonePortrait && masonryDetailPost)" :class="['content', { 'liked-page': activeNav === 'liked', 'mobile-author-detail-page': mobilePagedTransitionActive, 'mobile-timeline-returning': mobileTimelineReturnHandoff }]" :style="mobilePagedTransitionActive ? mobileAuthorPageStyle : undefined" @touchstart.passive="beginMobileAuthorPageSwipe" @touchmove="updateMobileAuthorPageSwipe" @touchend.passive="finishMobileAuthorPageSwipe" @touchcancel="finishMobileAuthorPageSwipe" @click="closeContextMenu" @contextmenu.prevent="openContextMenu($event)">
-      <div v-if="!authorProfile && activeNav !== 'liked'" class="night-sky-decor" aria-hidden="true"><i class="night-haze"></i><i class="night-moon"></i><i class="night-star star-one"></i><i class="night-star star-two"></i><i class="night-star star-three"></i><i class="night-star star-four"></i><i class="night-star star-five"></i><i class="night-star star-six"></i><i class="night-star star-seven"></i><i class="night-star star-eight"></i></div>
-      <div v-if="!authorProfile && activeNav !== 'liked'" class="night-meteor-layer" aria-hidden="true"><i v-for="meteor in meteorBurst" :key="meteor.id" class="night-meteor" :style="meteor.style"></i></div>
-      <div v-if="!authorProfile && activeNav !== 'liked'" class="seasonal-decor" :class="`season-${localSeason}`" aria-hidden="true">
+      <div v-if="!authorProfile && !selectedTag && activeNav !== 'liked'" class="night-sky-decor" aria-hidden="true"><i class="night-haze"></i><i class="night-moon"></i><i class="night-star star-one"></i><i class="night-star star-two"></i><i class="night-star star-three"></i><i class="night-star star-four"></i><i class="night-star star-five"></i><i class="night-star star-six"></i><i class="night-star star-seven"></i><i class="night-star star-eight"></i></div>
+      <div v-if="!authorProfile && !selectedTag && activeNav !== 'liked'" class="night-meteor-layer" aria-hidden="true"><i v-for="meteor in meteorBurst" :key="meteor.id" class="night-meteor" :style="meteor.style"></i></div>
+      <div v-if="!authorProfile && !selectedTag && activeNav !== 'liked'" class="seasonal-decor" :class="`season-${localSeason}`" aria-hidden="true">
         <template v-if="localSeason === 'spring'"><i class="spring-branch"></i><i class="spring-stem stem-one"></i><i class="spring-stem stem-two"></i><i class="spring-stem stem-three"></i><i class="spring-leaf spring-leaf-one"></i><i class="spring-leaf spring-leaf-two"></i><i class="spring-leaf spring-leaf-three"></i><i class="spring-blossom blossom-one"></i><i class="spring-blossom blossom-two"></i><i class="spring-blossom blossom-three"></i><i class="spring-blossom blossom-four"></i><i class="spring-petal petal-one"></i><i class="spring-petal petal-two"></i></template>
         <template v-else-if="localSeason === 'summer'"><i class="summer-sun"></i><i class="summer-pond"></i><i class="summer-stem stem-one"></i><i class="summer-stem stem-two"></i><i class="lotus-leaf leaf-one"></i><i class="lotus-leaf leaf-two"></i><i class="summer-lotus"></i><i class="summer-lotus-bud"></i><i class="summer-dragonfly"></i><i class="summer-frog"><span></span></i><i class="summer-fish fish-one"></i><i class="summer-fish fish-two"></i></template>
         <template v-else-if="localSeason === 'autumn'"><i class="autumn-glow"></i><i class="autumn-branch"></i><i class="autumn-leaf leaf-one"></i><i class="autumn-leaf leaf-two"></i><i class="autumn-leaf leaf-three"></i><i class="autumn-leaf leaf-four"></i><i class="autumn-leaf leaf-five"></i></template>
         <template v-else><i class="winter-haze"></i><i class="winter-branch"></i><i class="winter-plum plum-one"></i><i class="winter-plum plum-two"></i><i class="winter-plum plum-three"></i><i class="winter-snowman"></i><i class="winter-ice"></i><i class="winter-snowflake flake-one"></i><i class="winter-snowflake flake-two"></i><i class="winter-snowflake flake-three"></i><i class="winter-snowflake flake-four"></i><i class="winter-snowflake flake-five"></i></template>
       </div>
-      <header v-if="authorProfile" class="topbar author-page-header">
+      <header v-if="authorProfile" class="topbar author-page-header scoped-gallery-header">
+        <GalleryBackdrop :images="headerGallery" />
         <div class="author-profile-main">
           <img :key="`${authorProfile.source}:${authorProfile.name}:${postAvatar(authorProfile)}`" :src="postAvatar(authorProfile)" data-fallback-index="0" :alt="authorProfile.name" referrerpolicy="no-referrer" @load="handlePostAvatarLoad($event, authorProfile)" @error="handlePostAvatarError($event, authorProfile)">
           <div><p class="eyebrow">AUTHOR TIMELINE · {{ sourceMeta[authorProfile.source].label }}</p><h1>{{ authorProfile.name }}</h1><p class="subtitle">共 {{ authorProfile.count }} 条已拉取动态</p></div>
         </div>
       </header>
-      <header v-else-if="activeNav !== 'liked'" class="topbar timeline-hero">
+      <header v-else-if="activeNav !== 'liked'" class="topbar timeline-hero" :class="{ 'scoped-gallery-header': selectedTag }">
+<GalleryBackdrop v-if="selectedTag" :images="headerGallery" />
 <div class="timeline-hero-copy">
 <p class="eyebrow">SAVED MOMENTS · {{ new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' }) }}</p>
 <h1>{{ selectedTag ? `#${selectedTag}` : `${localGreeting}，拾光者` }}</h1>
@@ -4466,13 +4579,13 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
       <div class="section-heading">
 <div class="filters">
 <button v-if="!authorProfile" class="timeline-all-button" :class="{ selected: activeSource === 'all' }" @click="activeSource = 'all'"><span>✦</span>全部</button>
-<button class="timeline-sort-button" type="button" :title="timelineSort === 'newest' ? '最新' : '最旧'" :aria-label="timelineSort === 'newest' ? '当前按最新排序，点击切换为最旧' : '当前按最旧排序，点击切换为最新'" @click="timelineSort = timelineSort === 'newest' ? 'oldest' : 'newest'">
-  <span class="timeline-sort-symbol" :style="{ '--nav-mask': `url(${timelineSort === 'newest' ? newestSortIcon : oldestSortIcon})` }" aria-hidden="true"></span>
+<button class="timeline-sort-button" :class="{ 'random-order': effectiveTimelineSort === 'random' }" type="button" :aria-label="effectiveTimelineSort === 'random' ? '当前随机展示，点击按最新排序' : effectiveTimelineSort === 'newest' ? '当前按最新排序，点击切换为最旧' : '当前按最旧排序，点击切换为最新'" @click="toggleTimelineSort">
+  <span class="timeline-sort-symbol" :style="{ '--nav-mask': `url(${effectiveTimelineSort === 'oldest' ? oldestSortIcon : newestSortIcon})` }" aria-hidden="true"></span>
 </button>
-<button class="timeline-view-button timeline-toolbar-button" type="button" :data-tooltip="isMasonryView ? '瀑布流' : '列表'" :aria-label="isMasonryView ? '当前为瀑布流视图，点击切换为列表' : '当前为列表视图，点击切换为瀑布流'" @click="toggleTimelineView">
+<button class="timeline-view-button timeline-toolbar-button" type="button" :aria-label="isMasonryView ? '当前为瀑布流视图，点击切换为列表' : '当前为列表视图，点击切换为瀑布流'" @click="toggleTimelineView">
   <span :class="['timeline-view-symbol', { 'list-view-symbol': !isMasonryView }]" :style="{ '--nav-mask': `url(${isMasonryView ? masonryViewIcon : listViewIcon})` }" aria-hidden="true"></span>
 </button>
-<button class="timeline-refresh-button timeline-toolbar-button" type="button" :disabled="syncing" data-tooltip="刷新动态" aria-label="刷新动态" @click="refreshTimeline">
+<button class="timeline-refresh-button timeline-toolbar-button" type="button" :disabled="syncing" aria-label="刷新动态" @click="refreshTimeline">
   <span class="timeline-refresh-symbol" :style="{ '--nav-mask': `url(${refreshIcon})` }" aria-hidden="true"></span>
 </button>
 </div>
@@ -4486,16 +4599,16 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
 <div v-if="timelineTopSpace" class="timeline-spacer" :style="{ height: `${timelineTopSpace}px` }" aria-hidden="true"></div>
 <article v-for="post in visiblePosts" :key="post.id" :ref="element => setPostCard(post, element, 'list')" :class="['post-card', { selected: selectedPostIds.includes(post.id), selectable: selectionMode }]" :data-post-id="post.id" @click.capture="handlePostSelectionClick($event, post)" @contextmenu.stop.prevent="openContextMenu($event, post)">
 <label v-if="selectionMode" class="post-select-control" :title="`选择 ${post.author} 的这条动态`" @click.prevent><input type="checkbox" :checked="selectedPostIds.includes(post.id)" tabindex="-1"><span></span></label>
-<div class="post-head">
-<button class="post-author-avatar" type="button" :title="`查看 ${post.author} 的动态`" @click="openAuthor(post)"><img :key="`${post.id}:${postAvatar(post)}`" :src="postAvatar(post)" data-fallback-index="0" :alt="post.author" referrerpolicy="no-referrer" @load="handlePostAvatarLoad($event, post)" @error="handlePostAvatarError($event, post)"></button>
+<div class="post-head" :style="authorAccent(post.source)">
+<button class="post-author-avatar" type="button" :aria-label="`查看 ${post.author} 的动态`" @click="openAuthor(post)"><img :key="`${post.id}:${postAvatar(post)}`" :src="postAvatar(post)" data-fallback-index="0" :alt="post.author" referrerpolicy="no-referrer" @load="handlePostAvatarLoad($event, post)" @error="handlePostAvatarError($event, post)"></button>
 <div class="author">
-<button class="post-author-name" type="button" :title="`查看 ${post.author} 的动态`" @click="openAuthor(post)"><strong>{{ post.author }}</strong></button>
-<span>{{ postDateTime(post.published) }}</span>
+<button class="post-author-name" type="button" :aria-label="`查看 ${post.author} 的动态`" @click="openAuthor(post)"><strong>{{ post.author }}</strong></button>
+<PostTime :value="post.published" :with-time="!phonePortrait" :hover="!phonePortrait" />
 </div>
 <span :class="['source-pill', 'post-source-pill', sourceMeta[post.source].color]">
 <img :class="['source-icon', { 'twitter-night-icon': post.source === 'twitter' && isDark }]" :src="sourceIconFor(post.source)" :alt="`${sourceMeta[post.source].label}图标`">{{ sourceMeta[post.source].label }}</span>
 </div>
-<p v-if="post.caption" class="caption">{{ post.caption }}</p>
+<PostCaption v-if="post.caption" v-model:expanded="expandedCaptions[post.id]" :text="post.caption" />
 <div v-if="post.media?.length" :class="['media-grid', `media-count-${Math.min(post.media.length, 9)}`]">
 <button v-for="(media, mediaIndex) in post.media.slice(0, 9)" :key="media" :class="['media-frame', mediaShape(post, mediaIndex)]" type="button" :aria-label="`查看 ${post.author} 的第 ${mediaIndex + 1} 张图片`" @click="openLightbox(post, mediaIndex)"><img :src="previewMedia(media)" alt="" loading="lazy" decoding="async" fetchpriority="low" @load="setMediaShape(post, mediaIndex, $event); scheduleTimelineWindow()"><span v-if="mediaIndex === 8 && post.media.length > 9" class="media-more-count">+{{ post.media.length - 9 }}</span></button>
 </div>
@@ -4505,8 +4618,8 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
 <div class="post-foot">
 <div class="tag-row"><button v-for="tag in post.tags" :key="tag" type="button" :class="{ active: selectedTag === tag }" @click="openTag(tag)">#{{ tag }}</button></div>
 <div class="post-foot-actions">
-<button :class="['post-like-button', { liked: post.liked }]" :disabled="postActionBusy === `like:${post.id}`" :title="post.liked ? '取消收藏' : '收藏'" :aria-label="post.liked ? '取消收藏' : '收藏'" @click="togglePostLike(post)"><span class="post-action-mask post-favorite-symbol" :style="{ '--post-action-mask': `url(${favoriteNavIcon})` }" aria-hidden="true"></span></button>
-<button class="post-visit-button" :disabled="!post.originalUrl" :title="post.originalUrl ? '访问原动态' : '旧动态暂无原始链接，请重新拉取'" aria-label="访问原动态" @click="openOriginalPost(post)"><span class="post-action-mask post-visit-symbol" :style="{ '--post-action-mask': `url(${visitPostIcon})` }" aria-hidden="true"></span></button>
+<button :class="['post-like-button', { liked: post.liked }]" :disabled="postActionBusy === `like:${post.id}`" :aria-label="post.liked ? '取消收藏' : '收藏'" @click="togglePostLike(post)"><span class="post-action-mask post-favorite-symbol" :style="{ '--post-action-mask': `url(${favoriteNavIcon})` }" aria-hidden="true"></span></button>
+<button class="post-visit-button" :disabled="!post.originalUrl" aria-label="访问原动态" @click="openOriginalPost(post)"><span class="post-action-mask post-visit-symbol" :style="{ '--post-action-mask': `url(${visitPostIcon})` }" aria-hidden="true"></span></button>
 </div>
 </div>
 </article>
@@ -4529,14 +4642,19 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
     <p v-if="item.post.caption" class="masonry-caption">{{ item.post.caption }}</p>
     <div v-if="item.post.tags?.length" class="masonry-tags"><button v-for="tag in item.post.tags.slice(0, 2)" :key="tag" type="button" @click.stop="openTag(tag)">#{{ tag }}</button><span v-if="item.post.tags.length > 2">+{{ item.post.tags.length - 2 }}</span></div>
     <footer class="masonry-meta">
-      <button class="masonry-author" type="button" :title="`查看 ${item.post.author} 的动态`" @click.stop="openAuthor(item.post)"><img :key="`${item.post.id}:${postAvatar(item.post)}`" :src="postAvatar(item.post)" data-fallback-index="0" :alt="item.post.author" referrerpolicy="no-referrer" @load="handlePostAvatarLoad($event, item.post)" @error="handlePostAvatarError($event, item.post)"><span><strong>{{ item.post.author }}</strong><small>{{ masonryDate(item.post.published) }}</small></span></button>
+      <div class="masonry-author" :style="authorAccent(item.post.source)">
+        <button class="post-author-avatar" type="button" :aria-label="`查看 ${item.post.author} 的动态`" @click.stop="openAuthor(item.post)"><img :key="`${item.post.id}:${postAvatar(item.post)}`" :src="postAvatar(item.post)" data-fallback-index="0" :alt="item.post.author" referrerpolicy="no-referrer" @load="handlePostAvatarLoad($event, item.post)" @error="handlePostAvatarError($event, item.post)"></button>
+        <button class="post-author-name" type="button" @click.stop="openAuthor(item.post)"><strong>{{ item.post.author }}</strong></button>
+        <PostTime :value="item.post.published" :hover="!phonePortrait" />
+      </div>
       <button :class="['masonry-like-button', { liked: item.post.liked }]" type="button" :disabled="postActionBusy === `like:${item.post.id}`" :title="item.post.liked ? '取消收藏' : '收藏'" @click.stop="togglePostLike(item.post)"><span class="post-action-mask post-favorite-symbol" :style="{ '--post-action-mask': `url(${favoriteNavIcon})` }" aria-hidden="true"></span></button>
     </footer>
   </div>
 </article>
 </template>
-<div v-if="!filteredPosts.length" class="empty">{{ authorProfile ? '还没有拉取到这个作者的动态' : activeNav === 'liked' ? '还没有收藏的动态' : '还没有这个来源的动态' }}</div>
+<div v-if="!filteredPosts.length && !activePostPage.loading && !activePostPage.error" class="empty">{{ authorProfile ? '还没有拉取到这个作者的动态' : activeNav === 'liked' ? '还没有收藏的动态' : '还没有这个来源的动态' }}</div>
 </section>
+<div class="feed-page-status" role="status"><span v-if="activePostPage.loading">正在加载</span><button v-else-if="activePostPage.error" type="button" @click="postPager.next(feedQuery, true)">加载失败，重试</button></div>
     </main>
     <main v-if="!showSettings && activeNav === 'pulls'" class="content pulls-page">
       <p v-if="timelineMessage" class="timeline-message">{{ timelineMessage }}</p>
@@ -4583,7 +4701,7 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
     </aside>
     <aside v-if="phonePortrait && mobileAuthorPreviewDisplayPost && !mobileTimelineCanReturn && !mobileDetailForwardHandoff && (mobileAuthorPreviewHandoff || mobileDetailPageDragging || mobileDetailPageAnimating || (mobileTimelineCanReturn && (mobileAuthorPageDragging || mobileAuthorPageAnimating)))" class="mobile-author-swipe-preview" :style="mobileAuthorPreviewStyle" aria-hidden="true">
       <div class="mobile-transition-page-content" :style="mobileAuthorPreviewContentStyle">
-      <header class="topbar author-page-header mobile-author-preview-head"><div class="author-profile-main"><img :key="'preview:' + authorAvatarKey(mobileAuthorPreviewDisplayPost) + ':' + postAvatar(mobileAuthorPreviewDisplayPost)" :src="postAvatar(mobileAuthorPreviewDisplayPost)" :alt="mobileAuthorPreviewDisplayPost.author" @load="handlePostAvatarLoad($event, mobileAuthorPreviewDisplayPost)" @error="handlePostAvatarError($event, mobileAuthorPreviewDisplayPost)"><div><p class="eyebrow">AUTHOR TIMELINE · {{ sourceMeta[mobileAuthorPreviewDisplayPost.source].label }}</p><h1>{{ mobileAuthorPreviewDisplayPost.author }}</h1><p class="subtitle">共 {{ mobileAuthorTimelinePosts.length }} 条已拉取动态</p></div></div></header>
+      <header class="topbar author-page-header mobile-author-preview-head scoped-gallery-header"><GalleryBackdrop :images="mobilePreviewGallery.media" /><div class="author-profile-main"><img :key="'preview:' + authorAvatarKey(mobileAuthorPreviewDisplayPost) + ':' + postAvatar(mobileAuthorPreviewDisplayPost)" :src="postAvatar(mobileAuthorPreviewDisplayPost)" :alt="mobileAuthorPreviewDisplayPost.author" @load="handlePostAvatarLoad($event, mobileAuthorPreviewDisplayPost)" @error="handlePostAvatarError($event, mobileAuthorPreviewDisplayPost)"><div><p class="eyebrow">AUTHOR TIMELINE · {{ sourceMeta[mobileAuthorPreviewDisplayPost.source].label }}</p><h1>{{ mobileAuthorPreviewDisplayPost.author }}</h1><p class="subtitle">共 {{ mobilePreviewGallery.total }} 条已拉取动态</p></div></div></header>
       <div class="section-heading mobile-author-preview-heading"><div class="filters"><button class="timeline-sort-button" type="button" tabindex="-1"><span class="timeline-sort-symbol" :style="{ '--nav-mask': `url(${timelineSort === 'newest' ? newestSortIcon : oldestSortIcon})` }"></span></button><button class="timeline-view-button timeline-toolbar-button" type="button" tabindex="-1"><span :class="['timeline-view-symbol', { 'list-view-symbol': !isMasonryView }]" :style="{ '--nav-mask': `url(${isMasonryView ? masonryViewIcon : listViewIcon})` }"></span></button><button class="timeline-refresh-button timeline-toolbar-button" type="button" tabindex="-1"><span class="timeline-refresh-symbol" :style="{ '--nav-mask': `url(${refreshIcon})` }"></span></button></div><div class="timeline-tools"><label class="timeline-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><input type="search" value="" placeholder="搜索" tabindex="-1" readonly></label></div></div>
       <section class="mobile-author-preview-feed feed-list masonry-feed" :style="mobileAuthorPreviewFeedStyle">
         <article v-for="item in mobileAuthorPreviewItems" :key="item.post.id" :class="['masonry-card', { 'text-only': !masonryCover(item.post) && !item.post.videos?.length }]" :style="mobilePreviewMasonryItemStyle(item)">
@@ -4600,7 +4718,7 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
           <div class="masonry-card-body">
             <p v-if="item.post.caption" class="masonry-caption">{{ item.post.caption }}</p>
             <div v-if="item.post.tags?.length" class="masonry-tags"><button v-for="tag in item.post.tags.slice(0, 2)" :key="tag" type="button" tabindex="-1">#{{ tag }}</button><span v-if="item.post.tags.length > 2">+{{ item.post.tags.length - 2 }}</span></div>
-            <footer class="masonry-meta"><span class="masonry-author"><img :src="postAvatar(item.post)" alt=""><span><strong>{{ item.post.author }}</strong><small>{{ masonryDate(item.post.published) }}</small></span></span><span :class="['masonry-like-button', { liked: item.post.liked }]"><span class="post-action-mask post-favorite-symbol" :style="{ '--post-action-mask': `url(${favoriteNavIcon})` }"></span></span></footer>
+            <footer class="masonry-meta"><span class="masonry-author"><img :src="postAvatar(item.post)" alt=""><strong>{{ item.post.author }}</strong><small class="post-time">{{ masonryDate(item.post.published) }}</small></span><span :class="['masonry-like-button', { liked: item.post.liked }]"><span class="post-action-mask post-favorite-symbol" :style="{ '--post-action-mask': `url(${favoriteNavIcon})` }"></span></span></footer>
           </div>
         </article>
       </section>
@@ -4625,7 +4743,7 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
           <div class="masonry-card-body">
             <p v-if="item.post.caption" class="masonry-caption">{{ item.post.caption }}</p>
             <div v-if="item.post.tags?.length" class="masonry-tags"><span v-for="tag in item.post.tags.slice(0, 2)" :key="tag">#{{ tag }}</span><span v-if="item.post.tags.length > 2">+{{ item.post.tags.length - 2 }}</span></div>
-            <footer class="masonry-meta"><span class="masonry-author"><img :src="postAvatar(item.post)" alt=""><span><strong>{{ item.post.author }}</strong><small>{{ masonryDate(item.post.published) }}</small></span></span><span :class="['masonry-like-button', { liked: item.post.liked }]"><span class="post-action-mask post-favorite-symbol" :style="{ '--post-action-mask': `url(${favoriteNavIcon})` }"></span></span></footer>
+            <footer class="masonry-meta"><span class="masonry-author"><img :src="postAvatar(item.post)" alt=""><strong>{{ item.post.author }}</strong><small class="post-time">{{ masonryDate(item.post.published) }}</small></span><span :class="['masonry-like-button', { liked: item.post.liked }]"><span class="post-action-mask post-favorite-symbol" :style="{ '--post-action-mask': `url(${favoriteNavIcon})` }"></span></span></footer>
           </div>
         </article>
       </section>
@@ -4690,24 +4808,42 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
       </footer>
     </main>
     <div v-if="masonryDetailPost && !phonePortrait" class="modal-backdrop masonry-detail-backdrop" @click.self="closePostDetail">
-      <article class="masonry-detail-modal" role="dialog" aria-modal="true" :aria-label="`${masonryDetailPost.author} 的动态详情`">
-        <div class="post-head">
-          <button class="post-author-avatar" type="button" :title="`查看 ${masonryDetailPost.author} 的动态`" @click="openAuthor(masonryDetailPost)"><img :src="postAvatar(masonryDetailPost)" data-fallback-index="0" :alt="masonryDetailPost.author" referrerpolicy="no-referrer" @error="handlePostAvatarError($event, masonryDetailPost)"></button>
-          <div class="author"><button class="post-author-name" type="button" @click="openAuthor(masonryDetailPost)"><strong>{{ masonryDetailPost.author }}</strong></button><span>{{ postDateTime(masonryDetailPost.published) }}</span></div>
-          <span :class="['source-pill', 'post-source-pill', sourceMeta[masonryDetailPost.source].color]"><img :class="['source-icon', { 'twitter-night-icon': masonryDetailPost.source === 'twitter' && isDark }]" :src="sourceIconFor(masonryDetailPost.source)" :alt="`${sourceMeta[masonryDetailPost.source].label}图标`">{{ sourceMeta[masonryDetailPost.source].label }}</span>
-        </div>
-        <p v-if="masonryDetailPost.caption" class="caption">{{ masonryDetailPost.caption }}</p>
-        <div v-if="masonryDetailPost.media?.length" :class="['media-grid', 'masonry-detail-media-grid', `media-count-${Math.min(masonryDetailPost.media.length, 4)}`]">
-          <button v-for="(media, mediaIndex) in masonryDetailPost.media.slice(0, 4)" :key="media" :class="['media-frame', mediaShape(masonryDetailPost, mediaIndex)]" type="button" :aria-label="`查看第 ${mediaIndex + 1} 张图片`" @click="openLightbox(masonryDetailPost, mediaIndex)"><img :src="previewMedia(media)" alt="" loading="lazy" decoding="async" @load="setMediaShape(masonryDetailPost, mediaIndex, $event)"><span v-if="mediaIndex === 3 && masonryDetailPost.media.length > 4" class="media-more-count">+{{ masonryDetailPost.media.length - 4 }}</span></button>
-        </div>
-        <div v-if="primaryVideo(masonryDetailPost)" class="post-video-list"><div :class="['post-video-frame', postVideoFrameClass(masonryDetailPost)]" :style="postVideoFrameStyle(masonryDetailPost)"><video :src="primaryVideo(masonryDetailPost).url" :poster="primaryVideo(masonryDetailPost).poster ? previewMedia(primaryVideo(masonryDetailPost).poster) : undefined" controls playsinline autoplay muted preload="auto" @loadedmetadata="setPostVideoRatio(masonryDetailPost, $event)"></video></div></div>
-        <div class="post-foot masonry-detail-foot"><div class="tag-row"><button v-for="tag in masonryDetailPost.tags" :key="tag" type="button" @click="openTag(tag)">#{{ tag }}</button></div><div class="post-foot-actions"><button :class="['post-like-button', { liked: masonryDetailPost.liked }]" :title="masonryDetailPost.liked ? '取消收藏' : '收藏'" @click="togglePostLike(masonryDetailPost)"><span class="post-action-mask post-favorite-symbol" :style="{ '--post-action-mask': `url(${favoriteNavIcon})` }" aria-hidden="true"></span></button><button class="post-visit-button" :disabled="!masonryDetailPost.originalUrl" title="访问原动态" @click="openOriginalPost(masonryDetailPost)"><span class="post-action-mask post-visit-symbol" :style="{ '--post-action-mask': `url(${visitPostIcon})` }" aria-hidden="true"></span></button></div></div>
+      <article class="masonry-detail-modal desktop-post-detail" :style="authorAccent(masonryDetailPost.source)" role="dialog" aria-modal="true" :aria-label="`${masonryDetailPost.author} 的动态详情`">
+        <section class="desktop-detail-gallery" tabindex="0" aria-label="动态媒体" @wheel.stop.prevent="wheelDesktopDetailMedia" @keydown.left.prevent="moveDesktopDetailMedia(-1)" @keydown.right.prevent="moveDesktopDetailMedia(1)">
+          <Transition name="detail-media" mode="out-in">
+            <button v-if="desktopCurrentMedia?.type === 'image'" :key="desktopCurrentMedia.key" class="desktop-detail-image" type="button" aria-label="查看大图" @click="openLightbox(masonryDetailPost, desktopDetailIndex)"><img :src="previewMedia(desktopCurrentMedia.src)" :alt="`${masonryDetailPost.author} 的第 ${desktopDetailIndex + 1} 张图片`"></button>
+            <video v-else-if="desktopCurrentMedia?.type === 'video'" :key="desktopCurrentMedia.key" :src="desktopCurrentMedia.src" :poster="desktopCurrentMedia.poster ? previewMedia(desktopCurrentMedia.poster) : undefined" controls playsinline autoplay muted preload="metadata"></video>
+            <div v-else class="desktop-detail-no-media">暂无图片</div>
+          </Transition>
+          <template v-if="desktopDetailMedia.length > 1">
+            <button class="desktop-gallery-nav previous" type="button" :disabled="desktopDetailIndex === 0" aria-label="上一张" @click="moveDesktopDetailMedia(-1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 5-7 7 7 7"/></svg></button>
+            <button class="desktop-gallery-nav next" type="button" :disabled="desktopDetailIndex === desktopDetailMedia.length - 1" aria-label="下一张" @click="moveDesktopDetailMedia(1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"/></svg></button>
+            <span class="desktop-gallery-count">{{ desktopDetailIndex + 1 }} / {{ desktopDetailMedia.length }}</span>
+          </template>
+        </section>
+        <section class="desktop-detail-info">
+          <header class="post-head">
+            <button class="post-author-avatar" type="button" :aria-label="`查看 ${masonryDetailPost.author} 的动态`" @click="openAuthor(masonryDetailPost)"><img :src="postAvatar(masonryDetailPost)" data-fallback-index="0" :alt="masonryDetailPost.author" referrerpolicy="no-referrer" @error="handlePostAvatarError($event, masonryDetailPost)"></button>
+            <div class="author"><button class="post-author-name" type="button" @click="openAuthor(masonryDetailPost)"><strong>{{ masonryDetailPost.author }}</strong></button></div>
+            <span :class="['source-pill', 'post-source-pill', sourceMeta[masonryDetailPost.source].color]"><img :class="['source-icon', { 'twitter-night-icon': masonryDetailPost.source === 'twitter' && isDark }]" :src="sourceIconFor(masonryDetailPost.source)" :alt="sourceMeta[masonryDetailPost.source].label"></span>
+            <button class="desktop-detail-close" type="button" aria-label="关闭动态详情" @click="closePostDetail"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+          </header>
+          <div class="desktop-detail-copy" tabindex="0" aria-label="动态正文"><p v-if="masonryDetailPost.caption" class="caption">{{ masonryDetailPost.caption }}</p></div>
+          <footer class="post-foot masonry-detail-foot">
+            <PostTime :value="masonryDetailPost.published" hover />
+            <div class="tag-row"><button v-for="tag in masonryDetailPost.tags" :key="tag" type="button" @click="openTag(tag)">#{{ tag }}</button></div>
+            <div class="post-foot-actions">
+              <button :class="['post-like-button', { liked: masonryDetailPost.liked }]" :disabled="postActionBusy === `like:${masonryDetailPost.id}`" :aria-label="masonryDetailPost.liked ? '取消收藏' : '收藏'" @click="togglePostLike(masonryDetailPost)"><span class="post-action-mask post-favorite-symbol" :style="{ '--post-action-mask': `url(${favoriteNavIcon})` }" aria-hidden="true"></span></button>
+              <button class="post-visit-button" :disabled="!masonryDetailPost.originalUrl" aria-label="访问原动态" @click="openOriginalPost(masonryDetailPost)"><span class="post-action-mask post-visit-symbol" :style="{ '--post-action-mask': `url(${visitPostIcon})` }" aria-hidden="true"></span></button>
+            </div>
+          </footer>
+        </section>
       </article>
     </div>
     <div v-if="contextMenu.open" class="timeline-context-menu" :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }" role="menu" @click.stop>
-      <button type="button" role="menuitem" @click="startMultiSelectMode"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="m8 12 2.3 2.3L16 8.7"/></svg><span>{{ activeNav === 'liked' ? '多选取消收藏' : '多选删除' }}</span></button>
+      <button type="button" role="menuitem" @click="startMultiSelectMode"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="m8 12 2.3 2.3L16 8.7"/></svg><span>多选</span></button>
       <button v-if="contextMenu.post && activeNav === 'liked'" type="button" class="danger" role="menuitem" @click="unfavoriteContextPost"><svg viewBox="0 0 24 24"><path d="M12 20.5S4.5 16.2 4.5 10.2A4.2 4.2 0 0 1 12 7.6a4.2 4.2 0 0 1 7.5 2.6c0 6-7.5 10.3-7.5 10.3Z"/><path d="M8.5 11.5h7"/></svg><span>取消收藏</span></button>
-      <button v-else-if="contextMenu.post" type="button" class="danger" role="menuitem" @click="deleteContextPost"><span class="action-icon-mask" :style="{ '--action-icon-mask': `url(${deleteIcon})` }" aria-hidden="true"></span><span>删除这条动态</span></button>
+      <button v-else-if="contextMenu.post" type="button" class="danger" role="menuitem" @click="deleteContextPost"><span class="action-icon-mask" :style="{ '--action-icon-mask': `url(${deleteIcon})` }" aria-hidden="true"></span><span>删除</span></button>
     </div>
     <div v-if="selectionMode" class="selection-dock">
       <button type="button" class="selection-cancel-button" title="取消多选" aria-label="取消多选" @click="stopSelection"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
@@ -4764,7 +4900,8 @@ onUnmounted(() => { postLoadGeneration += 1; stopWeiboPolling(); stopBilibiliPol
         <button type="button" role="menuitem" @click="saveMobileLightboxImage"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7.5 10.5 12 15l4.5-4.5M5 19v2h14v-2"/></svg><span>保存图片</span></button>
       </div>
     </div>
-    <button v-if="isTimelinePage && showScrollTop && !selectionMode && !lightbox.open" class="scroll-top-button mobile-frosted-control" :class="{ 'mobile-control-hidden': phonePortrait && !mobileControlsVisible }" type="button" title="回到顶部" aria-label="回到顶部" @click="scrollTimelineToTop"><span :style="{ '--scroll-top-mask': `url(${scrollTopIcon})` }" aria-hidden="true"></span></button>
+    <button v-if="isTimelinePage && isAllFeed && showScrollTop && !selectionMode && !lightbox.open" class="scroll-top-button random-refresh-button mobile-frosted-control" :class="{ 'mobile-control-hidden': phonePortrait && !mobileControlsVisible }" type="button" aria-label="刷新随机动态" @click="reshuffleTimeline"><span :style="{ '--scroll-top-mask': `url(${refreshIcon})` }" aria-hidden="true"></span></button>
+    <button v-if="isTimelinePage && showScrollTop && !selectionMode && !lightbox.open" class="scroll-top-button mobile-frosted-control" :class="{ 'mobile-control-hidden': phonePortrait && !mobileControlsVisible }" type="button" aria-label="回到顶部" @click="scrollTimelineToTop"><span :style="{ '--scroll-top-mask': `url(${scrollTopIcon})` }" aria-hidden="true"></span></button>
     <button v-if="!showSettings && activeNav === 'pulls'" class="add-fab" @click="showAdd = true">＋ <span>添加订阅</span>
 </button>
     <div v-if="showAdd" class="modal-backdrop" @click.self="showAdd = false">
