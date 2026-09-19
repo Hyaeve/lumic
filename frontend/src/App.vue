@@ -4666,7 +4666,12 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
     <main v-if="!showSettings && activeNav === 'pulls'" class="content pulls-page">
       <p v-if="timelineMessage" class="timeline-message">{{ timelineMessage }}</p>
       <section class="subscription-platforms">
-        <div class="section-heading"><div><h2>平台来源</h2><p>查看账号连接状态与订阅数量。</p></div><div class="platform-heading-actions"><span>{{ platformCards.filter(platform => platform.configured).length }} / 4 已连接</span><button class="sync-latest-icon" type="button" :disabled="syncing" title="全部拉取最新动态" aria-label="全部拉取最新动态" @click="runFullSync"><svg :class="{ spin: syncing }" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 9a7 7 0 0 1 11.4-2.5L20 9M4 15l2.5 2.5A7 7 0 0 0 17.9 15"/></svg></button></div></div>
+        <div class="section-heading"><div><h2>平台来源</h2><p>查看账号连接状态与订阅数量。</p></div>
+          <div class="platform-connection-stat" role="status" :aria-label="`已连接 ${platformCards.filter(platform => platform.configured).length} / ${platformCards.length} 个平台`">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7 .5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>
+            <strong aria-hidden="true">{{ platformCards.filter(platform => platform.configured).length }}<span> / {{ platformCards.length }}</span></strong>
+          </div>
+        </div>
         <div class="platform-source-grid">
           <article v-for="platform in platformCards" :key="platform.key" :class="['platform-source-card', platform.key]" @contextmenu.prevent="openPlatformSettings(platform)">
             <div class="platform-card-head"><img :class="['source-icon', { 'twitter-night-icon': platform.key === 'twitter' && isDark }]" :src="platform.image" :alt="`${platform.label}图标`"><span :class="['connection-dot', { online: platform.configured }]">{{ platform.configured ? '已连接' : '未连接' }}</span></div>
