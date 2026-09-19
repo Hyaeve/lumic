@@ -2343,3 +2343,19 @@ html.gallery-presenting .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-togg
   html, body, #app { min-height: 100dvh; }
   body { -webkit-text-size-adjust: 100%; }
 }
+
+/* Keep scrolling content out of iOS's translucent top safe area. */
+@supports (-webkit-touch-callout: none) {
+  html::before {
+    content: '';
+    position: fixed;
+    inset: 0 0 auto;
+    height: env(safe-area-inset-top, 0px);
+    z-index: 200;
+    pointer-events: none;
+    background: #fbf7ea;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  html:has(.app-shell.dark)::before { background: #080a0e; }
+}
