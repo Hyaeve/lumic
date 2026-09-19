@@ -2289,41 +2289,57 @@ html:has(.desktop-post-detail), body:has(.desktop-post-detail) { overflow: hidde
 
 /* Scoped timelines share the same header geometry with their swipe preview. */
 body:has(.content > .scoped-timeline-header) { min-width: 0; }
-.content:has(> .scoped-timeline-header) { padding-top: 132px; }
+.content:has(> .scoped-timeline-header) { padding-top: 180px; }
 .scoped-timeline-header { display: grid; grid-template-columns: minmax(180px, 1fr) auto; align-items: center; gap: 28px; min-height: 104px; padding: 0; border: 0; }
 .scoped-timeline-identity { min-width: 0; gap: 14px; }
 .scoped-timeline-identity > div { min-width: 0; }
 .scoped-timeline-header .scoped-timeline-identity img { width: 54px; height: 54px; flex: none; border-radius: 50%; object-fit: cover; }
 .scoped-timeline-header .scoped-timeline-identity h1 { font-size: 25px; line-height: 1.4; overflow-wrap: anywhere; }
-.scoped-timeline-header .eyebrow { margin-bottom: 5px; }
-.scoped-timeline-stats { display: grid; grid-template-columns: repeat(3, minmax(90px, 1fr)); gap: 10px; width: min(450px, 42vw); justify-self: end; }
-.scoped-timeline-stats.favorites-only { grid-template-columns: 1fr; width: 150px; }
-.scoped-timeline-stats .stat-card { display: grid; align-content: center; gap: 4px; min-height: 76px; padding: 12px 18px; border-radius: 8px; background: color-mix(in srgb, var(--card) 72%, transparent); backdrop-filter: blur(10px); }
-.scoped-timeline-stats .stat-card strong { margin: 0; font-size: 22px; }
+.scoped-timeline-header .eyebrow { margin-bottom: 7px; font-size: 12px; line-height: 1.6; }
+.scoped-timeline-description { margin: 8px 0 0; font-size: 13px; line-height: 1.7; color: var(--muted); }
+.scoped-timeline-stats { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 24px; justify-self: end; }
+.scoped-timeline-stats.favorites-only { width: auto; }
+.scoped-stat { display: flex; align-items: center; gap: 8px; min-height: 40px; color: var(--ink); }
+.scoped-stat svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; opacity: .75; }
+.scoped-stat strong { margin: 0; font-size: 21px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .content > .scoped-timeline-header ~ .section-heading { margin: 24px 0 22px; }
 html.gallery-presenting .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button) { opacity: 0!important; visibility: hidden; pointer-events: none!important; }
 @media (max-width: 1000px) and (min-width: 761px) {
-  .scoped-timeline-header { gap: 18px; grid-template-columns: minmax(120px, 1fr) minmax(210px, 1.2fr); }
-  .scoped-timeline-stats { width: 100%; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
-  .scoped-timeline-stats .stat-card { padding: 10px 12px; }
+  .scoped-timeline-header { gap: 18px; grid-template-columns: minmax(120px, 1fr) auto; }
+  .scoped-timeline-stats { gap: 14px; }
   .scoped-timeline-header .scoped-timeline-identity img { width: 42px; height: 42px; }
   .scoped-timeline-header .scoped-timeline-identity h1 { font-size: 22px; }
 }
 @media (max-width: 760px) {
   .phone-ui .content:not(.pulls-page):not(.mobile-post-detail-page):has(> .scoped-timeline-header),
-  .phone-ui .mobile-transition-page-content:has(> .scoped-timeline-header) { padding: calc(max(12px, env(safe-area-inset-top)) + 64px) 12px max(46px, env(safe-area-inset-bottom)); }
+  .phone-ui .mobile-transition-page-content:has(> .scoped-timeline-header) { padding: calc(max(12px, env(safe-area-inset-top)) + 100px) 12px max(46px, env(safe-area-inset-bottom)); }
   .phone-ui .mobile-author-swipe-preview:has(.scoped-timeline-header) { padding: 0; }
   .phone-ui .scoped-timeline-header,
   .phone-ui .mobile-transition-page-content > .scoped-timeline-header { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-height: 120px; padding: 0; border: 0; }
   .phone-ui .scoped-timeline-header .scoped-timeline-identity img { width: 44px; height: 44px; }
   .phone-ui .scoped-timeline-header .scoped-timeline-identity h1 { font-size: 21px; }
-  .phone-ui .scoped-timeline-header .eyebrow { font-size: 9px; }
-  .phone-ui .scoped-timeline-stats { width: 100%; gap: 7px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .phone-ui .scoped-timeline-stats .stat-card { display: grid; grid-template-columns: 1fr; gap: 2px; min-height: 54px; padding: 7px 10px; }
-  .phone-ui .scoped-timeline-stats .stat-card strong { font-size: 18px; margin: 0; }
-  .phone-ui .scoped-timeline-stats .stat-card span { font-size: 10px; }
-  .phone-ui .scoped-timeline-header:has(.favorites-only) { grid-template-columns: minmax(0, 1fr) 115px; }
-  .phone-ui .scoped-timeline-stats.favorites-only { grid-template-columns: 1fr; }
+  .phone-ui .scoped-timeline-header .eyebrow { font-size: 11px; }
+  .phone-ui .scoped-timeline-stats { gap: 22px; justify-self: start; }
+  .phone-ui .scoped-stat { min-height: 34px; gap: 6px; }
+  .phone-ui .scoped-stat strong { font-size: 18px; }
+  .phone-ui .scoped-stat svg { width: 18px; height: 18px; }
+  .phone-ui .scoped-timeline-header:has(.favorites-only) { grid-template-columns: minmax(0, 1fr) auto; }
   .phone-ui .content > .scoped-timeline-header ~ .section-heading,
   .phone-ui .mobile-transition-page-content > .scoped-timeline-header ~ .section-heading { margin: 16px 0 12px; }
+}
+
+.dark .main-nav button.active::after,
+.dark .sidebar-bottom > button.active::after { animation: sidebar-starlight 3.8s ease-in-out infinite alternate; }
+@keyframes sidebar-starlight {
+  0% { opacity: .35; transform: translateY(1px) scale(.85); filter: drop-shadow(0 0 2px #dce7ff); }
+  55% { opacity: 1; filter: drop-shadow(0 0 6px #c9b8ff); }
+  100% { opacity: .65; transform: translateY(-2px) scale(1.12); filter: drop-shadow(0 0 3px #dce7ff); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dark .main-nav button.active::after,
+  .dark .sidebar-bottom > button.active::after { animation: none; }
+}
+@media (display-mode: standalone) and (max-width: 760px) {
+  html, body, #app { min-height: 100dvh; }
+  body { -webkit-text-size-adjust: 100%; }
 }

@@ -22,6 +22,7 @@ let previousFocus
 let touchStart = null
 let wheelDistance = 0
 let wheelTime = 0
+let wheelEvents = 0
 let lockedUntil = 0
 const excludedTarget = target => Boolean(target?.closest('button, a, input, textarea, video, .media-frame, .modal, .lightbox-layer'))
 
@@ -44,7 +45,7 @@ async function openPresentation() {
   document.documentElement.classList.add('gallery-presenting')
   host.value.inert = true
   emit('present', true)
-  lockedUntil = performance.now() + 450
+  lockedUntil = performance.now() + 850
   await nextTick()
   if (!presenting.value || closing.value || !presentationElement.value) return
   // Commit the header-sized first frame before expanding it into the viewport.
@@ -67,7 +68,7 @@ function closePresentation() {
     if (host.value) host.value.inert = false
     previousFocus?.focus?.({ preventScroll: true })
     lockedUntil = performance.now() + 350
-  }, matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 420)
+  }, matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 800)
 }
 function onWheel(event) {
   if (event.ctrlKey || props.mobile || !props.interactive) return
@@ -77,10 +78,14 @@ function onWheel(event) {
   if (performance.now() < lockedUntil || closing.value) return
   const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? window.innerHeight : 1)
   const time = performance.now()
-  if (time - wheelTime > 220 || Math.sign(delta) !== Math.sign(wheelDistance)) wheelDistance = 0
+  if (time - wheelTime > 500 || Math.sign(delta) !== Math.sign(wheelDistance)) {
+    wheelDistance = 0
+    wheelEvents = 0
+  }
   wheelTime = time
-  wheelDistance += delta
-  if ((!presenting.value && wheelDistance < -64) || (presenting.value && wheelDistance > 64)) {
+  wheelEvents++
+  wheelDistance += Math.max(-100, Math.min(100, delta))
+  if (wheelEvents >= 3 && ((!presenting.value && wheelDistance < -280) || (presenting.value && wheelDistance > 280))) {
     if (presenting.value) closePresentation()
     else void openPresentation()
     wheelDistance = 0
@@ -110,7 +115,7 @@ function onTouchEnd(event) {
   const distance = touchStart.distance
   touchStart = null
   if (event.type === 'touchcancel' || performance.now() < lockedUntil) return
-  if ((!presenting.value && distance > 76) || (presenting.value && distance < -64)) {
+  if ((!presenting.value && distance > 160) || (presenting.value && distance < -160)) {
     event.stopPropagation()
     if (presenting.value) closePresentation()
     else void openPresentation()
@@ -124,7 +129,7 @@ function onKey(event) {
     closePresentation()
   } else if (event.key === 'Tab') {
     event.preventDefault()
-    presentationElement.value?.querySelector('button')?.focus()
+    presentationElement.value?.focus({ preventScroll: true })
   }
 }
 defineExpose({ close: closePresentation })
@@ -165,13 +170,21 @@ async function advance(token) {
   active.value = next
   previous = source
 }
+function scheduleRotation() {
+  clearInterval(timer)
+  if (props.images.length > 1) {
+    const token = version
+    timer = setInterval(() => advance(token), presenting.value && !closing.value ? 7000 : 15000)
+  }
+}
+watch([presenting, closing], scheduleRotation)
 watch(() => props.images.join('|'), () => {
   clearInterval(timer)
   const token = ++version
   layers.value = ['', '']
   previous = ''
   void advance(token)
-  if (props.images.length > 1) timer = setInterval(() => advance(token), 15000)
+  scheduleRotation()
 }, { immediate: true })
 onBeforeUnmount(() => {
   version++
@@ -206,7 +219,6 @@ onBeforeUnmount(() => {
       <div class="gallery-presentation-images"><img v-for="(image, index) in layers" :key="index" :src="image || undefined" :class="{ active: image && index === active }" alt=""></div>
       <div class="gallery-presentation-tint"></div>
       <div class="gallery-presentation-fade"></div>
-      <button type="button" class="gallery-presentation-close" aria-label="退出背景幻灯片" @click="closePresentation"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
     </section>
   </Teleport>
 </template>
@@ -221,21 +233,17 @@ onBeforeUnmount(() => {
 .dark .gallery-backdrop span { background: linear-gradient(90deg, #101319ed, #10131950 78%, #10131970); }
 @media (prefers-reduced-motion: reduce) { .gallery-backdrop img { transition: none; } }
 html.gallery-presenting, html.gallery-presenting body { overflow: hidden; overscroll-behavior: none; }
-.gallery-presentation { position: fixed; top: 0; height: var(--gallery-collapsed-height); z-index: 85; overflow: hidden; outline: none; touch-action: none; background: #f6f8f9; opacity: 0; transition: height .42s cubic-bezier(.22,.8,.24,1), opacity .42s ease; }
+.gallery-presentation { position: fixed; top: 0; height: var(--gallery-collapsed-height); z-index: 85; overflow: hidden; outline: none; touch-action: none; background: #f6f8f9; opacity: 0; transition: height .8s cubic-bezier(.22,.8,.24,1), opacity .8s ease; }
 .gallery-presentation.dark { background: #101319; }
 .gallery-presentation.expanded { height: 100dvh; opacity: 1; }
-.gallery-presentation-images { position: absolute; inset: 0; opacity: .5; transition: opacity .42s ease; }
+.gallery-presentation-images { position: absolute; inset: 0; opacity: .5; transition: opacity .8s ease; }
 .gallery-presentation-images img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 1.4s ease; }
 .gallery-presentation-images img.active { opacity: 1; }
-.gallery-presentation-tint { position: absolute; inset: 0; background: linear-gradient(90deg, #f6f8f9ed, #f6f8f94a 78%, #f6f8f960); opacity: 1; transition: opacity .42s ease; }
+.gallery-presentation-tint { position: absolute; inset: 0; background: linear-gradient(90deg, #f6f8f9ed, #f6f8f94a 78%, #f6f8f960); opacity: 1; transition: opacity .8s ease; }
 .gallery-presentation.dark .gallery-presentation-tint { background: linear-gradient(90deg, #101319ed, #10131950 78%, #10131970); }
-.gallery-presentation-fade { position: absolute; inset: 0; background: linear-gradient(to bottom, transparent var(--gallery-fade-start), #f6f8f9); opacity: 1; transition: opacity .42s ease; }
+.gallery-presentation-fade { position: absolute; inset: 0; background: linear-gradient(to bottom, transparent var(--gallery-fade-start), #f6f8f9); opacity: 1; transition: opacity .8s ease; }
 .gallery-presentation.dark .gallery-presentation-fade { background: linear-gradient(to bottom, transparent var(--gallery-fade-start), #101319); }
 .gallery-presentation.expanded .gallery-presentation-images { opacity: 1; }
 .gallery-presentation.expanded :is(.gallery-presentation-tint, .gallery-presentation-fade) { opacity: 0; }
-.gallery-presentation-close { position: absolute; top: max(18px, env(safe-area-inset-top)); right: 18px; width: 44px; height: 44px; display: grid; place-items: center; padding: 0; color: white; background: #15182150; border-radius: 50%; opacity: 0; transition: opacity .2s; }
-.gallery-presentation.expanded .gallery-presentation-close { opacity: 1; }
-.gallery-presentation-close svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
-.gallery-presentation-close:hover, .gallery-presentation-close:focus-visible { background: #15182190; outline: 2px solid #c8b7ff; }
 @media (prefers-reduced-motion: reduce) { .gallery-presentation, .gallery-presentation * { transition: none!important; } }
 </style>

@@ -7821,6 +7821,12 @@ func writeJSON(w http.ResponseWriter, value any) {
 }
 
 func serveFrontend(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/sw.js" || r.URL.Path == "/manifest.webmanifest" {
+		w.Header().Set("Cache-Control", "no-cache")
+	}
+	if r.URL.Path == "/manifest.webmanifest" {
+		w.Header().Set("Content-Type", "application/manifest+json")
+	}
 	requested := filepath.Clean(filepath.Join("public", filepath.FromSlash(strings.TrimPrefix(r.URL.Path, "/"))))
 	publicRoot, rootErr := filepath.Abs("public")
 	requestedPath, pathErr := filepath.Abs(requested)

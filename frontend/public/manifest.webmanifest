@@ -1,0 +1,14 @@
+{
+  "id": "/",
+  "name": "Lumic · 拾光",
+  "short_name": "Lumic",
+  "lang": "zh-CN",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#080a0e",
+  "theme_color": "#080a0e",
+  "icons": [
+    { "src": "/lumic-logo.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}
