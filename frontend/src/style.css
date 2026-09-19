@@ -47,8 +47,8 @@ a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color
 .app-shell > .sidebar, .app-shell > .content, .app-shell > .settings-page, .app-shell > .add-fab, .app-shell > .masonry-detail-backdrop { transition: filter .22s ease; }
 .app-shell.lightbox-active > .sidebar, .app-shell.lightbox-active > .content, .app-shell.lightbox-active > .settings-page, .app-shell.lightbox-active > .add-fab, .app-shell.lightbox-active > .masonry-detail-backdrop { filter: blur(18px) brightness(.72) saturate(.78); pointer-events: none; }
 .lightbox-layer { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; overflow: hidden; padding: 38px 54px 104px; background: #10161470; backdrop-filter: blur(11px); animation: lightbox-layer-in .25s cubic-bezier(.2,.8,.2,1) both; }
-.lightbox-layer.closing { animation: lightbox-layer-out .3s cubic-bezier(.22,.72,.2,1) both; pointer-events: none; }
-.lightbox-layer.closing .lightbox-image-stage { animation: lightbox-image-return .36s cubic-bezier(.16,.88,.22,1) both; }
+.lightbox-layer.closing { animation: lightbox-layer-out .2s cubic-bezier(.2,.7,.3,1) both; pointer-events: none; }
+.lightbox-layer.closing .lightbox-image-stage { animation: lightbox-image-return .2s cubic-bezier(.2,.7,.3,1) both; }
 .lightbox-layer figure { display: grid; place-items: center; min-width: 100%; min-height: 100%; margin: 0; }
 .lightbox-image-stage { position: relative; display: grid; place-items: center; width: 100%; height: 100%; min-width: 0; min-height: 0; touch-action: none; will-change: transform, opacity; }
 .lightbox-image-stage.motion-enter { animation: lightbox-image-enter .3s cubic-bezier(.2,.8,.2,1); }
@@ -110,7 +110,7 @@ a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color
 .mobile-lightbox-menu svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 @keyframes lightbox-layer-in { from { opacity: 0; } }
 @keyframes lightbox-layer-out { to { opacity: 0; backdrop-filter: blur(3px); } }
-@keyframes lightbox-image-return { 0% { opacity: 1; transform: translate3d(0, 0, 0) scale(1); filter: blur(0); } 54% { opacity: .9; transform: translate3d(0, 5px, 0) scale(.94); filter: blur(0); } 100% { opacity: 0; transform: translate3d(0, 14px, 0) scale(.84); filter: blur(.8px); } }
+@keyframes lightbox-image-return { from { opacity: 1; transform: scale(1); } to { opacity: 0; transform: scale(.97); } }
 @keyframes lightbox-image-enter { from { opacity: 0; transform: scale(.94); } }
 @keyframes lightbox-image-leave-next { to { opacity: 0; transform: translateX(-34px) scale(.975); } }
 @keyframes lightbox-image-leave-previous { to { opacity: 0; transform: translateX(34px) scale(.975); } }
@@ -121,14 +121,14 @@ a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color
 @keyframes mobile-lightbox-layer-in { from { opacity: 0; backdrop-filter: blur(3px) saturate(.8); } to { opacity: 1; backdrop-filter: blur(14px) saturate(.92); } }
 @keyframes mobile-lightbox-layer-out { to { opacity: 0; backdrop-filter: blur(3px) saturate(.82); } }
 @keyframes mobile-lightbox-content-in { from { opacity: .96; } to { opacity: 1; } }
-@keyframes mobile-lightbox-content-out { from { opacity: 1; transform: translate3d(0, 0, 0) scale(1); filter: blur(0); } 38% { opacity: .92; transform: translate3d(0, 5px, 0) scale(.97); filter: blur(0); } to { opacity: 0; transform: translate3d(0, 22px, 0) scale(.89); filter: blur(1.4px); } }
+@keyframes mobile-lightbox-content-out { from { opacity: 1; transform: scale(1); } to { opacity: 0; transform: scale(.97); } }
 .phone-ui .lightbox-layer { padding: 0; background: rgba(7, 9, 14, .30); backdrop-filter: blur(22px) saturate(.86) brightness(.78); }
 .phone-ui.lightbox-active > :is(.sidebar, .content, .settings-page, .add-fab, .masonry-detail-backdrop) { filter: blur(16px) brightness(.76) saturate(.80); }
 .phone-ui .lightbox-layer.mobile-entering { animation: none; }
-.phone-ui .lightbox-layer.closing { animation: mobile-lightbox-layer-out .22s cubic-bezier(.28,.76,.26,1) both; }
+.phone-ui .lightbox-layer.closing { animation: mobile-lightbox-layer-out .18s cubic-bezier(.2,.7,.3,1) both; }
 .phone-ui .lightbox-layer.mobile-entering:not(.mobile-exit-dragging) .mobile-lightbox-carousel { animation: none; }
 .phone-ui .lightbox-layer.closing .lightbox-image-stage { animation: none; }
-.phone-ui .lightbox-layer.closing:not(.mobile-exit-dragging) .mobile-lightbox-carousel { animation: mobile-lightbox-content-out .22s cubic-bezier(.28,.76,.26,1) both; }
+.phone-ui .lightbox-layer.closing:not(.mobile-exit-dragging) .mobile-lightbox-carousel { animation: mobile-lightbox-content-out .18s cubic-bezier(.2,.7,.3,1) both; }
 .phone-ui .lightbox-layer.mobile-exit-dragging .mobile-lightbox-carousel { animation: none; }
 .phone-ui .lightbox-layer.closing.mobile-gesture-exiting { animation: none; }
 .phone-ui .lightbox-layer.closing.mobile-gesture-exiting .mobile-lightbox-carousel { animation: none; }
@@ -136,6 +136,7 @@ a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color
 .phone-ui .mobile-lightbox-media-frame.dragging { transition: none; }
 .phone-ui .mobile-lightbox-media-frame.zoom-animating { transition: transform .5s cubic-bezier(.16,.88,.22,1)!important; }
 .phone-ui .mobile-lightbox-original { will-change: opacity; transition: opacity .2s ease; }
+.app-shell.lightbox-closing > :is(.sidebar, .content, .settings-page, .add-fab, .masonry-detail-backdrop) { filter: none; transition: filter .18s ease-out; }
 @media (prefers-reduced-motion: reduce) {
   .lightbox-layer, .lightbox-image-stage, .mobile-lightbox-carousel { animation: none!important; }
 }

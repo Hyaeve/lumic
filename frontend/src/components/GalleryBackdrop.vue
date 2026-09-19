@@ -44,7 +44,7 @@ watch(() => props.images.join('|'), () => {
   layers.value = ['', '']
   previous = ''
   void advance(token)
-  if (props.images.length > 1) timer = setInterval(() => advance(token), 12000)
+  if (props.images.length > 1) timer = setInterval(() => advance(token), 60000)
 }, { immediate: true })
 onBeforeUnmount(() => { version++; clearInterval(timer); observer?.disconnect() })
 </script>

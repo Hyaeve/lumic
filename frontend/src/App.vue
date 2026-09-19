@@ -456,7 +456,7 @@ const mobilePreviewGallery = computed(() => {
   const tag = String(mobileAuthorDetailState.value?.tag || '').trim()
   const query = tag ? { ...authorPostQuery(post), source: 'all', author: '', tag } : authorPostQuery(post)
   const page = postPager.entry(query)
-  return { media: page.headerMedia.map(media => previewMedia(media)), total: page.loaded ? page.total : mobileAuthorTimelinePosts.value.length }
+  return { media: page.headerMedia, total: page.loaded ? page.total : mobileAuthorTimelinePosts.value.length }
 })
 function buildMobilePreviewMasonrySnapshot(items, scrollY = 0) {
   const gap = 8
@@ -641,7 +641,7 @@ const activePostPage = computed(() => {
   pagerRevision.value
   return { ...postPager.entry(feedQuery.value) }
 })
-const headerGallery = computed(() => activePostPage.value.headerMedia.map(media => previewMedia(media)))
+const headerGallery = computed(() => activePostPage.value.headerMedia)
 const filteredPosts = computed(() => {
   const byId = new Map(posts.value.map(post => [String(post.id), post]))
   const allPosts = activePostPage.value.ids.map(id => byId.get(id)).filter(Boolean)
@@ -1757,9 +1757,11 @@ function resetLightboxState() {
   if (lightboxScaleFrame) window.cancelAnimationFrame(lightboxScaleFrame)
   lightboxScaleFrame = 0
 }
-function closeLightbox(fromHistory = false, delay = phonePortrait.value ? 220 : 320) {
+function closeLightbox(fromHistory = false, delay = phonePortrait.value ? 180 : 200) {
   if (lightboxClosing.value) return
+  fromHistory = fromHistory === true
   lightboxClosing.value = true
+  clearMobileLightboxInertia()
   clearLightboxSingleTap()
   const hadHistory = lightboxHistoryActive
   scheduleTransient(() => {
@@ -1994,7 +1996,7 @@ function scheduleLightboxSingleTapClose() {
   lightboxSingleTapTimer = window.setTimeout(() => {
     lightboxSingleTapTimer = 0
     closeLightbox()
-  }, 390)
+  }, 280)
 }
 function scheduleLightboxLongPress(event) {
   clearLightboxLongPress()
@@ -4467,7 +4469,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
       </form>
     </div>
   </div>
-  <div v-else class="app-shell" :class="{ dark: isDark, 'lightbox-active': lightbox.open, 'phone-ui': phonePortrait, 'timeline-search-focused': timelineSearchFocused, 'mobile-page-switching': mobilePageSwitching }" @click="showBrandMenu = false">
+  <div v-else class="app-shell" :class="{ dark: isDark, 'lightbox-active': lightbox.open, 'lightbox-closing': lightboxClosing, 'phone-ui': phonePortrait, 'timeline-search-focused': timelineSearchFocused, 'mobile-page-switching': mobilePageSwitching }" @click="showBrandMenu = false">
     <button v-if="phonePortrait && !lightbox.open && !masonryDetailPost" class="mobile-timeline-toggle mobile-frosted-control" type="button" :class="{ open: mobileSourcesOpen, active: mobileAtAllTimeline, 'icon-switching': mobileTimelineIconSwitching, 'mobile-control-hidden': !mobileControlsVisible && !mobileSourcesOpen }" :aria-expanded="mobileSourcesOpen" :title="mobileSourcesOpen ? `收起${mobileTimelineTitle}栏目` : `展开${mobileTimelineTitle}栏目`" :aria-label="mobileSourcesOpen ? `收起${mobileTimelineTitle}栏目` : `展开${mobileTimelineTitle}栏目`" @pointerdown.stop @click.stop="showMobileControls(); toggleMobileTimelineShortcut()">
       <span v-if="mobileTimelineMeta" class="mobile-platform-mask" :style="{ '--mobile-platform-mask': `url(${mobileTimelineMeta.lineImage})` }" aria-hidden="true"></span>
       <span v-else class="nav-line-symbol nav-mask-symbol" :style="{ '--nav-mask': `url(${timelineNavIcon})` }" aria-hidden="true"></span>

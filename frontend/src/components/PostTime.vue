@@ -30,8 +30,8 @@ onBeforeUnmount(hide)
 
 <style>
 .post-time { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--muted, #8b929b); font-size: 13px; line-height: 1.4; transition: color .16s; }
-.post-time[tabindex]:hover, .post-time[tabindex]:focus-visible { color: #656ac0; background: linear-gradient(110deg, #397ac4, #8c5bbb, #997029, #397ac4); background-size: 200% 100%; background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent; animation: time-starlight 2.4s ease-in-out infinite alternate; outline: none; }
-.dark .post-time[tabindex]:hover, .dark .post-time[tabindex]:focus-visible { background-image: linear-gradient(110deg, #9dd8ff, #c6acff, #ffe6a4, #9dd8ff); }
+.post-time[tabindex]:hover, .post-time[tabindex]:focus-visible { color: #656ac0; background: linear-gradient(110deg, #506db5, #8462b8, #5d7ccc, #506db5); background-size: 200% 100%; background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent; animation: time-starlight 2.4s ease-in-out infinite alternate; outline: none; }
+.dark .post-time[tabindex]:hover, .dark .post-time[tabindex]:focus-visible { background-image: linear-gradient(110deg, #9ebcff, #c8b7ff, #a5b4ef, #9ebcff); filter: drop-shadow(0 0 5px #8a9fe066); }
 @keyframes time-starlight { to { background-position: 100% 50%; } }
 @media (prefers-reduced-motion: reduce) { .post-time[tabindex] { animation: none!important; } }
 .post-time-tooltip { position: fixed; z-index: 20000; transform: translateX(-50%); padding: 8px 11px; border-radius: 9px; background: #30343bea; color: #fff; box-shadow: 0 4px 18px #0002; font-size: 12px; line-height: 1.4; pointer-events: none; white-space: nowrap; }
