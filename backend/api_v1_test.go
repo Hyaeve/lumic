@@ -82,8 +82,8 @@ func TestAPIV1RandomPaginationAndScopedMetadata(t *testing.T) {
 		t.Fatalf("unexpected scoped metadata: %#v", scoped)
 	}
 	for _, media := range scoped.HeaderMedia {
-		if !strings.HasPrefix(media, "/preview/") {
-			t.Fatalf("header returned an original: %s", media)
+		if !strings.HasPrefix(media, "/flow/") {
+			t.Fatalf("header did not return an original: %s", media)
 		}
 	}
 	absent := get("/api/v1/posts?feedId=missing")
@@ -271,6 +271,11 @@ func TestAPIV1ScopedGalleryAndStatistics(t *testing.T) {
 		if page.ScopeStats == nil || page.ScopeStats.Total != 2 || len(page.HeaderMedia) != 2 || page.Stats.All.Total != 3 {
 			t.Fatalf("%s: incomplete scoped metadata: %#v", filter, page)
 		}
+		for _, media := range page.HeaderMedia {
+			if !strings.HasPrefix(media, "/flow/") {
+				t.Fatalf("%s: gallery returned a preview instead of an original: %s", filter, media)
+			}
+		}
 		expectedToday, expectedFavorites := 1, 1
 		if filter == "liked=true" {
 			expectedToday, expectedFavorites = 2, 2
@@ -291,6 +296,27 @@ func TestAPIV1ScopedGalleryAndStatistics(t *testing.T) {
 		}
 		if later.ScopeStats != nil || len(later.HeaderMedia) != 0 {
 			t.Fatal("later page repeated header metadata")
+		}
+	}
+}
+
+func TestAPIV1HeaderMediaPreservesOriginalURLs(t *testing.T) {
+	originals := []string{
+		"/flow/weibo/%E7%94%BB%E5%B8%88/full.jpg?version=2",
+		"https://images.example.test/original.png?token=a%2Bb&size=original",
+	}
+	posts := []Post{{Media: append(append([]string{}, originals...), originals[0], "")}}
+	gallery := apiV1HeaderMedia(posts, "test")
+	if len(gallery) != len(originals) {
+		t.Fatalf("expected unique nonempty originals: %#v", gallery)
+	}
+	for _, original := range originals {
+		found := false
+		for _, image := range gallery {
+			found = found || image == original
+		}
+		if !found {
+			t.Fatalf("original URL was rewritten or omitted: %s in %#v", original, gallery)
 		}
 	}
 }

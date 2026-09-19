@@ -581,8 +581,8 @@ func containsExact(values []string, target string) bool {
 	return false
 }
 
-// Keep only a small, deterministic gallery sample; header rotation never needs
-// the complete post collection or original-size media in the response.
+// Sample original URLs, not preview URLs: these also fill the full-screen
+// background presentation. Image bytes are fetched separately by the browser.
 func apiV1HeaderMedia(posts []Post, seed string) []string {
 	type candidate struct{ path, rank string }
 	sample := make([]candidate, 0, 13)
@@ -593,7 +593,7 @@ func apiV1HeaderMedia(posts []Post, seed string) []string {
 				continue
 			}
 			seen[media] = true
-			item := candidate{apiV1PreviewPath(media), apiV1RandomRank(seed, media)}
+			item := candidate{media, apiV1RandomRank(seed, media)}
 			position := sort.Search(len(sample), func(i int) bool { return sample[i].rank >= item.rank })
 			if position >= 12 {
 				continue
