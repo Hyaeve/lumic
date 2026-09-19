@@ -6,7 +6,7 @@ test('retains scoped statistics and gallery across pagination and cached returns
   const pager = createPostPager({
     fetchPage: async (_, cursor) => cursor
       ? { items: [{ id: 'second' }], total: 2, hasMore: false }
-      : { items: [{ id: 'first' }], total: 2, hasMore: true, nextCursor: 'next', headerMedia: ['/flow/a.jpg'], scopeStats: { total: 2, today: 1, favorites: 2 } },
+      : { items: [{ id: 'first' }], total: 2, hasMore: true, nextCursor: 'next', headerMedia: ['/flow/a.jpg'], headerPostIds: { '/flow/a.jpg': 'second' }, scopeStats: { total: 2, today: 1, favorites: 2 } },
     onPage: () => {}
   })
   const query = { liked: 'true' }
@@ -15,6 +15,7 @@ test('retains scoped statistics and gallery across pagination and cached returns
   await pager.ensure(query)
   assert.deepEqual(pager.entry(query).scopeStats, { total: 2, today: 1, favorites: 2 })
   assert.deepEqual(pager.entry(query).headerMedia, ['/flow/a.jpg'])
+  assert.deepEqual(pager.entry(query).headerPostIds, { '/flow/a.jpg': 'second' })
 })
 
 test('loads only requested pages and retains the origin order across navigation', async () => {

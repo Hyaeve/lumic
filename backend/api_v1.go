@@ -58,14 +58,15 @@ type apiV1Feed struct {
 }
 
 type apiV1PostPage struct {
-	Items       []apiV1Post     `json:"items"`
-	NextCursor  string          `json:"nextCursor,omitempty"`
-	HasMore     bool            `json:"hasMore"`
-	Limit       int             `json:"limit"`
-	Stats       *apiV1PostStats `json:"stats,omitempty"`
-	Total       int             `json:"total"`
-	HeaderMedia []string        `json:"headerMedia,omitempty"`
-	ScopeStats  *apiV1PostStat  `json:"scopeStats,omitempty"`
+	Items         []apiV1Post       `json:"items"`
+	NextCursor    string            `json:"nextCursor,omitempty"`
+	HasMore       bool              `json:"hasMore"`
+	Limit         int               `json:"limit"`
+	Stats         *apiV1PostStats   `json:"stats,omitempty"`
+	Total         int               `json:"total"`
+	HeaderMedia   []string          `json:"headerMedia,omitempty"`
+	HeaderPostIDs map[string]string `json:"headerPostIds,omitempty"`
+	ScopeStats    *apiV1PostStat    `json:"scopeStats,omitempty"`
 }
 
 type apiV1PostStat struct {
@@ -282,9 +283,26 @@ func apiV1PostsHandler(store *Store) http.HandlerFunc {
 		posts = filterAndSortAPIV1Posts(posts, query)
 		total := len(posts)
 		var headerMedia []string
+		var headerPostIDs map[string]string
 		var scopeStats *apiV1PostStat
 		if query.Cursor == nil && (query.Author != "" || query.Tag != "" || query.FeedID != "" || (query.Liked != nil && *query.Liked)) {
 			headerMedia = apiV1HeaderMedia(posts, query.FilterHash)
+			headerPostIDs = make(map[string]string, len(headerMedia))
+			for _, media := range headerMedia {
+				headerPostIDs[media] = ""
+			}
+			remaining := len(headerMedia)
+			for _, post := range posts {
+				if remaining == 0 {
+					break
+				}
+				for _, original := range post.Media {
+					if id, sampled := headerPostIDs[original]; sampled && id == "" {
+						headerPostIDs[original] = post.ID
+						remaining--
+					}
+				}
+			}
 			scope := buildAPIV1PostStats(posts, r).All
 			scopeStats = &scope
 		}
@@ -305,7 +323,7 @@ func apiV1PostsHandler(store *Store) http.HandlerFunc {
 		for _, post := range posts {
 			items = append(items, toAPIV1Post(post))
 		}
-		page := apiV1PostPage{Items: items, HasMore: hasMore, Limit: query.Limit, Stats: stats, Total: total, HeaderMedia: headerMedia, ScopeStats: scopeStats}
+		page := apiV1PostPage{Items: items, HasMore: hasMore, Limit: query.Limit, Stats: stats, Total: total, HeaderMedia: headerMedia, HeaderPostIDs: headerPostIDs, ScopeStats: scopeStats}
 		if hasMore && len(posts) > 0 {
 			last := posts[len(posts)-1]
 			page.NextCursor, err = encodeAPIV1PostCursor(apiV1PostCursor{Version: 1, Published: last.Published, ID: last.ID, Order: query.Order, FilterHash: query.FilterHash})

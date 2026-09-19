@@ -9,7 +9,7 @@ export function createPostPager({ fetchPage, onPage, onChange = () => {} }) {
   let generation = 0
   function entry(query) {
     const key = postQueryKey(query)
-    if (!entries.has(key)) entries.set(key, { query: { ...query }, ids: [], total: 0, headerMedia: [], scopeStats: null, cursor: '', hasMore: true, loaded: false, loading: false, error: '', promise: null, version: 0 })
+    if (!entries.has(key)) entries.set(key, { query: { ...query }, ids: [], total: 0, headerMedia: [], headerPostIds: {}, scopeStats: null, cursor: '', hasMore: true, loaded: false, loading: false, error: '', promise: null, version: 0 })
     return entries.get(key)
   }
   async function next(query, retry = false) {
@@ -32,6 +32,7 @@ export function createPostPager({ fetchPage, onPage, onChange = () => {} }) {
         page.total = result.total ?? page.ids.length
         if (first) {
           page.scopeStats = result.scopeStats || null
+          page.headerPostIds = result.headerPostIds || {}
           const gallery = result.headerMedia || []
           const start = Math.floor(Math.random() * gallery.length)
           page.headerMedia = [...gallery.slice(start), ...gallery.slice(0, start)]

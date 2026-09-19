@@ -275,6 +275,10 @@ func TestAPIV1ScopedGalleryAndStatistics(t *testing.T) {
 			if !strings.HasPrefix(media, "/flow/") {
 				t.Fatalf("%s: gallery returned a preview instead of an original: %s", filter, media)
 			}
+			id := page.HeaderPostIDs[media]
+			if id == "" || media != "/flow/"+id+".jpg" {
+				t.Fatalf("%s: missing or incorrect background post association: %s -> %s", filter, media, id)
+			}
 		}
 		expectedToday, expectedFavorites := 1, 1
 		if filter == "liked=true" {
@@ -294,7 +298,7 @@ func TestAPIV1ScopedGalleryAndStatistics(t *testing.T) {
 		if err := json.Unmarshal(next.Body.Bytes(), &later); err != nil {
 			t.Fatal(err)
 		}
-		if later.ScopeStats != nil || len(later.HeaderMedia) != 0 {
+		if later.ScopeStats != nil || len(later.HeaderMedia) != 0 || len(later.HeaderPostIDs) != 0 {
 			t.Fatal("later page repeated header metadata")
 		}
 	}

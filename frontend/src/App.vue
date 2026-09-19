@@ -645,6 +645,38 @@ const activePostPage = computed(() => {
 const headerGallery = computed(() => activePostPage.value.headerMedia)
 const galleryBackdropControl = ref(null)
 const galleryPresenting = ref(false)
+let galleryNavigationPending = false
+function prefetchGalleryPost(source) {
+  const id = activePostPage.value.headerPostIds[source]
+  if (id && !postById.value.has(String(id))) {
+    void postPager.ensure({ id: String(id), order: 'newest', source: 'all' })
+  }
+}
+async function openGalleryPost(source) {
+  if (galleryNavigationPending) return
+  const id = activePostPage.value.headerPostIds[source] || posts.value.find(post => post.media?.includes(source))?.id
+  if (!id) return
+  galleryNavigationPending = true
+  const originKey = feedQueryKey.value
+  try {
+    if (!postById.value.has(String(id))) await postPager.next({ id: String(id), order: 'newest', source: 'all' }, true)
+    if (originKey !== feedQueryKey.value || !galleryPresenting.value) return
+    const post = postById.value.get(String(id))
+    if (!post) { timelineMessage.value = '暂时无法打开这张图片所属的动态，请稍后重试。'; return }
+    if (selectionMode.value) stopSelection()
+    // Replace the gallery's overlay entry with the detail, preserving one return.
+    const replaceRoute = phonePortrait.value && phoneOverlayHistoryActive === 'gallery'
+    const originBackground = document.querySelector('main > .gallery-backdrop')
+    clearPhoneOverlayHistoryForNavigation()
+    galleryBackdropControl.value?.close({ immediate: true })
+    openMasonryPost(post, { currentTarget: originBackground }, { replaceRoute })
+    const index = postDetailMedia(post).findIndex(media => media.src === source)
+    if (index >= 0) {
+      desktopDetailIndex.value = index
+      mobileDetailIndex.value = index
+    }
+  } finally { galleryNavigationPending = false }
+}
 const isScopedTimeline = computed(() => Boolean(selectedAuthor.value || selectedTag.value || activeNav.value === 'liked'))
 const scopedTimelineStats = computed(() => activePostPage.value.scopeStats || {
   total: activePostPage.value.total, today: 0,
@@ -2760,7 +2792,7 @@ function toggleTimelineView(event) {
   timelineView.value = timelineView.value === 'list' ? 'masonry' : 'list'
   if (event?.detail > 0) event.currentTarget?.blur()
 }
-function openMasonryPost(post, event) {
+function openMasonryPost(post, event, options = {}) {
   if (selectionMode.value) return
   detailOriginQuery.value = { ...feedQuery.value }
   desktopDetailIndex.value = 0
@@ -2815,7 +2847,7 @@ function openMasonryPost(post, event) {
       state.returnToDetail = true
       mobileAuthorDetailState.value = state
     }
-    updateRoute(`/post/${encodeURIComponent(post.id)}`, false, { lumicMobileDetail: true, lumicReturnPath: returnPath })
+    updateRoute(`/post/${encodeURIComponent(post.id)}`, Boolean(options.replaceRoute), { lumicMobileDetail: true, lumicReturnPath: returnPath })
     window.scrollTo({ top: 0, behavior: 'auto' })
   }
 }
@@ -4552,7 +4584,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
         <template v-else-if="localSeason === 'autumn'"><i class="autumn-glow"></i><i class="autumn-branch"></i><i class="autumn-leaf leaf-one"></i><i class="autumn-leaf leaf-two"></i><i class="autumn-leaf leaf-three"></i><i class="autumn-leaf leaf-four"></i><i class="autumn-leaf leaf-five"></i></template>
         <template v-else><i class="winter-haze"></i><i class="winter-branch"></i><i class="winter-plum plum-one"></i><i class="winter-plum plum-two"></i><i class="winter-plum plum-three"></i><i class="winter-snowman"></i><i class="winter-ice"></i><i class="winter-snowflake flake-one"></i><i class="winter-snowflake flake-two"></i><i class="winter-snowflake flake-three"></i><i class="winter-snowflake flake-four"></i><i class="winter-snowflake flake-five"></i></template>
       </div>
-      <GalleryBackdrop v-if="isScopedTimeline" ref="galleryBackdropControl" :images="headerGallery" interactive :mobile="phonePortrait" :dark="isDark" @present="galleryPresenting = $event" />
+      <GalleryBackdrop v-if="isScopedTimeline" ref="galleryBackdropControl" :images="headerGallery" interactive :mobile="phonePortrait" :dark="isDark" @present="galleryPresenting = $event" @image="prefetchGalleryPost" @open-post="openGalleryPost" />
       <ScopedTimelineHeader v-if="isScopedTimeline" :title="authorProfile ? authorProfile.name : selectedTag ? `#${selectedTag}` : '收藏'" :avatar="authorProfile ? postAvatar(authorProfile) : ''" :source-label="authorProfile ? sourceMeta[authorProfile.source].label : ''" :stats="scopedTimelineStats" :favorites-only="activeNav === 'liked' && !authorProfile && !selectedTag" @avatar-load="handlePostAvatarLoad($event, authorProfile)" @avatar-error="handlePostAvatarError($event, authorProfile)" />
       <header v-else class="topbar timeline-hero">
 <div class="timeline-hero-copy">
