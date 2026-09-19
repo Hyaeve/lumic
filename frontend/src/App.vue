@@ -132,6 +132,9 @@ const pagerRevision = ref(0)
 const detailOriginQuery = ref(null)
 const expandedCaptions = ref({})
 const desktopDetailIndex = ref(0)
+const desktopDetailDirection = ref(1)
+let desktopDetailRequestedIndex = null
+let desktopDetailLoadVersion = 0
 let desktopDetailWheelAt = 0
 const timelineView = ref('list')
 const timelineSearch = ref('')
@@ -2768,10 +2771,30 @@ function postDetailMedia(post) {
 }
 const desktopDetailMedia = computed(() => postDetailMedia(masonryDetailPost.value))
 const desktopCurrentMedia = computed(() => desktopDetailMedia.value[desktopDetailIndex.value])
-function moveDesktopDetailMedia(direction) {
+watch(() => masonryDetailPost.value?.id, () => {
+  desktopDetailLoadVersion++
+  desktopDetailRequestedIndex = null
+}, { flush: 'sync' })
+async function moveDesktopDetailMedia(direction) {
   const count = desktopDetailMedia.value.length
   if (count < 2) return
-  desktopDetailIndex.value = Math.max(0, Math.min(count - 1, desktopDetailIndex.value + direction))
+  const target = Math.max(0, Math.min(count - 1, (desktopDetailRequestedIndex ?? desktopDetailIndex.value) + direction))
+  const token = ++desktopDetailLoadVersion
+  desktopDetailRequestedIndex = target
+  const media = desktopDetailMedia.value[target]
+  // Keep the visible image in place while the requested preview decodes.
+  if (media?.type === 'image') {
+    const image = new Image()
+    image.src = previewMedia(media.src)
+    try { await image.decode() } catch {
+      if (token === desktopDetailLoadVersion) desktopDetailRequestedIndex = null
+      return
+    }
+  }
+  if (token !== desktopDetailLoadVersion) return
+  desktopDetailDirection.value = target >= desktopDetailIndex.value ? 1 : -1
+  desktopDetailIndex.value = target
+  desktopDetailRequestedIndex = null
 }
 function wheelDesktopDetailMedia(event) {
   if (Math.abs(event.deltaY) < 4 || desktopDetailMedia.value.length < 2) return
@@ -4864,7 +4887,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
     <div v-if="masonryDetailPost && !phonePortrait" class="modal-backdrop masonry-detail-backdrop" @click.self="closePostDetail">
       <article class="masonry-detail-modal desktop-post-detail" :style="authorAccent(masonryDetailPost.source)" role="dialog" aria-modal="true" :aria-label="`${masonryDetailPost.author} 的动态详情`">
         <section class="desktop-detail-gallery" tabindex="0" aria-label="动态媒体" @wheel.stop.prevent="wheelDesktopDetailMedia" @keydown.left.prevent="moveDesktopDetailMedia(-1)" @keydown.right.prevent="moveDesktopDetailMedia(1)">
-          <Transition name="detail-media" mode="out-in">
+          <Transition :name="desktopDetailDirection > 0 ? 'detail-media-next' : 'detail-media-previous'" @before-leave="element => { if (element.tagName === 'VIDEO') element.pause() }">
             <button v-if="desktopCurrentMedia?.type === 'image'" :key="desktopCurrentMedia.key" class="desktop-detail-image" type="button" aria-label="查看大图" @click="openLightbox(masonryDetailPost, desktopDetailIndex)"><img :src="previewMedia(desktopCurrentMedia.src)" :alt="`${masonryDetailPost.author} 的第 ${desktopDetailIndex + 1} 张图片`"></button>
             <video v-else-if="desktopCurrentMedia?.type === 'video'" :key="desktopCurrentMedia.key" :src="desktopCurrentMedia.src" :poster="desktopCurrentMedia.poster ? previewMedia(desktopCurrentMedia.poster) : undefined" controls playsinline autoplay muted preload="metadata"></video>
             <div v-else class="desktop-detail-no-media">暂无图片</div>
