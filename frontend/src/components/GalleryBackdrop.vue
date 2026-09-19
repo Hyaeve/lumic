@@ -1,6 +1,6 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-const props = defineProps({ images: { type: Array, default: () => [] }, interactive: Boolean, mobile: Boolean, dark: Boolean })
+const props = defineProps({ images: { type: Array, default: () => [] }, loadImages: Function, scopeKey: String, interactive: Boolean, mobile: Boolean, dark: Boolean })
 const emit = defineEmits(['present', 'image', 'open-post'])
 const anchor = ref(null)
 const host = ref(null)
@@ -24,7 +24,10 @@ const entryWidth = ref(80)
 const entryScreenTop = ref(0)
 const presentationStartHeight = ref(320)
 const viewportHeight = ref(window.innerHeight)
-let observer, timer, closeTimer, tapTimer, frame
+let observer, timer, closeTimer, tapTimer, hoverTimer, frame
+let candidates = []
+let batchRequest = null
+let scopeVersion = 0
 let previousFocus
 let touch = null
 let lastTap = null
@@ -43,7 +46,7 @@ const presentationStyle = computed(() => {
     '--gallery-image-opacity': .5 + progress.value * .5,
     '--gallery-tint-opacity': 1 - progress.value,
     '--gallery-chevron-top': `${entryScreenTop.value + (viewportHeight.value - 64 - entryScreenTop.value) * progress.value}px`,
-    '--gallery-chevron-left': `${entryLeft.value + ((parseFloat(boundsStyle.value.width) - entryWidth.value) / 2 - entryLeft.value) * progress.value}px`,
+    '--gallery-chevron-left': `${entryLeft.value}px`,
     '--gallery-chevron-width': `${entryWidth.value}px`,
     '--gallery-chevron-angle': `${progress.value * 180}deg`
   }
@@ -54,15 +57,11 @@ function measure() {
   const bounds = host.value.getBoundingClientRect()
   const toolbarElement = host.value.querySelector('.section-heading')
   const toolbar = toolbarElement?.getBoundingClientRect()
-  const filters = toolbarElement?.querySelector('.filters')?.getBoundingClientRect()
-  const tools = toolbarElement?.querySelector('.timeline-tools')?.getBoundingClientRect()
   const bottom = toolbar?.bottom ?? bounds.top + 200
   const fadeStart = Math.max(120, bottom - bounds.top - 32)
   entryTop.value = (toolbar ? toolbar.top + toolbar.height / 2 : bottom - 22) - bounds.top - 24
-  const gapLeft = filters?.right ?? bounds.left
-  const gapRight = tools?.left ?? bounds.right
-  entryWidth.value = Math.max(44, Math.min(80, gapRight - gapLeft - 8))
-  entryLeft.value = (gapLeft + gapRight - entryWidth.value) / 2 - bounds.left
+  entryWidth.value = window.innerWidth <= 1100 ? 44 : 80
+  entryLeft.value = (bounds.width - entryWidth.value) / 2
   backdropStyle.value = { height: `${fadeStart + 120}px`, '--gallery-fade-start': `${fadeStart}px` }
   boundsStyle.value = { left: `${props.mobile ? 0 : bounds.left}px`, width: `${props.mobile ? window.innerWidth : bounds.width}px`, '--gallery-fade-start': `${fadeStart}px` }
 }
@@ -70,14 +69,29 @@ function updateHover(event) {
   if (props.mobile || presenting.value) return
   const bounds = host.value.getBoundingClientRect()
   const toolbar = host.value.querySelector('.section-heading')?.getBoundingClientRect()
-  entryHovered.value = Boolean(current.value && toolbar && event.clientY >= bounds.top &&
-    event.clientY <= toolbar.bottom && !event.target.closest('.scoped-timeline-identity, .scoped-timeline-stats, input, .timeline-toolbar-button'))
+  const identity = host.value.querySelector('.scoped-timeline-identity')
+  const overIdentity = [...(identity?.querySelectorAll('img, h1, p') || [])].some(element => {
+    const range = document.createRange()
+    range.selectNodeContents(element)
+    const rectangles = element.tagName === 'IMG' ? [element.getBoundingClientRect()] : [...range.getClientRects()]
+    return rectangles.some(rect => event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom)
+  })
+  if (current.value && toolbar && event.clientY >= bounds.top && event.clientY <= toolbar.bottom && !overIdentity) {
+    clearTimeout(hoverTimer)
+    hoverTimer = null
+    entryHovered.value = true
+  } else clearHover()
 }
-function clearHover() { entryHovered.value = false }
+function clearHover() {
+  if (hoverTimer || !entryHovered.value) return
+  hoverTimer = setTimeout(() => { entryHovered.value = false; hoverTimer = null }, 1000)
+}
 function preparePresentation() {
   if (presenting.value) return true
   if (!props.interactive || !current.value || (props.mobile && window.scrollY > 2)) return false
   previousFocus = document.activeElement
+  clearTimeout(hoverTimer)
+  hoverTimer = null
   measure()
   const top = host.value.getBoundingClientRect().top
   entryScreenTop.value = entryTop.value + top
@@ -145,19 +159,32 @@ function openCurrentPost(event) {
 }
 function scheduleRotation() {
   clearTimeout(timer)
-  if (props.images.length > 1) {
+  if (props.loadImages || props.images.length > 1) {
     timer = setTimeout(() => {
       if (!touch && !dragging.value && !closing.value) void advance(1, false)
       else scheduleRotation()
     }, expanded.value ? (props.mobile ? 10000 : 9000) : 15000)
   }
 }
+async function replenish() {
+  if (!props.loadImages || candidates.length > 3) return
+  if (batchRequest) return batchRequest
+  const version = scopeVersion
+  const request = Promise.resolve().then(() => props.loadImages()).then(images => {
+    if (version === scopeVersion) candidates = [...new Set([...candidates, ...images])].filter(image => image && image !== current.value)
+  }).catch(() => {}).finally(() => { if (batchRequest === request) batchRequest = null })
+  batchRequest = request
+  return request
+}
 async function advance(direction = 1, manual = false) {
+  const token = ++loadVersion
+  if (!candidates.length && current.value) await replenish()
+  if (token !== loadVersion) return
   const choices = props.images.filter(image => image && image !== current.value)
   const nextIndex = sequenceIndex + direction
-  const source = sequence[nextIndex] || choices[Math.floor(Math.random() * choices.length)] || props.images[0]
+  candidates = candidates.filter(image => image !== current.value)
+  const source = sequence[nextIndex] || candidates.shift() || choices[Math.floor(Math.random() * choices.length)] || props.images[0]
   if (!source || source === current.value) { scheduleRotation(); return }
-  const token = ++loadVersion
   const image = new Image()
   image.src = source
   try { await image.decode() } catch { if (token === loadVersion) scheduleRotation(); return }
@@ -175,6 +202,7 @@ async function advance(direction = 1, manual = false) {
   active.value = next
   current.value = source
   emit('image', source)
+  void replenish()
   scheduleRotation()
 }
 function onTouchStart(event) {
@@ -290,8 +318,11 @@ onMounted(() => {
   }
 })
 watch([expanded, () => props.mobile], scheduleRotation)
-watch(() => props.images.join('|'), () => {
+watch(() => `${props.scopeKey || ''}:${props.images.join('|')}`, () => {
   clearTimeout(timer)
+  scopeVersion++
+  batchRequest = null
+  candidates = []
   loadVersion++
   sequence = []
   sequenceIndex = -1
@@ -305,6 +336,8 @@ onBeforeUnmount(() => {
   clearTimeout(timer)
   clearTimeout(closeTimer)
   clearTimeout(tapTimer)
+  clearTimeout(hoverTimer)
+  scopeVersion++
   cancelAnimationFrame(frame)
   observer?.disconnect()
   if (!props.interactive) return
@@ -340,7 +373,7 @@ onBeforeUnmount(() => {
       <div class="gallery-presentation-fade"></div>
       <template v-if="!mobile">
         <button class="gallery-exit-chevron gallery-chevron" type="button" aria-label="收起背景大图" @click.stop="closePresentation()"><svg viewBox="0 0 64 40" aria-hidden="true"><path d="m8 13 24 16 24-16"/></svg></button>
-        <button v-for="direction in [-1, 1]" :key="direction" class="gallery-edge-nav" :class="{ previous: direction < 0, next: direction > 0 }" :disabled="images.length < 2" :aria-label="direction < 0 ? '上一张背景图' : '下一张背景图'" @click.stop="advance(direction, true)"><svg viewBox="0 0 24 24" aria-hidden="true"><path :d="direction < 0 ? 'm15 4-8 8 8 8' : 'm9 4 8 8-8 8'"/></svg></button>
+        <button v-for="direction in [-1, 1]" :key="direction" class="gallery-edge-nav" :class="{ previous: direction < 0, next: direction > 0 }" :disabled="!loadImages && images.length < 2" :aria-label="direction < 0 ? '上一张背景图' : '下一张背景图'" @click.stop="advance(direction, true)"><svg viewBox="0 0 24 24" aria-hidden="true"><path :d="direction < 0 ? 'm15 4-8 8 8 8' : 'm9 4 8 8-8 8'"/></svg></button>
       </template>
     </section>
   </Teleport>
@@ -370,11 +403,11 @@ html.gallery-presenting, html.gallery-presenting body { overflow: hidden; oversc
 .gallery-presentation.dragging :is(.gallery-presentation-tint, .gallery-presentation-fade) { transition: none; }
 .gallery-chevron { position: absolute; left: calc(50% - 40px); width: 80px; height: 48px; display: grid; place-items: center; padding: 0; border: 0; background: transparent; color: var(--ink, #fff); z-index: 4; }
 .gallery-chevron svg { width: min(64px, 100%); height: 40px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; animation: gallery-chevron-breathe 2.2s ease-in-out infinite; filter: drop-shadow(0 2px 5px #0005); }
-.gallery-entry-chevron { opacity: 0; pointer-events: none; transition: opacity .25s ease; }
-.gallery-entry-chevron.visible, .gallery-entry-chevron:focus-visible { opacity: 1; pointer-events: auto; }
+.gallery-entry-chevron { opacity: 0; pointer-events: none; transition: opacity .65s ease; }
+.gallery-entry-chevron.visible, .gallery-entry-chevron:focus-visible { opacity: 1; pointer-events: auto; transition-duration: .35s; }
 .gallery-chevron:focus-visible { outline: 2px solid #a6a0ed; outline-offset: 2px; border-radius: 8px; }
-.gallery-exit-chevron { top: var(--gallery-chevron-top); left: var(--gallery-chevron-left); width: var(--gallery-chevron-width); color: #fff; transition: top .6s cubic-bezier(.22,.8,.24,1), left .6s cubic-bezier(.22,.8,.24,1); }
-.gallery-exit-chevron svg { rotate: var(--gallery-chevron-angle); transition: rotate .6s cubic-bezier(.22,.8,.24,1); }
+.gallery-exit-chevron { top: 0; left: var(--gallery-chevron-left); transform: translateY(var(--gallery-chevron-top)); width: var(--gallery-chevron-width); color: #fff; transition: transform .6s cubic-bezier(.32,.05,.2,1); }
+.gallery-exit-chevron svg { rotate: var(--gallery-chevron-angle); transition: rotate .6s cubic-bezier(.32,.05,.2,1); }
 .gallery-edge-nav { position: absolute; top: 0; bottom: 0; width: min(13%, 104px); padding: 0; display: grid; place-items: center; background: transparent; color: #fff; border: 0; opacity: 0; transition: opacity .2s ease; }
 .gallery-edge-nav.previous { left: 0; }
 .gallery-edge-nav.next { right: 0; }
@@ -383,9 +416,13 @@ html.gallery-presenting, html.gallery-presenting body { overflow: hidden; oversc
 .gallery-edge-nav:disabled { color: #8b8b8b; cursor: default; }
 @keyframes gallery-chevron-breathe { 0%, 100% { opacity: .32; transform: translateY(2px); } 50% { opacity: .95; transform: translateY(-2px); } }
 @media (min-width: 761px) {
-  .content:has(> .scoped-timeline-header) > .section-heading { display: grid; grid-template-columns: auto minmax(64px, 1fr) minmax(110px, 300px); gap: 8px; align-items: center; }
+  .content:has(> .scoped-timeline-header) > .section-heading { display: grid; grid-template-columns: minmax(0, 1fr) 80px minmax(0, 1fr); gap: 8px; align-items: center; }
+  .content:has(> .scoped-timeline-header) > .section-heading > .filters { flex-wrap: wrap; }
   .content:has(> .scoped-timeline-header) > .section-heading > .timeline-tools { grid-column: 3; width: 100%; min-width: 0; margin-left: 0; }
   .content:has(> .scoped-timeline-header) > .section-heading .timeline-search { width: 100%; }
+}
+@media (min-width: 761px) and (max-width: 1100px) {
+  .content:has(> .scoped-timeline-header) > .section-heading { grid-template-columns: minmax(0, 1fr) 44px minmax(0, 1fr); }
 }
 @media (prefers-reduced-motion: reduce) {
   .gallery-backdrop img, .gallery-presentation, .gallery-presentation *, .gallery-chevron, .gallery-chevron svg { transition: none!important; animation: none!important; }

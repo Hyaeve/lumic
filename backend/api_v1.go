@@ -110,6 +110,7 @@ func registerAPIV1Routes(mux *http.ServeMux, sessions *SessionStore, auth *AuthC
 	mux.HandleFunc("/api/v1/auth/session", apiV1SessionHandler(sessions))
 	mux.HandleFunc("/api/v1/auth/logout", apiV1LogoutHandler(sessions))
 	mux.HandleFunc("/api/v1/posts", apiV1PostsHandler(store))
+	mux.HandleFunc("/api/v1/gallery", apiV1GalleryHandler(store))
 	mux.HandleFunc("/api/v1/feeds", apiV1FeedsHandler(store, platforms))
 	mux.HandleFunc("/api/v1/sync", platforms.syncHandler)
 
@@ -286,7 +287,7 @@ func apiV1PostsHandler(store *Store) http.HandlerFunc {
 		var headerPostIDs map[string]string
 		var scopeStats *apiV1PostStat
 		if query.Cursor == nil && (query.Author != "" || query.Tag != "" || query.FeedID != "" || (query.Liked != nil && *query.Liked)) {
-			headerMedia = apiV1HeaderMedia(posts, query.FilterHash)
+			headerMedia = apiV1HeaderMedia(posts, query.FilterHash+strconv.FormatInt(time.Now().UnixNano(), 10))
 			headerPostIDs = make(map[string]string, len(headerMedia))
 			for _, media := range headerMedia {
 				headerPostIDs[media] = ""
@@ -333,6 +334,47 @@ func apiV1PostsHandler(store *Store) http.HandlerFunc {
 			}
 		}
 		writeJSON(w, page)
+	}
+}
+
+// Each request samples the entire filtered collection, independent of feed pagination.
+func apiV1GalleryHandler(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		query, err := parseAPIV1PostQuery(r)
+		if err != nil {
+			writeAPIError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if query.Author == "" && query.Tag == "" && query.FeedID == "" && (query.Liked == nil || !*query.Liked) {
+			writeAPIError(w, http.StatusBadRequest, "gallery scope required")
+			return
+		}
+		store.RLock()
+		posts := append([]Post(nil), store.posts...)
+		store.RUnlock()
+		posts = filterAndSortAPIV1Posts(posts, query)
+		media := apiV1HeaderMedia(posts, strconv.FormatInt(time.Now().UnixNano(), 10))
+		owners := make(map[string]string, len(media))
+		for _, path := range media {
+			owners[path] = ""
+		}
+		for _, post := range posts {
+			for _, path := range post.Media {
+				if id, ok := owners[path]; ok && id == "" {
+					owners[path] = post.ID
+				}
+			}
+		}
+		writeJSON(w, struct {
+			Media   []string          `json:"media"`
+			PostIDs map[string]string `json:"postIds"`
+		}{media, owners})
 	}
 }
 

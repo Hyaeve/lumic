@@ -645,16 +645,27 @@ const activePostPage = computed(() => {
 const headerGallery = computed(() => activePostPage.value.headerMedia)
 const galleryBackdropControl = ref(null)
 const galleryPresenting = ref(false)
+const galleryOwners = new Map()
+async function loadGalleryImages() {
+  const key = feedQueryKey.value
+  const params = new URLSearchParams({ ...feedQuery.value, order: 'newest', seed: '', q: '' })
+  const response = await fetch(`/api/v1/gallery?${params}`, { cache: 'no-store' })
+  if (!response.ok) throw new Error('背景图片加载失败')
+  const result = await response.json()
+  if (key !== feedQueryKey.value) return []
+  for (const [source, id] of Object.entries(result.postIds || {})) galleryOwners.set(source, id)
+  return result.media || []
+}
 let galleryNavigationPending = false
 function prefetchGalleryPost(source) {
-  const id = activePostPage.value.headerPostIds[source]
+  const id = galleryOwners.get(source) || activePostPage.value.headerPostIds[source]
   if (id && !postById.value.has(String(id))) {
     void postPager.ensure({ id: String(id), order: 'newest', source: 'all' })
   }
 }
 async function openGalleryPost(source) {
   if (galleryNavigationPending) return
-  const id = activePostPage.value.headerPostIds[source] || posts.value.find(post => post.media?.includes(source))?.id
+  const id = galleryOwners.get(source) || activePostPage.value.headerPostIds[source] || posts.value.find(post => post.media?.includes(source))?.id
   if (!id) return
   galleryNavigationPending = true
   const originKey = feedQueryKey.value
@@ -682,7 +693,7 @@ const scopedTimelineStats = computed(() => activePostPage.value.scopeStats || {
   total: activePostPage.value.total, today: 0,
   favorites: activeNav.value === 'liked' ? activePostPage.value.total : 0
 })
-watch(feedQueryKey, () => galleryBackdropControl.value?.close())
+watch(feedQueryKey, () => { galleryBackdropControl.value?.close(); galleryOwners.clear() })
 const filteredPosts = computed(() => {
   const byId = new Map(posts.value.map(post => [String(post.id), post]))
   const allPosts = activePostPage.value.ids.map(id => byId.get(id)).filter(Boolean)
@@ -4584,7 +4595,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
         <template v-else-if="localSeason === 'autumn'"><i class="autumn-glow"></i><i class="autumn-branch"></i><i class="autumn-leaf leaf-one"></i><i class="autumn-leaf leaf-two"></i><i class="autumn-leaf leaf-three"></i><i class="autumn-leaf leaf-four"></i><i class="autumn-leaf leaf-five"></i></template>
         <template v-else><i class="winter-haze"></i><i class="winter-branch"></i><i class="winter-plum plum-one"></i><i class="winter-plum plum-two"></i><i class="winter-plum plum-three"></i><i class="winter-snowman"></i><i class="winter-ice"></i><i class="winter-snowflake flake-one"></i><i class="winter-snowflake flake-two"></i><i class="winter-snowflake flake-three"></i><i class="winter-snowflake flake-four"></i><i class="winter-snowflake flake-five"></i></template>
       </div>
-      <GalleryBackdrop v-if="isScopedTimeline" ref="galleryBackdropControl" :images="headerGallery" interactive :mobile="phonePortrait" :dark="isDark" @present="galleryPresenting = $event" @image="prefetchGalleryPost" @open-post="openGalleryPost" />
+      <GalleryBackdrop v-if="isScopedTimeline" ref="galleryBackdropControl" :images="headerGallery" :load-images="loadGalleryImages" :scope-key="feedQueryKey" interactive :mobile="phonePortrait" :dark="isDark" @present="galleryPresenting = $event" @image="prefetchGalleryPost" @open-post="openGalleryPost" />
       <ScopedTimelineHeader v-if="isScopedTimeline" :title="authorProfile ? authorProfile.name : selectedTag ? `#${selectedTag}` : '收藏'" :avatar="authorProfile ? postAvatar(authorProfile) : ''" :source-label="authorProfile ? sourceMeta[authorProfile.source].label : ''" :stats="scopedTimelineStats" :favorites-only="activeNav === 'liked' && !authorProfile && !selectedTag" @avatar-load="handlePostAvatarLoad($event, authorProfile)" @avatar-error="handlePostAvatarError($event, authorProfile)" />
       <header v-else class="topbar timeline-hero">
 <div class="timeline-hero-copy">

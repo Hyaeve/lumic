@@ -325,6 +325,55 @@ func TestAPIV1HeaderMediaPreservesOriginalURLs(t *testing.T) {
 	}
 }
 
+func TestAPIV1GallerySamplesEntireScope(t *testing.T) {
+	store := &Store{}
+	for i := 0; i < 100; i++ {
+		store.posts = append(store.posts, Post{ID: fmt.Sprint(i), Author: "Alice", Tags: []string{"Art"}, Liked: true, Media: []string{fmt.Sprintf("/flow/%d.jpg", i)}})
+	}
+	store.posts = append(store.posts, Post{ID: "outside", Author: "Bob", Media: []string{"/flow/outside.jpg"}})
+	for _, scope := range []string{"author=Alice", "tag=Art", "liked=true"} {
+		seen := map[string]bool{}
+		for i := 0; i < 12; i++ {
+			rec := httptest.NewRecorder()
+			apiV1GalleryHandler(store)(rec, httptest.NewRequest(http.MethodGet, "/api/v1/gallery?"+scope, nil))
+			var result struct {
+				Media   []string          `json:"media"`
+				PostIDs map[string]string `json:"postIds"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil || rec.Code != http.StatusOK {
+				t.Fatalf("gallery failed: %d %s", rec.Code, rec.Body.String())
+			}
+			if len(result.Media) != 12 {
+				t.Fatalf("unbounded or incomplete sample: %d", len(result.Media))
+			}
+			for _, image := range result.Media {
+				id := result.PostIDs[image]
+				if id == "" || image != "/flow/"+id+".jpg" || id == "outside" {
+					t.Fatalf("invalid scope or image owner: %s -> %s", image, id)
+				}
+				seen[image] = true
+			}
+		}
+		if len(seen) <= 12 {
+			t.Fatalf("%s: gallery remained confined to initial sample", scope)
+		}
+	}
+	for _, check := range []struct {
+		method, query string
+		status        int
+	}{
+		{http.MethodPost, "?author=Alice", http.StatusMethodNotAllowed},
+		{http.MethodGet, "", http.StatusBadRequest},
+		{http.MethodGet, "?author=Alice&limit=invalid", http.StatusBadRequest},
+	} {
+		rec := httptest.NewRecorder()
+		apiV1GalleryHandler(store)(rec, httptest.NewRequest(check.method, "/api/v1/gallery"+check.query, nil))
+		if rec.Code != check.status {
+			t.Fatalf("expected %d, got %d", check.status, rec.Code)
+		}
+	}
+}
+
 func TestAPIV1FeedsAreUnifiedAndHideStoragePaths(t *testing.T) {
 	store := &Store{feeds: []SourceConfig{{ID: "legacy", Source: SourceTwitter, Name: "Legacy", Enabled: true, StoragePath: "C:/private/legacy"}}}
 	platforms := &BilibiliStore{config: BilibiliConfig{
