@@ -1,5 +1,6 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { resistVerticalSwipe, shouldCommitVerticalSwipe, verticalSettleDuration, verticalSwipeEasing, verticalReboundEasing } from '../verticalSwipe'
 const props = defineProps({ images: { type: Array, default: () => [] }, loadImages: Function, scopeKey: String, interactive: Boolean, mobile: Boolean, dark: Boolean })
 const emit = defineEmits(['present', 'image', 'open-post'])
 const anchor = ref(null)
@@ -24,6 +25,8 @@ const entryWidth = ref(80)
 const entryScreenTop = ref(0)
 const presentationStartHeight = ref(320)
 const viewportHeight = ref(window.innerHeight)
+const settleDuration = ref(600)
+const settleEasing = ref('cubic-bezier(.22,.8,.24,1)')
 let observer, timer, closeTimer, tapTimer, hoverTimer, frame
 let candidates = []
 let batchRequest = null
@@ -41,6 +44,8 @@ const presentationStyle = computed(() => {
   const initial = presentationStartHeight.value
   return {
     ...boundsStyle.value,
+    '--gallery-settle-duration': `${settleDuration.value}ms`,
+    '--gallery-settle-easing': settleEasing.value,
     height: `${initial + (viewportHeight.value - initial) * progress.value}px`,
     opacity: Math.min(1, progress.value * 3),
     '--gallery-image-opacity': .5 + progress.value * .5,
@@ -103,9 +108,9 @@ function preparePresentation() {
   host.value.inert = true
   return true
 }
-function commitPresentation() {
+function commitPresentation(duration = 600) {
   progress.value = 1
-  lockedUntil = performance.now() + 600
+  lockedUntil = performance.now() + duration
   if (!expanded.value) {
     expanded.value = true
     emit('present', true)
@@ -114,19 +119,31 @@ function commitPresentation() {
 }
 async function openPresentation() {
   if (!preparePresentation()) return
+  settleDuration.value = 600
+  settleEasing.value = 'cubic-bezier(.22,.8,.24,1)'
   await nextTick()
   presentationElement.value?.getBoundingClientRect()
   frame = requestAnimationFrame(() => { if (presenting.value && !closing.value) commitPresentation() })
 }
-function settleGesture(cancelled = false) {
+function settleGesture(cancelled = false, gesture = touch) {
   if (!presenting.value || closing.value) return
   dragging.value = false
-  const keepOpen = cancelled ? expanded.value : expanded.value ? progress.value > .4 : progress.value >= .6
-  if (keepOpen) commitPresentation()
-  else closePresentation()
+  const distance = gesture?.dy || 0
+  const velocity = gesture ? (gesture.lastY - gesture.prevY) / Math.max(1, gesture.lastTime - gesture.prevTime) : 0
+  const directionMatches = expanded.value ? distance < 0 : distance > 0
+  const commit = !cancelled && directionMatches && shouldCommitVerticalSwipe(distance, velocity, viewportHeight.value)
+  const duration = verticalSettleDuration(resistVerticalSwipe(distance, viewportHeight.value), viewportHeight.value, velocity, commit)
+  settleDuration.value = duration
+  settleEasing.value = commit ? verticalSwipeEasing : verticalReboundEasing
+  const keepOpen = commit ? !expanded.value : expanded.value
+  if (keepOpen) commitPresentation(duration)
+  else closePresentation({ duration, easing: settleEasing.value })
 }
 function closePresentation(options = {}) {
   if (!presenting.value || closing.value) return
+  const duration = options.duration ?? 600
+  settleDuration.value = duration
+  settleEasing.value = options.easing || 'cubic-bezier(.22,.8,.24,1)'
   clearTimeout(tapTimer)
   cancelAnimationFrame(frame)
   lastTap = null
@@ -149,7 +166,7 @@ function closePresentation(options = {}) {
     lockedUntil = performance.now() + 250
   }
   if (options.immediate || matchMedia('(prefers-reduced-motion: reduce)').matches) finish()
-  else closeTimer = setTimeout(finish, 600)
+  else closeTimer = setTimeout(finish, duration)
 }
 function openCurrentPost(event) {
   if (!expanded.value || closing.value || event?.target?.closest('button')) return
@@ -216,7 +233,7 @@ function onTouchStart(event) {
   if (!props.interactive || !props.mobile || event.touches.length !== 1 || closing.value || performance.now() < lockedUntil) return
   if (!presenting.value && (window.scrollY > 2 || excludedTarget(event.target) || !current.value)) return
   const point = event.touches[0]
-  touch = { x: point.clientX, y: point.clientY, progress: progress.value, time: performance.now(), distance: 0, canTap: expanded.value, axis: '', dx: 0 }
+  touch = { x: point.clientX, y: point.clientY, progress: progress.value, time: performance.now(), distance: 0, canTap: expanded.value, axis: '', dx: 0, dy: 0, originY: null, prevY: point.clientY, lastY: point.clientY, prevTime: event.timeStamp, lastTime: event.timeStamp }
 }
 function onTouchMove(event) {
   if (!touch || event.touches.length !== 1) return
@@ -227,7 +244,7 @@ function onTouchMove(event) {
   if (touch.distance <= 10) return
   clearTimeout(tapTimer)
   lastTap = null
-  if (!touch.axis) touch.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y'
+  if (!touch.axis) touch.axis = Math.abs(dx) > Math.abs(dy) * 1.12 ? 'x' : 'y'
   if (touch.axis === 'x') {
     if (!expanded.value) { touch = null; return }
     if (event.cancelable) event.preventDefault()
@@ -242,7 +259,14 @@ function onTouchMove(event) {
   event.stopPropagation()
   if (!preparePresentation()) return
   dragging.value = true
-  progress.value = Math.max(0, Math.min(1, touch.progress + dy / 280))
+  if (touch.originY === null) touch.originY = point.clientY
+  touch.dy = point.clientY - touch.originY
+  touch.prevY = touch.lastY
+  touch.prevTime = touch.lastTime
+  touch.lastY = point.clientY
+  touch.lastTime = event.timeStamp
+  const travel = Math.max(1, viewportHeight.value - presentationStartHeight.value)
+  progress.value = Math.max(0, Math.min(1, touch.progress + resistVerticalSwipe(touch.dy, viewportHeight.value) / travel))
 }
 function onTouchEnd(event) {
   if (!touch) return
@@ -273,7 +297,7 @@ function onTouchEnd(event) {
   }
   if (dragging.value) {
     event.stopPropagation()
-    settleGesture(cancelled)
+    settleGesture(cancelled, gesture)
   }
 }
 function onKey(event) {
@@ -388,9 +412,9 @@ onBeforeUnmount(() => {
 .gallery-backdrop span { position: absolute; inset: 0; background: linear-gradient(90deg, #f6f8f9ed, #f6f8f94a 78%, #f6f8f960); }
 .dark .gallery-backdrop span { background: linear-gradient(90deg, #101319ed, #10131950 78%, #10131970); }
 html.gallery-presenting, html.gallery-presenting body { overflow: hidden; overscroll-behavior: none; }
-.gallery-presentation { position: fixed; top: 0; z-index: 85; overflow: hidden; outline: none; touch-action: none; background: #f6f8f9; transition: height .6s cubic-bezier(.22,.8,.24,1), opacity .6s ease; }
+.gallery-presentation { position: fixed; top: 0; z-index: 85; overflow: hidden; outline: none; touch-action: none; background: #f6f8f9; transition: height var(--gallery-settle-duration) var(--gallery-settle-easing), opacity var(--gallery-settle-duration) ease; }
 .gallery-presentation.dark { background: #101319; }
-.gallery-presentation-images { position: absolute; inset: 0; opacity: var(--gallery-image-opacity); transition: opacity .6s ease, transform .32s cubic-bezier(.2,.8,.25,1); }
+.gallery-presentation-images { position: absolute; inset: 0; opacity: var(--gallery-image-opacity); transition: opacity var(--gallery-settle-duration) ease, transform .32s cubic-bezier(.2,.8,.25,1); }
 .gallery-presentation-images img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 1.4s ease; user-select: none; }
 .gallery-presentation-images img.active { opacity: 1; }
 .gallery-presentation.fast-switch .gallery-presentation-images img { transition-duration: .32s; }
@@ -398,7 +422,7 @@ html.gallery-presenting, html.gallery-presenting body { overflow: hidden; oversc
 .gallery-presentation.dark .gallery-presentation-tint { background: linear-gradient(90deg, #101319ed, #10131950 78%, #10131970); }
 .gallery-presentation-fade { position: absolute; inset: 0; background: linear-gradient(to bottom, transparent var(--gallery-fade-start), #f6f8f9); }
 .gallery-presentation.dark .gallery-presentation-fade { background: linear-gradient(to bottom, transparent var(--gallery-fade-start), #101319); }
-.gallery-presentation :is(.gallery-presentation-tint, .gallery-presentation-fade) { opacity: var(--gallery-tint-opacity); transition: opacity .6s ease; pointer-events: none; }
+.gallery-presentation :is(.gallery-presentation-tint, .gallery-presentation-fade) { opacity: var(--gallery-tint-opacity); transition: opacity var(--gallery-settle-duration) ease; pointer-events: none; }
 .gallery-presentation.dragging, .gallery-presentation.dragging .gallery-presentation-images { transition: none; }
 .gallery-presentation.dragging :is(.gallery-presentation-tint, .gallery-presentation-fade) { transition: none; }
 .gallery-chevron { position: absolute; left: calc(50% - 40px); width: 80px; height: 48px; display: grid; place-items: center; padding: 0; border: 0; background: transparent; color: var(--ink, #fff); z-index: 4; }
@@ -418,8 +442,7 @@ html.gallery-presenting, html.gallery-presenting body { overflow: hidden; oversc
 @media (min-width: 761px) {
   .content:has(> .scoped-timeline-header) > .section-heading { display: grid; grid-template-columns: minmax(0, 1fr) 80px minmax(0, 1fr); gap: 8px; align-items: center; }
   .content:has(> .scoped-timeline-header) > .section-heading > .filters { flex-wrap: wrap; }
-  .content:has(> .scoped-timeline-header) > .section-heading > .timeline-tools { grid-column: 3; width: 100%; min-width: 0; margin-left: 0; }
-  .content:has(> .scoped-timeline-header) > .section-heading .timeline-search { width: 100%; }
+  .content:has(> .scoped-timeline-header) > .section-heading > .timeline-tools { grid-column: 3; justify-self: end; width: auto; min-width: 0; margin-left: 0; }
 }
 @media (min-width: 761px) and (max-width: 1100px) {
   .content:has(> .scoped-timeline-header) > .section-heading { grid-template-columns: minmax(0, 1fr) 44px minmax(0, 1fr); }

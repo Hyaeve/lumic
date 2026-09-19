@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import QRCode from 'qrcode'
 import { createPostPager, postQueryKey } from './postPager'
+import { resistVerticalSwipe, shouldCommitVerticalSwipe, verticalSettleDuration, verticalSwipeEasing, verticalReboundEasing } from './verticalSwipe'
 import PostTime from './components/PostTime.vue'
 import PostCaption from './components/PostCaption.vue'
 import GalleryBackdrop from './components/GalleryBackdrop.vue'
@@ -3542,11 +3543,10 @@ function commitMobileDetailVerticalSwipe(step, velocityY) {
   mobileDetailPageAnimating.value = true
   mobileDetailPageDragX.value = 0
   const viewportHeight = Math.max(1, window.innerHeight)
-  const remaining = Math.max(0, 1 - Math.min(1, Math.abs(mobileDetailPageDragY.value) / viewportHeight))
+  const duration = verticalSettleDuration(mobileDetailPageDragY.value, viewportHeight, velocityY)
   mobileDetailPageDragY.value = step > 0 ? -window.innerHeight : window.innerHeight
-  const duration = Math.max(220, Math.min(340, 185 + remaining * 150 - Math.min(1.5, Math.abs(velocityY)) * 34))
   mobileDetailPageTransitionMs.value = duration
-  mobileDetailPageTransitionEasing.value = 'cubic-bezier(.2, .78, .18, 1)'
+  mobileDetailPageTransitionEasing.value = verticalSwipeEasing
   mobileDetailPageTimer = window.setTimeout(() => {
     mobileDetailPageTimer = 0
     switchMobileDetailPost(target, step)
@@ -3653,12 +3653,8 @@ function updateMobileDetailPageSwipe(event) {
   mobileDetailPageTouch.lastTime = event.timeStamp
   const target = mobileDetailAdjacentPost(dragY < 0 ? 1 : -1)
   const viewportHeight = Math.max(1, window.innerHeight)
-  const distance = Math.abs(dragY)
-  const direction = Math.sign(dragY)
-  const resistanceSpan = viewportHeight * (target ? .68 : .28)
-  const resistedY = direction * resistanceSpan * (1 - Math.exp(-distance / resistanceSpan))
   mobileDetailPageDragX.value = 0
-  mobileDetailPageDragY.value = resistedY
+  mobileDetailPageDragY.value = resistVerticalSwipe(dragY, viewportHeight, Boolean(target))
 }
 function finishMobileDetailPageSwipe(event) {
   if (mobileDetailTwoFinger || event.touches) {
@@ -3696,12 +3692,10 @@ function finishMobileDetailPageSwipe(event) {
   mobileDetailPageDragging.value = false
   mobileDetailPageAnimating.value = true
   if (!cancelled && touchState.verticalActive) {
-    const threshold = Math.min(320, window.innerHeight * .4)
-    const fastVertical = Math.abs(dy) > 128 && Math.abs(velocityY) > 1.1
     const step = dy < 0 ? 1 : -1
-    if ((Math.abs(dy) >= threshold || fastVertical) && commitMobileDetailVerticalSwipe(step, velocityY)) return
-    mobileDetailPageTransitionMs.value = Math.max(210, Math.min(280, 220 + Math.abs(mobileDetailPageDragY.value) * .16))
-    mobileDetailPageTransitionEasing.value = 'cubic-bezier(.22, 1, .36, 1)'
+    if (shouldCommitVerticalSwipe(dy, velocityY, window.innerHeight) && commitMobileDetailVerticalSwipe(step, velocityY)) return
+    mobileDetailPageTransitionMs.value = verticalSettleDuration(mobileDetailPageDragY.value, window.innerHeight, velocityY, false)
+    mobileDetailPageTransitionEasing.value = verticalReboundEasing
     mobileDetailPageDragY.value = 0
     mobileDetailPageTimer = window.setTimeout(() => {
       resetMobileDetailPageSwipe()
