@@ -2995,26 +2995,13 @@ function findMobileDetailReturnTarget(postId) {
 }
 function runMobileDetailRouteExit(snapshot) {
   if (!snapshot?.layer?.isConnected) return
-  let attempts = 0
-  let stableFrames = 0
-  let previousSignature = ''
   const animate = () => {
     if (!snapshot.layer.isConnected) return
     const foundTarget = findMobileDetailReturnTarget(snapshot.postId)
     const storedTarget = mobilePostOriginVisual?.postId === snapshot.postId ? mobilePostOriginVisual : null
-    const expectedScroll = Math.max(0, Number(mobilePostReturnScrollY.value) || 0)
-    const scrollReady = Math.abs(window.scrollY - expectedScroll) < 3
-    const targetRect = foundTarget?.rect || storedTarget?.rect || null
-    const signature = targetRect && scrollReady
-      ? [window.scrollY, targetRect.left, targetRect.top, targetRect.width, targetRect.height].map(value => Math.round(value * 10) / 10).join(':')
-      : ''
-    stableFrames = signature && signature === previousSignature ? stableFrames + 1 : 0
-    previousSignature = signature
-    if ((!targetRect || !scrollReady || stableFrames < 2) && attempts < 36) {
-      attempts += 1
-      window.requestAnimationFrame(animate)
-      return
-    }
+    // The origin is already in viewport coordinates at the restored scroll
+    // position. Start with it now instead of waiting for virtualized cards.
+    const targetRect = storedTarget?.rect || foundTarget?.rect || null
     const finalTargetRect = targetRect || snapshot.sourceRect
     const targetRadius = foundTarget?.borderRadius || storedTarget?.borderRadius || '9px'
     const translateX = finalTargetRect.left - snapshot.sourceRect.left
@@ -3033,18 +3020,18 @@ function runMobileDetailRouteExit(snapshot) {
     const targetRadiusValue = Number.parseFloat(targetRadius) || 9
     const shellAnimation = snapshot.shell.animate([
       { opacity: 1, transform: 'scale(1)' },
-      { opacity: 1, transform: 'scale(1)', offset: .72 },
       { opacity: 0, transform: 'scale(.998)' }
-    ], { duration: 300, easing, fill: 'forwards' })
+    ], { duration: 260, easing, fill: 'forwards' })
     const mediaAnimation = snapshot.media.animate([
       { transform: 'translate3d(0,0,0) scale(1,1)', borderRadius: '0px', boxShadow: '0 0 0 rgba(0,0,0,0)' },
       { transform: `translate3d(${translateX}px,${translateY}px,0) scale(${scaleX},${scaleY})`, borderRadius: targetRadius || `${targetRadiusValue}px`, boxShadow: '0 8px 24px rgba(0,0,0,.14)' }
-    ], { duration: 300, easing, fill: 'forwards' })
+    ], { duration: 260, easing, fill: 'forwards' })
     Promise.allSettled([shellAnimation.finished, mediaAnimation.finished]).then(() => {
-      cleanupMobileDetailRouteExit()
+      if (mobileDetailRouteExitLayer === snapshot.layer) cleanupMobileDetailRouteExit()
     })
   }
-  nextTick(() => window.requestAnimationFrame(() => window.requestAnimationFrame(animate)))
+  if (mobilePostOriginVisual?.postId === snapshot.postId) animate()
+  else nextTick(animate)
 }
 function closePostDetail() {
   if (phonePortrait.value && window.location.pathname.startsWith('/post/') && window.history.state?.lumicMobileDetail) {
@@ -4904,7 +4891,6 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
             <button class="post-author-avatar" type="button" :aria-label="`查看 ${masonryDetailPost.author} 的动态`" @click="openAuthor(masonryDetailPost)"><img :src="postAvatar(masonryDetailPost)" data-fallback-index="0" :alt="masonryDetailPost.author" referrerpolicy="no-referrer" @error="handlePostAvatarError($event, masonryDetailPost)"></button>
             <div class="author"><button class="post-author-name" type="button" @click="openAuthor(masonryDetailPost)"><strong>{{ masonryDetailPost.author }}</strong></button></div>
             <span :class="['source-pill', 'post-source-pill', sourceMeta[masonryDetailPost.source].color]"><img :class="['source-icon', { 'twitter-night-icon': masonryDetailPost.source === 'twitter' && isDark }]" :src="sourceIconFor(masonryDetailPost.source)" :alt="sourceMeta[masonryDetailPost.source].label"></span>
-            <button class="desktop-detail-close" type="button" aria-label="关闭动态详情" @click="closePostDetail"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
           </header>
           <div class="desktop-detail-copy" tabindex="0" aria-label="动态正文"><p v-if="masonryDetailPost.caption" class="caption">{{ masonryDetailPost.caption }}</p></div>
           <footer class="post-foot masonry-detail-foot">

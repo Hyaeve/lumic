@@ -2272,7 +2272,7 @@ html:has(.desktop-post-detail), body:has(.desktop-post-detail) { overflow: hidde
 .desktop-gallery-nav { position: absolute; top: calc(50% - 20px); display: grid; place-items: center; width: 36px; height: 40px; padding: 0; color: #fff; background: #20232d91; backdrop-filter: blur(8px); border-radius: 8px; opacity: 0; pointer-events: none; transition: opacity .17s ease, background .17s ease; }
 .desktop-gallery-nav.previous { left: 12px; }
 .desktop-gallery-nav.next { right: 12px; }
-.desktop-gallery-nav svg, .desktop-detail-close svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.desktop-gallery-nav svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .desktop-detail-gallery:hover .desktop-gallery-nav,
 .desktop-detail-gallery:focus-within .desktop-gallery-nav { opacity: 1; pointer-events: auto; }
 .desktop-detail-gallery:hover .desktop-gallery-nav:disabled,
@@ -2284,8 +2284,8 @@ html:has(.desktop-post-detail), body:has(.desktop-post-detail) { overflow: hidde
 .desktop-detail-info .post-author-name { max-width: 100%; }
 .desktop-detail-info .post-author-name strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .desktop-detail-info .post-source-pill { margin: 0; padding: 4px; flex: none; }
-.desktop-detail-close { width: 28px; height: 28px; display: grid; place-items: center; padding: 0; flex: none; background: transparent; color: var(--muted); border-radius: 7px; }
-.desktop-detail-close:hover { color: var(--ink); background: color-mix(in srgb, var(--muted) 12%, transparent); }
+.desktop-detail-info .post-source-pill { width: 38px; height: 38px; padding: 0; flex: none; display: grid; place-items: center; background: transparent; }
+.desktop-detail-info .post-source-pill .source-icon { width: 36px; height: 36px; }
 .desktop-detail-copy { overflow-y: auto; min-height: 0; overscroll-behavior: contain; scrollbar-width: none; }
 .desktop-detail-copy::-webkit-scrollbar, .desktop-detail-info .tag-row::-webkit-scrollbar { display: none; }
 .desktop-detail-copy .caption { margin: 0; max-width: none; padding: 0 0 20px; line-height: 1.85; font-size: 16px; }
