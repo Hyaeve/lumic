@@ -1,5 +1,5 @@
 <script setup>
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 const props = defineProps({ images: { type: Array, default: () => [] }, interactive: Boolean, mobile: Boolean, dark: Boolean })
 const emit = defineEmits(['present'])
 const layers = ref(['', ''])
@@ -17,12 +17,21 @@ const closing = ref(false)
 const presentationStyle = ref({})
 const presentationElement = ref(null)
 let closeTimer
-let expandFrame
 let previousFocus
 let touchStart = null
-let wheelDistance = 0
-let wheelTime = 0
-let wheelEvents = 0
+let settleTimer
+const progress = ref(0)
+const tracking = ref('')
+const progressStyle = computed(() => {
+  const initial = parseFloat(backdropStyle.value.height) || 320
+  return {
+    ...presentationStyle.value,
+    height: `${initial + (window.innerHeight - initial) * progress.value}px`,
+    opacity: Math.min(1, progress.value * 3),
+    '--gallery-image-opacity': .5 + progress.value * .5,
+    '--gallery-tint-opacity': 1 - progress.value
+  }
+})
 let lockedUntil = 0
 const excludedTarget = target => Boolean(target?.closest('button, a, input, textarea, video, .media-frame, .modal, .lightbox-layer'))
 
@@ -36,31 +45,43 @@ function presentationBounds() {
     '--gallery-fade-start': backdropStyle.value['--gallery-fade-start']
   }
 }
-async function openPresentation() {
-  if (!props.interactive || presenting.value || !previous || window.scrollY > 2) return
+function preparePresentation() {
+  if (presenting.value) return true
+  if (!props.interactive || !previous || window.scrollY > 2) return false
   previousFocus = document.activeElement
   presentationBounds()
   presenting.value = true
   closing.value = false
   document.documentElement.classList.add('gallery-presenting')
   host.value.inert = true
-  emit('present', true)
-  lockedUntil = performance.now() + 850
-  await nextTick()
-  if (!presenting.value || closing.value || !presentationElement.value) return
-  // Commit the header-sized first frame before expanding it into the viewport.
-  presentationElement.value?.getBoundingClientRect()
-  expandFrame = requestAnimationFrame(() => {
+  progress.value = 0
+  return true
+}
+function settleGesture(cancelled = false) {
+  clearTimeout(settleTimer)
+  if (!presenting.value || closing.value) return
+  tracking.value = ''
+  const keepOpen = cancelled ? expanded.value : expanded.value ? progress.value > .4 : progress.value >= .6
+  if (!keepOpen) { closePresentation(); return }
+  progress.value = 1
+  lockedUntil = performance.now() + 650
+  if (!expanded.value) {
     expanded.value = true
+    emit('present', true)
+  }
+  void nextTick(() => {
     presentationElement.value?.focus({ preventScroll: true })
   })
 }
 function closePresentation() {
   if (!presenting.value || closing.value) return
-  cancelAnimationFrame(expandFrame)
+  clearTimeout(settleTimer)
+  tracking.value = ''
+  progress.value = 0
   closing.value = true
+  const wasExpanded = expanded.value
   expanded.value = false
-  emit('present', false)
+  if (wasExpanded) emit('present', false)
   closeTimer = setTimeout(() => {
     presenting.value = false
     closing.value = false
@@ -68,57 +89,62 @@ function closePresentation() {
     if (host.value) host.value.inert = false
     previousFocus?.focus?.({ preventScroll: true })
     lockedUntil = performance.now() + 350
-  }, matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 800)
+  }, matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 650)
 }
-function onWheel(event) {
+async function onWheel(event) {
   if (event.ctrlKey || props.mobile || !props.interactive) return
   if (!presenting.value && (window.scrollY > 2 || excludedTarget(event.target) || event.deltaY >= 0 || !previous)) return
   event.preventDefault()
   event.stopPropagation()
   if (performance.now() < lockedUntil || closing.value) return
   const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? window.innerHeight : 1)
-  const time = performance.now()
-  if (time - wheelTime > 500 || Math.sign(delta) !== Math.sign(wheelDistance)) {
-    wheelDistance = 0
-    wheelEvents = 0
+  const firstFrame = !presenting.value
+  if (!preparePresentation()) return
+  tracking.value = 'wheel'
+  if (firstFrame) {
+    await nextTick()
+    if (!presenting.value || closing.value) return
+    presentationElement.value?.getBoundingClientRect()
   }
-  wheelTime = time
-  wheelEvents++
-  wheelDistance += Math.max(-100, Math.min(100, delta))
-  if (wheelEvents >= 3 && ((!presenting.value && wheelDistance < -280) || (presenting.value && wheelDistance > 280))) {
-    if (presenting.value) closePresentation()
-    else void openPresentation()
-    wheelDistance = 0
-  }
+  progress.value = Math.max(0, Math.min(1, progress.value - Math.max(-100, Math.min(100, delta)) / 480))
+  clearTimeout(settleTimer)
+  settleTimer = setTimeout(() => settleGesture(), 240)
 }
 function onTouchStart(event) {
   touchStart = null
-  if (!props.interactive || !props.mobile || event.touches.length !== 1 || closing.value) return
+  if (!props.interactive || !props.mobile || event.touches.length !== 1 || closing.value || performance.now() < lockedUntil) return
   if (!presenting.value && (window.scrollY > 2 || excludedTarget(event.target) || !previous)) return
   const point = event.touches[0]
-  touchStart = { x: point.clientX, y: point.clientY, distance: 0 }
+  touchStart = { x: point.clientX, y: point.clientY, progress: progress.value }
 }
 function onTouchMove(event) {
-  if (!touchStart || event.touches.length !== 1) { touchStart = null; return }
+  if (!touchStart || event.touches.length !== 1) {
+    if (tracking.value === 'touch') settleGesture(true)
+    touchStart = null
+    return
+  }
   const point = event.touches[0]
   const dx = point.clientX - touchStart.x
   const dy = point.clientY - touchStart.y
-  if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 10) { touchStart = null; return }
+  if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 10) {
+    if (tracking.value === 'touch') settleGesture(true)
+    touchStart = null
+    return
+  }
   if ((!presenting.value && dy > 10) || presenting.value) {
     if (event.cancelable) event.preventDefault()
     event.stopPropagation()
-    touchStart.distance = dy
+    if (!preparePresentation()) return
+    tracking.value = 'touch'
+    progress.value = Math.max(0, Math.min(1, touchStart.progress + dy / 280))
   }
 }
 function onTouchEnd(event) {
   if (!touchStart) return
-  const distance = touchStart.distance
   touchStart = null
-  if (event.type === 'touchcancel' || performance.now() < lockedUntil) return
-  if ((!presenting.value && distance > 160) || (presenting.value && distance < -160)) {
+  if (tracking.value === 'touch') {
     event.stopPropagation()
-    if (presenting.value) closePresentation()
-    else void openPresentation()
+    settleGesture(event.type === 'touchcancel')
   }
 }
 function onKey(event) {
@@ -174,10 +200,10 @@ function scheduleRotation() {
   clearInterval(timer)
   if (props.images.length > 1) {
     const token = version
-    timer = setInterval(() => advance(token), presenting.value && !closing.value ? 7000 : 15000)
+    timer = setInterval(() => advance(token), expanded.value ? 7000 : 15000)
   }
 }
-watch([presenting, closing], scheduleRotation)
+watch(expanded, scheduleRotation)
 watch(() => props.images.join('|'), () => {
   clearInterval(timer)
   const token = ++version
@@ -190,7 +216,7 @@ onBeforeUnmount(() => {
   version++
   clearInterval(timer)
   clearTimeout(closeTimer)
-  cancelAnimationFrame(expandFrame)
+  clearTimeout(settleTimer)
   observer?.disconnect()
   if (!props.interactive) return
   host.value?.removeEventListener('wheel', onWheel, true)
@@ -215,7 +241,7 @@ onBeforeUnmount(() => {
   </div>
   </Teleport>
   <Teleport to="body">
-    <section v-if="presenting" ref="presentationElement" class="gallery-presentation" :class="{ expanded, closing, dark }" :style="presentationStyle" tabindex="-1" role="dialog" aria-modal="true" aria-label="背景图片幻灯片" @wheel="onWheel" @touchstart.passive="onTouchStart" @touchmove="onTouchMove" @touchend="onTouchEnd" @touchcancel="onTouchEnd">
+    <section v-if="presenting" ref="presentationElement" class="gallery-presentation" :class="{ expanded, closing, dark, 'tracking-wheel': tracking === 'wheel', 'tracking-touch': tracking === 'touch' }" :style="progressStyle" tabindex="-1" role="dialog" aria-modal="true" aria-label="背景图片幻灯片" @wheel="onWheel" @touchstart.passive="onTouchStart" @touchmove="onTouchMove" @touchend="onTouchEnd" @touchcancel="onTouchEnd">
       <div class="gallery-presentation-images"><img v-for="(image, index) in layers" :key="index" :src="image || undefined" :class="{ active: image && index === active }" alt=""></div>
       <div class="gallery-presentation-tint"></div>
       <div class="gallery-presentation-fade"></div>
@@ -235,15 +261,18 @@ onBeforeUnmount(() => {
 html.gallery-presenting, html.gallery-presenting body { overflow: hidden; overscroll-behavior: none; }
 .gallery-presentation { position: fixed; top: 0; height: var(--gallery-collapsed-height); z-index: 85; overflow: hidden; outline: none; touch-action: none; background: #f6f8f9; opacity: 0; transition: height .8s cubic-bezier(.22,.8,.24,1), opacity .8s ease; }
 .gallery-presentation.dark { background: #101319; }
-.gallery-presentation.expanded { height: 100dvh; opacity: 1; }
-.gallery-presentation-images { position: absolute; inset: 0; opacity: .5; transition: opacity .8s ease; }
+.gallery-presentation-images { position: absolute; inset: 0; opacity: var(--gallery-image-opacity); transition: opacity .65s ease; }
 .gallery-presentation-images img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 1.4s ease; }
 .gallery-presentation-images img.active { opacity: 1; }
 .gallery-presentation-tint { position: absolute; inset: 0; background: linear-gradient(90deg, #f6f8f9ed, #f6f8f94a 78%, #f6f8f960); opacity: 1; transition: opacity .8s ease; }
 .gallery-presentation.dark .gallery-presentation-tint { background: linear-gradient(90deg, #101319ed, #10131950 78%, #10131970); }
 .gallery-presentation-fade { position: absolute; inset: 0; background: linear-gradient(to bottom, transparent var(--gallery-fade-start), #f6f8f9); opacity: 1; transition: opacity .8s ease; }
 .gallery-presentation.dark .gallery-presentation-fade { background: linear-gradient(to bottom, transparent var(--gallery-fade-start), #101319); }
-.gallery-presentation.expanded .gallery-presentation-images { opacity: 1; }
-.gallery-presentation.expanded :is(.gallery-presentation-tint, .gallery-presentation-fade) { opacity: 0; }
+.gallery-presentation :is(.gallery-presentation-tint, .gallery-presentation-fade) { opacity: var(--gallery-tint-opacity); transition-duration: .65s; }
+.gallery-presentation { transition-duration: .65s; }
+.gallery-presentation.tracking-wheel,
+.gallery-presentation.tracking-wheel :is(.gallery-presentation-images, .gallery-presentation-tint, .gallery-presentation-fade) { transition-duration: .1s; transition-timing-function: linear; }
+.gallery-presentation.tracking-touch,
+.gallery-presentation.tracking-touch :is(.gallery-presentation-images, .gallery-presentation-tint, .gallery-presentation-fade) { transition: none; }
 @media (prefers-reduced-motion: reduce) { .gallery-presentation, .gallery-presentation * { transition: none!important; } }
 </style>
