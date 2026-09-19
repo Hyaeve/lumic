@@ -7,9 +7,8 @@ const overflowing = ref(false)
 let observer
 function measure() {
   const node = element.value
-  if (!node) return
-  const line = parseFloat(getComputedStyle(node).lineHeight)
-  overflowing.value = node.scrollHeight > line * 10 + 2
+  if (!node || props.expanded) return
+  overflowing.value = node.scrollHeight > node.clientHeight + 1
 }
 onMounted(() => {
   observer = new ResizeObserver(measure)
@@ -17,7 +16,7 @@ onMounted(() => {
   measure()
 })
 onBeforeUnmount(() => observer?.disconnect())
-watch(() => props.text, () => nextTick(measure))
+watch(() => [props.text, props.expanded], () => nextTick(measure))
 </script>
 
 <template>

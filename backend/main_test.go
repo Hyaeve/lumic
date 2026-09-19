@@ -457,6 +457,32 @@ func TestBilibiliRichTextExtractsOpusCaption(t *testing.T) {
 	}
 }
 
+func TestMergeBilibiliCaptionRepresentations(t *testing.T) {
+	title := "爱憎的赫斯珀利德斯"
+	body := "先帝爷长的美[保卫萝卜_哇]"
+	raw := json.RawMessage(`{"modules":{"module_dynamic":{"major":{"opus":{"title":"爱憎的赫斯珀利德斯","summary":{"text":"先帝爷长的美[保卫萝卜_哇]"}}}}}}`)
+	tests := []struct {
+		name   string
+		values []string
+		want   string
+	}{
+		{"reversed raw fallback", []string{combineRemoteText(title, body), bilibiliCaptionFromRaw(raw)}, title + "\n\n" + body},
+		{"complete detail", []string{"preview", "preview with full body"}, "preview with full body"},
+		{"additional paragraph", []string{title, body, body + "\n\nextra\n\n" + title}, title + "\n\n" + body + "\n\nextra"},
+		{"intentional repeated lines", []string{title, "echo\necho"}, title + "\n\necho\necho"},
+		{"intentional repeated paragraphs", []string{title, "echo\n\necho"}, title + "\n\necho\n\necho"},
+		{"identical alternatives", []string{body, body}, body},
+		{"empty alternatives", []string{"", "  ", body}, body},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := mergeBilibiliCaption(test.values...); got != test.want {
+				t.Fatalf("got %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestBilibiliRichTextExtractsOrigTextNodes(t *testing.T) {
 	raw := json.RawMessage(`{"rich_text_nodes":[{"type":"RICH_TEXT_NODE_TYPE_EMOJI","orig_text":"[灵魂出窍]"},{"type":"RICH_TEXT_NODE_TYPE_TEXT","orig_text":"非常好灵梦画了"}]}`)
 	if got := bilibiliRichText(raw); got != "[灵魂出窍]非常好灵梦画了" {

@@ -3359,6 +3359,35 @@ func mergeDetailedRemoteText(values ...string) string {
 	return result
 }
 
+// Compare alternative API representations, not repeated lines within one body.
+func mergeBilibiliCaption(values ...string) string {
+	result := ""
+	for _, value := range values {
+		value = cleanRemoteText(value)
+		if value == "" || strings.Contains(result, value) {
+			continue
+		}
+		if result == "" || strings.Contains(value, result) {
+			result = value
+			continue
+		}
+		previous := make(map[string]bool)
+		for _, block := range strings.Split(result, "\n\n") {
+			previous[strings.TrimSpace(block)] = true
+		}
+		var additional []string
+		for _, block := range strings.Split(value, "\n\n") {
+			if !previous[strings.TrimSpace(block)] {
+				additional = append(additional, block)
+			}
+		}
+		if len(additional) > 0 {
+			result += "\n\n" + strings.Join(additional, "\n\n")
+		}
+	}
+	return result
+}
+
 func bilibiliDirectText(value map[string]any) string {
 	for _, key := range []string{"text", "words", "orig_text", "raw_text", "text_raw"} {
 		if text, ok := value[key].(string); ok {
@@ -3503,7 +3532,7 @@ func (b *BilibiliStore) fetchBilibiliDynamicCaption(dynamicID string, credential
 			captions = append(captions, caption)
 		}
 	}
-	return mergeDetailedRemoteText(captions...)
+	return mergeBilibiliCaption(captions...)
 }
 
 func bilibiliInitialState(body []byte) (map[string]any, error) {
@@ -4483,13 +4512,12 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 					}
 				}
 			}
-			captionParts = append(captionParts, bilibiliCaptionFromRaw(rawItem))
-			caption := combineRemoteText(captionParts...)
+			caption := mergeBilibiliCaption(combineRemoteText(captionParts...), bilibiliCaptionFromRaw(rawItem))
 			if shouldFetchBilibiliDynamicDetail(item.Type, caption) {
 				// 动态详情接口与专栏页面共享 B 站限流策略，避免一批动态连续请求。
 				time.Sleep(260 * time.Millisecond)
 				detailCaption := b.fetchBilibiliDynamicCaption(item.ID, credentials, proxyURL)
-				caption = mergeDetailedRemoteText(caption, detailCaption)
+				caption = mergeBilibiliCaption(caption, detailCaption)
 			}
 			publishedAt := parseRemoteTimestamp(item.Modules.Author.PubTs)
 			published := time.Unix(publishedAt, 0)

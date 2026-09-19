@@ -2258,7 +2258,7 @@ html:has(.desktop-post-detail), body:has(.desktop-post-detail) { overflow: hidde
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(300px, 1fr);
   align-items: stretch;
-  width: min(1120px, calc(100vw - 64px));
+  width: min(1000px, calc(100vw - 64px));
   height: min(740px, calc(100dvh - 80px));
   max-height: none;
   padding: 0;
@@ -2288,7 +2288,14 @@ html:has(.desktop-post-detail), body:has(.desktop-post-detail) { overflow: hidde
 .desktop-detail-close:hover { color: var(--ink); background: color-mix(in srgb, var(--muted) 12%, transparent); }
 .desktop-detail-copy { overflow-y: auto; min-height: 0; overscroll-behavior: contain; scrollbar-width: none; }
 .desktop-detail-copy::-webkit-scrollbar, .desktop-detail-info .tag-row::-webkit-scrollbar { display: none; }
-.desktop-detail-copy .caption { margin: 0; max-width: none; padding: 0 0 20px; line-height: 1.85; font-size: 14px; }
+.desktop-detail-copy .caption { margin: 0; max-width: none; padding: 0 0 20px; line-height: 1.85; font-size: 16px; }
+.post-caption-block .caption::first-line,
+.mobile-post-copy .caption::first-line,
+.desktop-detail-copy .caption::first-line {
+  color: var(--ink);
+  font-size: 1.15em;
+  font-weight: 700;
+}
 .desktop-detail-info .masonry-detail-foot { width: 100%; min-width: 0; margin-top: 0; padding-top: 14px; gap: 10px; }
 .desktop-detail-info .tag-row { min-width: 0; flex: 1; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
 .desktop-detail-info .tag-row button { flex: none; margin: 0; white-space: nowrap; }
