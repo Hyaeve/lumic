@@ -4444,7 +4444,11 @@ watch(phoneOverlayKey, next => {
 })
 watch(timelineView, value => localStorage.setItem('lumic-timeline-view', value))
 watch(effectiveTimelineView, resetTimelineWindow)
-watch(isDark, value => { if (value) startNightMeteorLoop(); else stopNightMeteorLoop() })
+watch(isDark, value => {
+  document.documentElement.dataset.theme = value ? 'dark' : 'light'
+  if (value) startNightMeteorLoop()
+  else stopNightMeteorLoop()
+})
 watch(platformCards, cards => {
   if (!credentialPlatform.value) return
   credentialPlatform.value = cards.find(platform => platform.key === credentialPlatform.value.key) || null

@@ -1,12 +1,13 @@
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Noto+Serif+SC:wght@500;600;700&display=swap');
 
-:root { font-family: 'DM Sans', 'Noto Sans SC', 'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', sans-serif; color: #34433f; background: #f4f7f3; font-synthesis: none; }
+:root { --page-background: #fbf7ea; font-family: 'DM Sans', 'Noto Sans SC', 'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', sans-serif; color: #34433f; background: var(--page-background); font-synthesis: none; }
+:root[data-theme="dark"] { --page-background: #080a0e; }
 html, body, .app-shell { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 * { box-sizing: border-box; }
-body { margin: 0; min-width: 1080px; }
+body { margin: 0; min-width: 1080px; background: var(--page-background); }
 button { border: 0; font: inherit; cursor: pointer; color: inherit; -webkit-tap-highlight-color: transparent; }
 a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color: transparent; }
-.session-loading { min-height: 100vh; display: grid; place-items: center; background: #f5f7f2; }
+.session-loading { min-height: 100vh; display: grid; place-items: center; background: var(--page-background); }
 .session-loading span { width: 30px; height: 30px; border: 2px solid #dbe5dd; border-top-color: #719b7f; border-radius: 50%; animation: spin .8s linear infinite; }
 .login-shell { min-height: 100vh; display: grid; place-items: center; padding: 30px; background: radial-gradient(circle at 20% 15%, #e2ece4 0, transparent 36%), radial-gradient(circle at 82% 75%, #eee4dc 0, transparent 34%), #f5f7f2; }
 .login-panel { width: 420px; padding: 50px 48px; color: #34433f; background: rgba(255,255,255,.78); border: 1px solid #e1e8e1; border-radius: 18px; box-shadow: 0 25px 70px #6072661c; backdrop-filter: blur(16px); }
@@ -2369,6 +2370,8 @@ html.gallery-presenting .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-togg
 
 /* Keep scrolling content out of iOS's translucent top safe area. */
 @supports (-webkit-touch-callout: none) {
+  html, body { overscroll-behavior-y: none; }
+  body, #app { min-height: 100dvh; }
   html::before {
     content: '';
     position: fixed;
@@ -2376,9 +2379,8 @@ html.gallery-presenting .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-togg
     height: env(safe-area-inset-top, 0px);
     z-index: 200;
     pointer-events: none;
-    background: #fbf7ea;
+    background: var(--page-background);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
-  html:has(.app-shell.dark)::before { background: #080a0e; }
 }
