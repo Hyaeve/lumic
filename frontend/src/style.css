@@ -1,7 +1,7 @@
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Noto+Serif+SC:wght@500;600;700&display=swap');
 
-:root { --page-background: #fbf7ea; font-family: 'DM Sans', 'Noto Sans SC', 'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', sans-serif; color: #34433f; background: var(--page-background); font-synthesis: none; }
-:root[data-theme="dark"] { --page-background: #080a0e; }
+:root { --page-background: #fbf7ea; color-scheme: light; font-family: 'DM Sans', 'Noto Sans SC', 'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', sans-serif; color: #34433f; background: var(--page-background); font-synthesis: none; }
+:root[data-theme="dark"] { --page-background: #080a0e; color-scheme: dark; }
 html, body, .app-shell { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 1080px; background: var(--page-background); }
@@ -2368,7 +2368,7 @@ html.gallery-presenting .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-togg
   body { -webkit-text-size-adjust: 100%; }
 }
 
-/* Keep scrolling content out of iOS's translucent top safe area. */
+/* Frost only the real status-bar inset, ending before the floating controls. */
 @supports (-webkit-touch-callout: none) {
   html, body { overscroll-behavior-y: none; }
   body, #app { min-height: 100dvh; }
@@ -2377,10 +2377,12 @@ html.gallery-presenting .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-togg
     position: fixed;
     inset: 0 0 auto;
     height: env(safe-area-inset-top, 0px);
-    z-index: 200;
+    z-index: 61;
     pointer-events: none;
-    background: var(--page-background);
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
+    background: color-mix(in srgb, var(--page-background) 12%, transparent);
+    backdrop-filter: blur(8px) saturate(110%);
+    clip-path: inset(0);
+    -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 65%, transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 0%, #000 65%, transparent 100%);
   }
 }
