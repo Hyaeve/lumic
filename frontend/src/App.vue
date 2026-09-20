@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { capturePageSnapshot } from './pageSnapshot'
 import PageSnapshot from './components/PageSnapshot.vue'
+import PostActions from './components/PostActions.vue'
 import QRCode from 'qrcode'
 import { createPostPager, postQueryKey } from './postPager'
 import { resistVerticalSwipe, shouldCommitVerticalSwipe, verticalSettleDuration, verticalSwipeEasing, verticalReboundEasing } from './verticalSwipe'
@@ -234,6 +235,7 @@ const mobileLightboxEntering = ref(false)
 const mobileLightboxDotsVisible = ref(false)
 const lightboxZoomAnimating = ref(false)
 const mobileLightboxMenu = ref({ open: false, x: 0, y: 0 })
+const postActionOverlay = shallowRef(null)
 let mobileMenuDismissArmed = false
 const iosImageCallout = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
 const mobileDetailTwoFingerPreparing = ref(false)
@@ -740,6 +742,7 @@ const phoneOverlayKey = computed(() => {
   if (mobileLightboxMenu.value.open) return 'lightbox-menu'
   if (lightbox.value.open) return ''
   if (confirmDialog.value.open) return 'confirm'
+  if (postActionOverlay.value) return 'post-editor'
   if (showFeedSettings.value) return 'feed-settings'
   if (credentialPlatform.value) return 'credential-platform'
   if (selectedPlatform.value) return 'platform'
@@ -2549,6 +2552,10 @@ function handleWindowResize() {
   if (lightbox.value.open) scheduleLightboxScaleUpdate()
 }
 function handleGlobalKeydown(event) {
+  if (postActionOverlay.value) {
+    if (event.key === 'Escape') postActionOverlay.value.close()
+    return
+  }
   if (showBrandMenu.value && event.key === 'Escape') {
     showBrandMenu.value = false
     return
@@ -2607,6 +2614,7 @@ async function deletePost(post) {
   try {
     const response = await fetch(`/api/posts?id=${encodeURIComponent(post.id)}`, { method: 'DELETE' })
     if (!response.ok) throw new Error(await responseError(response, '删除动态失败'))
+    if (masonryDetailPost.value?.id === post.id) closePostDetail()
     posts.value = posts.value.filter(item => item.id !== post.id)
     void refreshFeedMetadata()
     timelineMessage.value = '动态已从时间线删除'
@@ -2624,6 +2632,7 @@ function clearPhoneOverlayHistoryForNavigation() {
 function dismissPhoneOverlay(kind = phoneOverlayKey.value) {
   phoneOverlayDismissInProgress = true
   if (kind === 'gallery') galleryBackdropControl.value?.close()
+  else if (kind === 'post-editor') postActionOverlay.value?.close()
   else if (kind === 'lightbox-menu') dismissMobileLightboxMenu()
   else if (kind === 'confirm') closeConfirmDialog(false)
   else if (kind === 'feed-settings') showFeedSettings.value = false
@@ -2643,6 +2652,11 @@ function togglePostSelection(post) {
   selectedPostIds.value = selectedPostIds.value.includes(post.id) ? selectedPostIds.value.filter(id => id !== post.id) : [...selectedPostIds.value, post.id]
 }
 function handlePostSelectionClick(event, post) {
+  if (performance.now() < masonryLongPressSuppressUntil) {
+    event.preventDefault()
+    event.stopPropagation()
+    return
+  }
   if (!selectionMode.value) return
   event.preventDefault()
   event.stopPropagation()
@@ -2651,9 +2665,52 @@ function handlePostSelectionClick(event, post) {
 function stopSelection() { selectionMode.value = false; selectionAction.value = 'delete'; selectedPostIds.value = [] }
 function closeContextMenu() { contextMenu.value = { open: false, x: 0, y: 0, post: null } }
 function openContextMenu(event, post = null) {
+  if (phonePortrait.value && timelineView.value === 'masonry' && post) {
+    enterMasonrySelection(post)
+    return
+  }
   const width = activeNav.value === 'liked' ? 126 : 106
   const height = post ? 118 : 76
   contextMenu.value = { open: true, x: Math.max(8, Math.min(event.clientX, window.innerWidth - width - 12)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - height - 12)), post }
+}
+let masonryLongPressTimer = 0
+let masonryPress = null
+let masonryLongPressSuppressUntil = 0
+function enterMasonrySelection(post) {
+  selectionMode.value = true
+  selectionAction.value = 'delete'
+  if (!selectedPostIds.value.includes(post.id)) selectedPostIds.value.push(post.id)
+  masonryLongPressSuppressUntil = performance.now() + 650
+}
+function beginMasonryPress(event, post) {
+  clearMasonryPress()
+  if (!phonePortrait.value || event.touches?.length !== 1 || event.target.closest('button, input, a')) return
+  const touch = event.touches[0]
+  masonryPress = { x: touch.clientX, y: touch.clientY }
+  masonryLongPressTimer = window.setTimeout(() => {
+    enterMasonrySelection(post)
+    masonryLongPressTimer = 0
+  }, 550)
+}
+function moveMasonryPress(event) {
+  const touch = event.touches?.[0]
+  if (!touch || event.touches.length !== 1 || !masonryPress || Math.hypot(touch.clientX - masonryPress.x, touch.clientY - masonryPress.y) > 9) clearMasonryPress()
+}
+function clearMasonryPress() {
+  window.clearTimeout(masonryLongPressTimer)
+  masonryLongPressTimer = 0
+  masonryPress = null
+}
+onUnmounted(clearMasonryPress)
+function applyEditedPost(updated) {
+  for (const post of posts.value) if (post.id === updated.id) Object.assign(post, updated)
+  if (masonryDetailPost.value?.id === updated.id) {
+    Object.assign(masonryDetailPost.value, updated)
+    desktopDetailIndex.value = 0
+    mobileDetailIndex.value = 0
+  }
+  mobilePageSnapshots.value = new Map()
+  scheduleTimelineWindow()
 }
 function startMultiSelectMode() {
   const unfavoriteMode = activeNav.value === 'liked'
@@ -3766,6 +3823,11 @@ function finishMobileAuthorPageSwipe(event) {
   const velocityX = (touchState.lastX - touchState.prevX) / velocityDuration
   mobileAuthorPageTouch = null
   mobileAuthorPageDragging.value = false
+  if (!horizontal) {
+    mobileAuthorPageAnimating.value = false
+    mobileAuthorPageDragX.value = 0
+    return
+  }
   mobileAuthorPageAnimating.value = true
   const threshold = Math.min(112, window.innerWidth * .28)
   const fastReturn = dx > 36 && velocityX > .78
@@ -4040,24 +4102,21 @@ function updateTimelineWindow() {
 function scheduleTimelineWindow() {
   if (!timelineFrame) timelineFrame = window.requestAnimationFrame(updateTimelineWindow)
 }
-function hideMobileControlsAfterIdle() {
-  mobileControlsTimer = 0
-  const remaining = 3200 - (performance.now() - mobileControlsLastActivity)
-  if (remaining > 0) {
-    mobileControlsTimer = window.setTimeout(hideMobileControlsAfterIdle, remaining)
-    return
-  }
-  if (!mobileMenuOpen.value && !mobileSourcesOpen.value) mobileControlsVisible.value = false
-}
 function showMobileControls() {
   if (!phonePortrait.value || lightbox.value.open || masonryDetailPost.value) return
   mobileControlsLastActivity = performance.now()
   mobileControlsVisible.value = true
-  if (!mobileControlsTimer) mobileControlsTimer = window.setTimeout(hideMobileControlsAfterIdle, 3200)
+  if (mobileControlsTimer) window.clearTimeout(mobileControlsTimer)
+  mobileControlsTimer = 0
 }
+let mobileScrollAnchor = 0
 function handleWindowScroll() {
   if (phonePortrait.value && authorProfile.value && mobileAuthorDetailState.value) mobileAuthorScrollY = window.scrollY
-  showMobileControls()
+  const top = Math.max(0, window.scrollY)
+  if (phonePortrait.value && !lightbox.value.open && !masonryDetailPost.value && Math.abs(top - mobileScrollAnchor) > 8) {
+    mobileControlsVisible.value = top < mobileScrollAnchor || top < 20 || mobileMenuOpen.value || mobileSourcesOpen.value
+    mobileScrollAnchor = top
+  }
   scheduleTimelineWindow()
 }
 function scrollTimelineToTop() {
@@ -4617,8 +4676,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
 <button class="post-author-name" type="button" :aria-label="`查看 ${post.author} 的动态`" @click="openAuthor(post)"><strong>{{ post.author }}</strong></button>
 <PostTime :value="post.published" :with-time="!phonePortrait" :hover="!phonePortrait" />
 </div>
-<span :class="['source-pill', 'post-source-pill', sourceMeta[post.source].color]">
-<img :class="['source-icon', { 'twitter-night-icon': post.source === 'twitter' && isDark }]" :src="sourceIconFor(post.source)" :alt="`${sourceMeta[post.source].label}图标`">{{ sourceMeta[post.source].label }}</span>
+<PostActions :post="post" :icon="sourceIconFor(post.source)" @saved="applyEditedPost" @delete="deletePost" @overlay="postActionOverlay = $event" />
 </div>
 <PostCaption v-if="post.caption" v-model:expanded="expandedCaptions[post.id]" :text="post.caption" />
 <div v-if="post.media?.length" :class="['media-grid', `media-count-${Math.min(post.media.length, 9)}`]">
@@ -4638,7 +4696,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
 <div v-if="timelineBottomSpace" class="timeline-spacer" :style="{ height: `${timelineBottomSpace}px` }" aria-hidden="true"></div>
 </template>
 <template v-else>
-<article v-for="item in visibleMasonryItems" :key="item.post.id" :ref="element => setPostCard(item.post, element, 'masonry')" :class="['masonry-card', { selected: selectedPostIds.includes(item.post.id), selectable: selectionMode, 'text-only': !masonryCover(item.post) && !item.post.videos?.length }]" :style="masonryItemStyle(item)" :data-post-id="item.post.id" tabindex="0" @click.capture="handlePostSelectionClick($event, item.post)" @click="openMasonryPost(item.post, $event)" @keydown.enter.prevent="openMasonryPost(item.post, $event)" @contextmenu.stop.prevent="openContextMenu($event, item.post)">
+<article v-for="item in visibleMasonryItems" :key="item.post.id" :ref="element => setPostCard(item.post, element, 'masonry')" :class="['masonry-card', { selected: selectedPostIds.includes(item.post.id), selectable: selectionMode, 'text-only': !masonryCover(item.post) && !item.post.videos?.length }]" :style="masonryItemStyle(item)" :data-post-id="item.post.id" tabindex="0" @touchstart.passive="beginMasonryPress($event, item.post)" @touchmove.passive="moveMasonryPress" @touchend="clearMasonryPress" @touchcancel="clearMasonryPress" @click.capture="handlePostSelectionClick($event, item.post)" @click="openMasonryPost(item.post, $event)" @keydown.enter.prevent="openMasonryPost(item.post, $event)" @contextmenu.stop.prevent="openContextMenu($event, item.post)">
   <label v-if="selectionMode" class="post-select-control masonry-select-control" :title="`选择 ${item.post.author} 的这条动态`" @click.prevent><input type="checkbox" :checked="selectedPostIds.includes(item.post.id)" tabindex="-1"><span></span></label>
   <div v-if="masonryCover(item.post)" class="masonry-cover">
     <img :src="previewMedia(masonryCover(item.post))" alt="" loading="lazy" decoding="async" fetchpriority="low" @load="setMasonryCoverRatio(item.post, $event, masonryCoverIsVideo(item.post))">
@@ -4802,7 +4860,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
       <header class="mobile-post-detail-head">
         <button class="mobile-post-back" type="button" title="返回动态页" aria-label="返回动态页" @click="closePostDetail"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg></button>
         <button class="mobile-post-author" type="button" @click="openAuthor(masonryDetailPost)"><img :src="postAvatar(masonryDetailPost)" data-fallback-index="0" :alt="masonryDetailPost.author" referrerpolicy="no-referrer" @error="handlePostAvatarError($event, masonryDetailPost)"><strong>{{ masonryDetailPost.author }}</strong></button>
-        <span :class="['source-pill', 'mobile-post-source', sourceMeta[masonryDetailPost.source].color]"><img :class="['source-icon', { 'twitter-night-icon': masonryDetailPost.source === 'twitter' && isDark }]" :src="sourceIconFor(masonryDetailPost.source)" :alt="`${sourceMeta[masonryDetailPost.source].label}图标`">{{ sourceMeta[masonryDetailPost.source].label }}</span>
+        <PostActions :post="masonryDetailPost" :icon="sourceIconFor(masonryDetailPost.source)" @saved="applyEditedPost" @delete="deletePost" @overlay="postActionOverlay = $event" />
       </header>
       <section v-if="mobileDetailCurrentMedia" :class="['mobile-post-media-stage', { 'video-media': mobileDetailCurrentMedia.type === 'video' }, mobileDetailCurrentMedia.type === 'video' ? postVideoFrameClass(masonryDetailPost) : '']" :style="mobileDetailCurrentMedia.type === 'video' ? postVideoFrameStyle(masonryDetailPost) : undefined" @touchstart="beginMobileDetailTouch" @touchmove="updateMobileDetailTouch" @touchend="finishMobileDetailTouch" @touchcancel="finishMobileDetailTouch" @pointerdown="beginMobileDetailSwipe" @pointermove="updateMobileDetailSwipe" @pointerup="finishMobileDetailSwipe" @pointercancel="cancelMobileDetailSwipe">
         <div class="mobile-post-media-track" :style="mobileDetailTrackStyle">
@@ -4846,7 +4904,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
           <header class="post-head">
             <button class="post-author-avatar" type="button" :aria-label="`查看 ${masonryDetailPost.author} 的动态`" @click="openAuthor(masonryDetailPost)"><img :src="postAvatar(masonryDetailPost)" data-fallback-index="0" :alt="masonryDetailPost.author" referrerpolicy="no-referrer" @error="handlePostAvatarError($event, masonryDetailPost)"></button>
             <div class="author"><button class="post-author-name" type="button" @click="openAuthor(masonryDetailPost)"><strong>{{ masonryDetailPost.author }}</strong></button></div>
-            <span :class="['source-pill', 'post-source-pill', sourceMeta[masonryDetailPost.source].color]"><img :class="['source-icon', { 'twitter-night-icon': masonryDetailPost.source === 'twitter' && isDark }]" :src="sourceIconFor(masonryDetailPost.source)" :alt="sourceMeta[masonryDetailPost.source].label"></span>
+            <PostActions :post="masonryDetailPost" :icon="sourceIconFor(masonryDetailPost.source)" @saved="applyEditedPost" @delete="deletePost" @overlay="postActionOverlay = $event" />
           </header>
           <div class="desktop-detail-copy" tabindex="0" aria-label="动态正文"><p v-if="masonryDetailPost.caption" class="caption">{{ masonryDetailPost.caption }}</p></div>
           <footer class="post-foot masonry-detail-foot">

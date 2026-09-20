@@ -123,6 +123,7 @@ type Post struct {
 	Published        time.Time   `json:"published"`
 	Liked            bool        `json:"liked"`
 	FavoriteExplicit bool        `json:"favoriteExplicit,omitempty"`
+	Edited           bool        `json:"edited,omitempty"`
 }
 
 type PostVideo struct {
@@ -1625,6 +1626,9 @@ func (s *Store) mergePosts(incoming []Post) (int, error) {
 			post.FeedIDs = mergeUniqueStrings(stored.FeedIDs, post.FeedIDs)
 			post.Tags = mergeUniqueStrings(stored.Tags, post.Tags)
 			post.FavoriteExplicit = stored.FavoriteExplicit
+			if stored.Edited {
+				post.Caption, post.Media, post.Edited = stored.Caption, stored.Media, true
+			}
 			if hasWeiboLikesFeed(post.FeedIDs) && !stored.FavoriteExplicit {
 				post.Liked = false
 			} else {
@@ -2516,6 +2520,10 @@ func mediaPreviewHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Store) postsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPut {
+		s.editPostHandler(w, r)
+		return
+	}
 	if r.Method == http.MethodPatch {
 		id := strings.TrimSpace(r.URL.Query().Get("id"))
 		var input struct {

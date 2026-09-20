@@ -10,6 +10,7 @@
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {
+    "@lucide/vue": "^1.47.0",
     "@vitejs/plugin-vue": "latest",
     "qrcode": "^1.5.4",
     "vite": "latest",

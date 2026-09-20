@@ -82,6 +82,7 @@ a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color
 .mobile-lightbox-media-frame :is(.mobile-lightbox-preview, .mobile-lightbox-original) { position: absolute; inset: 0; z-index: 0; display: block; width: 100%!important; height: 100%!important; max-width: 100%; max-height: 100%; margin: 0; object-fit: contain; object-position: center; backface-visibility: hidden; transform: translateZ(0); }
 .mobile-lightbox-media-frame .mobile-lightbox-original { z-index: 1!important; opacity: 0; pointer-events: none; }
 .mobile-lightbox-original.original-loaded { opacity: 1; }
+.phone-ui .masonry-card { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .ios-native-image-menu .mobile-lightbox-media-frame img { -webkit-touch-callout: default; }
 .ios-native-image-menu .mobile-lightbox-original { pointer-events: auto; }
 .mobile-lightbox-slide:not(.current) img { opacity: .92; transform: scale(.985); }
@@ -1676,8 +1677,8 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
   .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control > .mobile-platform-mask { color: #eef3ff; }
   .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control.active { color: #f5e4a4; }
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle) { transition: opacity .3s ease, transform .34s cubic-bezier(.16,.88,.22,1), color .22s ease, background .22s ease, box-shadow .28s ease; }
-  .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-control-hidden { opacity: 0; pointer-events: none; transform: translateY(-12px) scale(.86); }
-  .phone-ui .scroll-top-button.mobile-control-hidden { transform: translateY(16px) scale(.86); }
+  .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-control-hidden { opacity: 0; pointer-events: none; transform: translateY(-10px) scale(.94); }
+  .phone-ui .scroll-top-button.mobile-control-hidden { transform: translateY(14px) scale(.94); }
   .phone-ui .mobile-source-shortcuts .sidebar-source-icon {
     filter: grayscale(1) brightness(0) invert(.38) opacity(.96) drop-shadow(0 1px 2px rgba(255, 255, 255, .44))!important;
   }
@@ -2400,8 +2401,10 @@ html.gallery-presenting .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-togg
 /* Frost only the real status-bar inset, ending before the floating controls. */
 @supports (-webkit-touch-callout: none) {
   @media (max-width: 760px) {
-    .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle) { top: calc(env(safe-area-inset-top, 0px) + 12px); }
-    .phone-ui :is(.mobile-source-shortcuts, .sidebar.mobile-open) { top: calc(env(safe-area-inset-top, 0px) + 66px); }
+    .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle) { top: calc(env(safe-area-inset-top, 0px) + 20px); width: 50px; height: 50px; }
+    .phone-ui .scroll-top-button { width: 50px; height: 50px; }
+    .phone-ui .scroll-top-button.random-refresh-button { bottom: calc(max(14px, env(safe-area-inset-bottom)) + 60px); }
+    .phone-ui :is(.mobile-source-shortcuts, .sidebar.mobile-open) { top: calc(env(safe-area-inset-top, 0px) + 80px); }
   }
   html, body { overscroll-behavior-y: none; }
   body, #app { min-height: 100dvh; }

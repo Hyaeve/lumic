@@ -48,7 +48,7 @@ let entryHoldUntil = 0
 let lastPointer = null
 let pointerInHeader = false
 let mounted = false
-const excludedTarget = target => Boolean(target?.closest('button, a, input, textarea, video, .media-frame, .modal, .lightbox-layer'))
+const excludedTarget = target => Boolean(target?.closest('button, a, input, textarea, video, .media-frame, .masonry-card, .post-card, .modal, .lightbox-layer'))
 const presentationStyle = computed(() => {
   const initial = presentationStartHeight.value
   return {
