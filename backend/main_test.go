@@ -2366,8 +2366,8 @@ func TestLoginKeepLoggedInControlsCookiePersistence(t *testing.T) {
 		if !cookie.HttpOnly || cookie.SameSite != http.SameSiteLaxMode || !sessions.valid(cookie.Value) {
 			t.Fatalf("invalid session cookie: %#v", cookie)
 		}
-		if keep && (cookie.MaxAge != 86400 || cookie.Expires.IsZero()) {
-			t.Fatal("persistent login must retain the existing 24-hour expiry")
+		if keep && (cookie.MaxAge != int(rememberedSessionLifetime.Seconds()) || cookie.Expires.IsZero()) {
+			t.Fatal("explicit persistent login must use the remembered expiry")
 		}
 		if !keep && (cookie.MaxAge != 0 || !cookie.Expires.IsZero()) {
 			t.Fatal("unchecked login must use a browser-session cookie")

@@ -1,5 +1,7 @@
 <script setup>
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
+import { capturePageSnapshot } from './pageSnapshot'
+import PageSnapshot from './components/PageSnapshot.vue'
 import QRCode from 'qrcode'
 import { createPostPager, postQueryKey } from './postPager'
 import { resistVerticalSwipe, shouldCommitVerticalSwipe, verticalSettleDuration, verticalSwipeEasing, verticalReboundEasing } from './verticalSwipe'
@@ -1005,8 +1007,8 @@ async function login() {
 async function logout() {
   clearPhoneOverlayHistoryForNavigation()
   try {
-    await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' })
-  } finally {
+    const response = await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' })
+    if (!response.ok) throw new Error('logout failed')
     passwordVisible.value = false
     credentials.value.password = ''
     showBrandMenu.value = false
@@ -1016,12 +1018,15 @@ async function logout() {
     posts.value = []
     postPager.clear()
     queryMasonryAssignments.clear()
+    mobilePageSnapshots.value = new Map()
     detailOriginQuery.value = null
     postStats.value = null
     feeds.value = []
     selectedPlatform.value = null
     credentialPlatform.value = null
     stopSelection()
+  } catch {
+    window.alert('退出登录失败，请检查连接后重试')
   }
 }
 function loadRememberedLogin() {
@@ -2827,8 +2832,25 @@ function toggleTimelineView(event) {
   timelineView.value = timelineView.value === 'list' ? 'masonry' : 'list'
   if (event?.detail > 0) event.currentTarget?.blur()
 }
+const mobilePageSnapshots = shallowRef(new Map())
+const mobileReturnSnapshot = computed(() => mobilePageSnapshots.value.get(
+  mobileAuthorReturnsToTimeline.value ? mobileAuthorDetailState.value?.returnPath : mobilePostReturnPath.value
+))
+function captureMobileReturnPage() {
+  const page = document.querySelector('main.content:not(.mobile-post-detail-page)')
+  if (!page) return
+  const snapshots = new Map(mobilePageSnapshots.value)
+  const path = `${window.location.pathname}${window.location.search}`
+  snapshots.delete(path)
+  snapshots.set(path, capturePageSnapshot(page))
+  while (snapshots.size > 8) snapshots.delete(snapshots.keys().next().value)
+  mobilePageSnapshots.value = snapshots
+  mobilePostReturnPath.value = path
+  mobilePostReturnScrollY.value = window.scrollY
+}
 function openMasonryPost(post, event, options = {}) {
   if (selectionMode.value) return
+  if (phonePortrait.value) captureMobileReturnPage()
   detailOriginQuery.value = { ...feedQuery.value }
   desktopDetailIndex.value = 0
   desktopDetailWheelAt = 0
@@ -3675,6 +3697,7 @@ function updateMobileAuthorPageSwipe(event) {
   const dy = touch.clientY - mobileAuthorPageTouch.y
   if (!mobileAuthorPageTouch.axis && Math.max(Math.abs(dx), Math.abs(dy)) > 9) {
     mobileAuthorPageTouch.axis = Math.abs(dx) > Math.abs(dy) * 1.12 ? 'horizontal' : 'vertical'
+    if (mobileAuthorPageTouch.axis === 'horizontal' && mobileAuthorPageTouch.fromTimeline && dx < 0 && mobileForwardPageState.value?.kind === 'detail') captureMobileReturnPage()
   }
   if (mobileAuthorPageTouch.axis !== 'horizontal') return
   // Timeline -> author is a left swipe. Author -> its source detail page can
@@ -4225,7 +4248,8 @@ function handlePopState() {
     // Prepare the complete destination page before the detail route is
     // reconciled, so the back gesture uses the same continuous handoff as a
     // detail -> timeline return instead of exposing a blank/old page.
-    startMobileAuthorPreviewHandoff(departingDetailPost)
+    if (mobilePageSnapshots.value.has(currentPath)) startMobileTimelineReturnHandoff(departingDetailPost)
+    else startMobileAuthorPreviewHandoff(departingDetailPost)
   }
   applyRoute()
   mobileDetailGestureReturnPending = false
@@ -4315,7 +4339,7 @@ function platformEmptyMessage(platformKey) {
 }
 async function checkSession(refreshData = true) {
   try {
-    const response = await fetch('/api/session', { credentials: 'same-origin' })
+    const response = await fetch('/api/session', { credentials: 'same-origin', cache: 'no-store' })
     if (!response.ok) throw new Error('session unavailable')
     const session = await response.json()
     if (!session.authenticated) {
@@ -4676,7 +4700,9 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
       </section>
       </div>
     </aside>
-    <aside v-if="phonePortrait && mobileReturnPreviewDisplayPost && (masonryDetailPost || mobileTimelineReturnHandoff || (mobileAuthorReturnsToTimeline && (mobileAuthorPageDragging || mobileAuthorPageAnimating)))" class="mobile-return-swipe-preview" :style="mobileReturnPreviewStyle" aria-hidden="true">
+    <aside v-if="phonePortrait && mobileReturnPreviewDisplayPost && (masonryDetailPost || mobileTimelineReturnHandoff || (mobileAuthorReturnsToTimeline && (mobileAuthorPageDragging || mobileAuthorPageAnimating)))" class="mobile-return-swipe-preview" :style="[mobileReturnPreviewStyle, mobileReturnSnapshot ? { padding: 0 } : {}]" aria-hidden="true">
+      <PageSnapshot v-if="mobileReturnSnapshot" :snapshot="mobileReturnSnapshot" />
+      <template v-else>
       <header><div><small>SAVED MOMENTS</small><strong>{{ mobileReturnPreviewTitle }}</strong></div><span :class="['source-pill', sourceMeta[mobileReturnPreviewDisplayPost.source].color]"><img class="source-icon" :src="sourceIconFor(mobileReturnPreviewDisplayPost.source)" alt="">{{ sourceMeta[mobileReturnPreviewDisplayPost.source].label }}</span></header>
       <div class="mobile-return-preview-scroll-content" :style="mobileReturnPreviewContentStyle">
       <div class="mobile-author-preview-toolbar"><span>全部</span><i></i><i></i><label><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><b>搜索</b></label></div>
@@ -4700,6 +4726,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
         </article>
       </section>
       </div>
+      </template>
     </aside>
     <aside v-if="phonePortrait && masonryDetailPost && mobileDetailPreviousPost" class="mobile-detail-vertical-preview previous" :style="mobilePreviousDetailPreviewStyle" aria-hidden="true">
       <header class="mobile-post-detail-head">

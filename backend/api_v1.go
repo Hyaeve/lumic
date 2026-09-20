@@ -211,7 +211,10 @@ func apiV1LogoutHandler(sessions *SessionStore) http.HandlerFunc {
 			return
 		}
 		if token := requestSessionToken(r); token != "" {
-			sessions.revoke(token)
+			if err := sessions.revoke(token); err != nil {
+				http.Error(w, "unable to revoke session", http.StatusInternalServerError)
+				return
+			}
 		}
 		clearSessionCookie(w)
 		writeJSON(w, map[string]string{"status": "logged_out"})
@@ -255,6 +258,10 @@ func isPublicAPIPath(path string) bool {
 func (s *SessionStore) expiration(token string) (time.Time, bool) {
 	s.RLock()
 	expiresAt, ok := s.tokens[token]
+	if !ok {
+		record, exists := s.remembered[sessionDigest(token)]
+		expiresAt, ok = record.Expires, exists && record.Credentials == s.credentialsDigest()
+	}
 	s.RUnlock()
 	return expiresAt, ok
 }

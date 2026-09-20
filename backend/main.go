@@ -714,7 +714,10 @@ type AuthBackup struct {
 
 type SessionStore struct {
 	sync.RWMutex
-	tokens map[string]time.Time
+	tokens      map[string]time.Time
+	remembered  map[string]rememberedSession
+	sessionFile string
+	auth        *AuthConfig
 }
 
 type AuthConfig struct {
@@ -1217,7 +1220,8 @@ func (s *SessionStore) valid(token string) bool {
 	defer s.Unlock()
 	expires, exists := s.tokens[token]
 	if !exists {
-		return false
+		record, ok := s.remembered[sessionDigest(token)]
+		return ok && record.Expires.After(time.Now()) && record.Credentials == s.credentialsDigest()
 	}
 	if time.Now().After(expires) {
 		delete(s.tokens, token)
@@ -1226,10 +1230,19 @@ func (s *SessionStore) valid(token string) bool {
 	return true
 }
 
-func (s *SessionStore) revoke(token string) {
+func (s *SessionStore) revoke(token string) error {
 	s.Lock()
+	defer s.Unlock()
+	key := sessionDigest(token)
+	if record, ok := s.remembered[key]; ok {
+		delete(s.remembered, key)
+		if err := s.saveRemembered(); err != nil {
+			s.remembered[key] = record
+			return err
+		}
+	}
 	delete(s.tokens, token)
-	s.Unlock()
+	return nil
 }
 
 func clearSessionCookie(w http.ResponseWriter) {
@@ -1253,6 +1266,7 @@ func passwordMatches(password, encoded string) bool {
 
 func loginHandler(sessions *SessionStore, auth *AuthConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -1269,7 +1283,15 @@ func loginHandler(sessions *SessionStore, auth *AuthConfig) http.HandlerFunc {
 			http.Error(w, "invalid credentials", http.StatusUnauthorized)
 			return
 		}
-		token, err := sessions.create()
+		var token string
+		var err error
+		lifetime := sessionLifetime
+		if input.KeepLoggedIn != nil && *input.KeepLoggedIn {
+			lifetime = rememberedSessionLifetime
+			token, err = sessions.createRemembered()
+		} else {
+			token, err = sessions.create()
+		}
 		if err != nil {
 			http.Error(w, "unable to create session", http.StatusInternalServerError)
 			return
@@ -1277,8 +1299,8 @@ func loginHandler(sessions *SessionStore, auth *AuthConfig) http.HandlerFunc {
 		cookie := &http.Cookie{Name: "lumic_session", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: os.Getenv("LUMIC_COOKIE_SECURE") == "true"}
 		// Omitted by older clients, which retain the existing persistent session.
 		if input.KeepLoggedIn == nil || *input.KeepLoggedIn {
-			cookie.MaxAge = int(sessionLifetime.Seconds())
-			cookie.Expires = time.Now().Add(sessionLifetime)
+			cookie.MaxAge = int(lifetime.Seconds())
+			cookie.Expires = time.Now().Add(lifetime)
 		}
 		http.SetCookie(w, cookie)
 		writeJSON(w, map[string]string{"status": "ok"})
@@ -1287,6 +1309,7 @@ func loginHandler(sessions *SessionStore, auth *AuthConfig) http.HandlerFunc {
 
 func sessionHandler(sessions *SessionStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -1303,12 +1326,16 @@ func sessionHandler(sessions *SessionStore) http.HandlerFunc {
 
 func logoutHandler(sessions *SessionStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 		if token := requestSessionToken(r); token != "" {
-			sessions.revoke(token)
+			if err := sessions.revoke(token); err != nil {
+				http.Error(w, "unable to revoke session", http.StatusInternalServerError)
+				return
+			}
 		}
 		clearSessionCookie(w)
 		writeJSON(w, map[string]string{"status": "logged_out"})
@@ -7900,7 +7927,10 @@ func main() {
 		log.Fatal("unable to persist source storage paths: ", err)
 	}
 	bilibili.startScheduler()
-	sessions := &SessionStore{tokens: make(map[string]time.Time)}
+	sessions, err := loadSessionStore(filepath.Join(filepath.Dir(authFile), "sessions.json"), auth)
+	if err != nil {
+		log.Fatalf("load sessions: %v", err)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/login", loginHandler(sessions, auth))
 	mux.HandleFunc("/api/session", sessionHandler(sessions))
