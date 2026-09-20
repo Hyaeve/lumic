@@ -1012,6 +1012,7 @@ async function login() {
   finally { loginBusy.value = false }
 }
 async function logout() {
+  renderedPreviews.clear()
   clearPhoneOverlayHistoryForNavigation()
   try {
     const response = await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' })
@@ -1785,6 +1786,7 @@ function resetLightboxView() {
   scheduleLightboxScaleUpdate()
 }
 function openLightbox(post, index) {
+  retainRenderedPreviews(post)
   if (phonePortrait.value && !lightboxHistoryActive) {
     window.history.pushState({ ...(window.history.state || {}), lumicLightbox: true }, '', window.location.href)
     lightboxHistoryActive = true
@@ -1958,7 +1960,7 @@ function moveLightbox(step) {
 }
 function prepareLightboxSource() {
   const source = lightbox.value.media[lightbox.value.index] || ''
-  const preview = previewMedia(source)
+  const preview = retainedPreview(source)
   ++lightboxLoadSequence
   lightboxDisplaySource.value = preview
   lightboxOriginalLoaded.value = false
@@ -2670,18 +2672,29 @@ function dismissPhoneOverlay(kind = phoneOverlayKey.value) {
 function togglePostSelection(post) {
   selectedPostIds.value = selectedPostIds.value.includes(post.id) ? selectedPostIds.value.filter(id => id !== post.id) : [...selectedPostIds.value, post.id]
 }
+let selectionAnchor = null
+function selectPostRange(post) {
+  const items = filteredPosts.value
+  const start = items.findIndex(item => item.id === selectionAnchor)
+  const end = items.findIndex(item => item.id === post.id)
+  const range = start < 0 || end < 0 ? [post] : items.slice(Math.min(start, end), Math.max(start, end) + 1)
+  selectedPostIds.value = [...new Set([...selectedPostIds.value, ...range.map(item => item.id)])]
+  if (!selectionAnchor) selectionAnchor = post.id
+}
 function handlePostSelectionClick(event, post) {
   if (performance.now() < masonryLongPressSuppressUntil) {
     event.preventDefault()
     event.stopPropagation()
     return
   }
-  if (!selectionMode.value) return
+  if (!selectionMode.value && !event.shiftKey) return
   event.preventDefault()
   event.stopPropagation()
-  togglePostSelection(post)
+  selectionMode.value = true
+  if (event.shiftKey) selectPostRange(post)
+  else { togglePostSelection(post); selectionAnchor = post.id }
 }
-function stopSelection() { selectionMode.value = false; selectionAction.value = 'delete'; selectedPostIds.value = [] }
+function stopSelection() { selectionMode.value = false; selectionAction.value = 'delete'; selectedPostIds.value = []; selectionAnchor = null; clearMasonryPress() }
 function dismissSelectionOutside(event) {
   if (!selectionMode.value || performance.now() < masonryLongPressSuppressUntil) return
   if (!event.target.closest('.post-card, .masonry-card, .selection-dock, .confirm-dialog-layer, .timeline-context-menu')) stopSelection()
@@ -2703,29 +2716,42 @@ function enterMasonrySelection(post) {
   selectionMode.value = true
   selectionAction.value = 'delete'
   if (!selectedPostIds.value.includes(post.id)) selectedPostIds.value.push(post.id)
+  selectionAnchor = post.id
   masonryLongPressSuppressUntil = performance.now() + 650
 }
 function beginMasonryPress(event, post) {
   clearMasonryPress()
   if (!phonePortrait.value || event.touches?.length !== 1 || event.target.closest('button, input, a')) return
   const touch = event.touches[0]
-  masonryPress = { x: touch.clientX, y: touch.clientY }
+  masonryPress = { x: touch.clientX, y: touch.clientY, active: false }
   masonryLongPressTimer = window.setTimeout(() => {
     enterMasonrySelection(post)
+    if (masonryPress) masonryPress.active = true
     masonryLongPressTimer = 0
   }, 550)
 }
 function moveMasonryPress(event) {
   const touch = event.touches?.[0]
+  if (touch && event.touches.length === 1 && masonryPress?.active) {
+    if (event.cancelable) event.preventDefault()
+    masonryLongPressSuppressUntil = performance.now() + 650
+    const id = document.elementFromPoint(touch.clientX, touch.clientY)?.closest('[data-post-id]')?.dataset.postId
+    const post = filteredPosts.value.find(item => item.id === id)
+    if (post) selectPostRange(post)
+    return
+  }
   if (!touch || event.touches.length !== 1 || !masonryPress || Math.hypot(touch.clientX - masonryPress.x, touch.clientY - masonryPress.y) > 9) clearMasonryPress()
 }
 function clearMasonryPress() {
+  if (masonryPress?.active) masonryLongPressSuppressUntil = performance.now() + 650
   window.clearTimeout(masonryLongPressTimer)
   masonryLongPressTimer = 0
   masonryPress = null
 }
 onUnmounted(clearMasonryPress)
 function applyEditedPost(updated) {
+  const previous = posts.value.find(post => post.id === updated.id) || masonryDetailPost.value
+  for (const source of [...(previous?.media || []), ...(updated.media || [])]) renderedPreviews.delete(source)
   for (const post of posts.value) if (post.id === updated.id) Object.assign(post, updated)
   if (masonryDetailPost.value?.id === updated.id) {
     Object.assign(masonryDetailPost.value, updated)
@@ -2740,6 +2766,7 @@ function startMultiSelectMode() {
   closeContextMenu()
   selectionAction.value = unfavoriteMode ? 'unfavorite' : 'delete'
   selectedPostIds.value = []
+  selectionAnchor = null
   selectionMode.value = true
 }
 function toggleSelectAllLoadedPosts() {
@@ -2972,6 +2999,7 @@ function captureMobileReturnPage() {
 }
 function openMasonryPost(post, event, options = {}) {
   if (selectionMode.value) return
+  retainRenderedPreviews(post)
   if (phonePortrait.value) captureMobileReturnPage()
   detailOriginQuery.value = { ...feedQuery.value }
   desktopDetailIndex.value = 0
@@ -3879,6 +3907,28 @@ function masonryItemStyle(item) {
     width: `${masonryColumnWidth.value}px`
   }
 }
+// Keep a bounded copy of already rendered thumbnails across overlay remounts.
+// This also works when the server tells the browser to revalidate image URLs.
+const renderedPreviews = new Map()
+function retainRenderedPreviews(post) {
+  const images = [...document.querySelectorAll('.masonry-card img, .post-card .media-frame img, .mobile-detail-preview-image, .desktop-detail-image img')]
+  for (const source of (post.media || [])) {
+    const url = new URL(previewMedia(source), window.location.href).href
+    const image = images.find(item => item.complete && item.naturalWidth && (item.currentSrc || item.src) === url)
+    if (!image) continue
+    try {
+      const canvas = document.createElement('canvas')
+      const scale = Math.min(1, 960 / Math.max(image.naturalWidth, image.naturalHeight))
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale))
+      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale))
+      canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height)
+      renderedPreviews.delete(source)
+      renderedPreviews.set(source, canvas.toDataURL('image/webp', .85))
+      while (renderedPreviews.size > 24) renderedPreviews.delete(renderedPreviews.keys().next().value)
+    } catch { /* Cross-origin media falls back to the ordinary preview URL. */ }
+  }
+}
+function retainedPreview(source) { return renderedPreviews.get(source) || previewMedia(source) }
 function previewMedia(media) {
   const value = String(media || '')
   if (!value.startsWith('/flow/')) return value
@@ -4688,7 +4738,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
       <section ref="feedListElement" :class="['feed-list', { 'masonry-feed': isMasonryView }]" :style="masonryFeedStyle">
 <template v-if="!isMasonryView">
 <div v-if="timelineTopSpace" class="timeline-spacer" :style="{ height: `${timelineTopSpace}px` }" aria-hidden="true"></div>
-<article v-for="post in visiblePosts" :key="post.id" :ref="element => setPostCard(post, element, 'list')" :class="['post-card', { selected: selectedPostIds.includes(post.id), selectable: selectionMode }]" :data-post-id="post.id" @click.capture="handlePostSelectionClick($event, post)" @contextmenu.stop.prevent="openContextMenu($event, post)">
+<article v-for="post in visiblePosts" :key="post.id" :ref="element => setPostCard(post, element, 'list')" :class="['post-card', { selected: selectedPostIds.includes(post.id), selectable: selectionMode }]" :data-post-id="post.id" @touchstart.passive="beginMasonryPress($event, post)" @touchmove="moveMasonryPress" @touchend="clearMasonryPress" @touchcancel="clearMasonryPress" @click.capture="handlePostSelectionClick($event, post)" @contextmenu.stop.prevent="openContextMenu($event, post)">
 <label v-if="selectionMode" class="post-select-control" :title="`选择 ${post.author} 的这条动态`" @click.prevent><input type="checkbox" :checked="selectedPostIds.includes(post.id)" tabindex="-1"><span></span></label>
 <div class="post-head" :style="authorAccent(post.source)">
 <button class="post-author-avatar" type="button" :aria-label="`查看 ${post.author} 的动态`" @click="openAuthor(post)"><img :key="`${post.id}:${postAvatar(post)}`" :src="postAvatar(post)" data-fallback-index="0" :alt="post.author" referrerpolicy="no-referrer" @load="handlePostAvatarLoad($event, post)" @error="handlePostAvatarError($event, post)"></button>
@@ -4716,7 +4766,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
 <div v-if="timelineBottomSpace" class="timeline-spacer" :style="{ height: `${timelineBottomSpace}px` }" aria-hidden="true"></div>
 </template>
 <template v-else>
-<article v-for="item in visibleMasonryItems" :key="item.post.id" :ref="element => setPostCard(item.post, element, 'masonry')" :class="['masonry-card', { selected: selectedPostIds.includes(item.post.id), selectable: selectionMode, 'text-only': !masonryCover(item.post) && !item.post.videos?.length }]" :style="masonryItemStyle(item)" :data-post-id="item.post.id" tabindex="0" @touchstart.passive="beginMasonryPress($event, item.post)" @touchmove.passive="moveMasonryPress" @touchend="clearMasonryPress" @touchcancel="clearMasonryPress" @click.capture="handlePostSelectionClick($event, item.post)" @click="openMasonryPost(item.post, $event)" @keydown.enter.prevent="openMasonryPost(item.post, $event)" @contextmenu.stop.prevent="openContextMenu($event, item.post)">
+<article v-for="item in visibleMasonryItems" :key="item.post.id" :ref="element => setPostCard(item.post, element, 'masonry')" :class="['masonry-card', { selected: selectedPostIds.includes(item.post.id), selectable: selectionMode, 'text-only': !masonryCover(item.post) && !item.post.videos?.length }]" :style="masonryItemStyle(item)" :data-post-id="item.post.id" tabindex="0" @touchstart.passive="beginMasonryPress($event, item.post)" @touchmove="moveMasonryPress" @touchend="clearMasonryPress" @touchcancel="clearMasonryPress" @click.capture="handlePostSelectionClick($event, item.post)" @click="openMasonryPost(item.post, $event)" @keydown.enter.prevent="openMasonryPost(item.post, $event)" @contextmenu.stop.prevent="openContextMenu($event, item.post)">
   <label v-if="selectionMode" class="post-select-control masonry-select-control" :title="`选择 ${item.post.author} 的这条动态`" @click.prevent><input type="checkbox" :checked="selectedPostIds.includes(item.post.id)" tabindex="-1"><span></span></label>
   <div v-if="masonryCover(item.post)" class="masonry-cover">
     <img :src="previewMedia(masonryCover(item.post))" alt="" loading="lazy" decoding="async" fetchpriority="low" @load="setMasonryCoverRatio(item.post, $event, masonryCoverIsVideo(item.post))">
@@ -4885,7 +4935,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
       <section v-if="mobileDetailCurrentMedia" :class="['mobile-post-media-stage', { 'video-media': mobileDetailCurrentMedia.type === 'video' }, mobileDetailCurrentMedia.type === 'video' ? postVideoFrameClass(masonryDetailPost) : '']" :style="mobileDetailCurrentMedia.type === 'video' ? postVideoFrameStyle(masonryDetailPost) : { height: `clamp(240px, ${100 / (mediaRatios[`${masonryDetailPost.id}:0`] || 1)}vw, 72dvh)` }" @touchstart="beginMobileDetailTouch" @touchmove="updateMobileDetailTouch" @touchend="finishMobileDetailTouch" @touchcancel="finishMobileDetailTouch" @pointerdown="beginMobileDetailSwipe" @pointermove="updateMobileDetailSwipe" @pointerup="finishMobileDetailSwipe" @pointercancel="cancelMobileDetailSwipe">
         <div class="mobile-post-media-track" :style="mobileDetailTrackStyle">
           <div v-for="slide in mobileDetailSlides" :key="mobileDetailMedia.length === 2 ? `${slide.media.key}:${mobileDetailCarouselPosition + slide.position}` : slide.media.key" :class="['mobile-post-media-slide', { current: slide.position === 0 }]">
-            <DetailImage v-if="slide.media.type === 'image'" :source="mobileDetailOriginalSource(slide.media)" :preview="previewMedia(slide.media.src)" :alt="`${masonryDetailPost.author} 的第 ${slide.index + 1} 张图片`" @open="slide.position === 0 && openMobileDetailImage()" />
+            <DetailImage v-if="slide.media.type === 'image'" :source="mobileDetailOriginalSource(slide.media)" :preview="retainedPreview(slide.media.src)" :alt="`${masonryDetailPost.author} 的第 ${slide.index + 1} 张图片`" @open="slide.position === 0 && openMobileDetailImage()" />
             <video v-else :src="slide.media.src" :poster="slide.media.poster ? previewMedia(slide.media.poster) : undefined" :controls="slide.position === 0" playsinline :autoplay="slide.position === 0" muted :preload="slide.position === 0 ? 'metadata' : 'none'" @loadedmetadata="slide.position === 0 && setPostVideoRatio(masonryDetailPost, $event)"></video>
           </div>
         </div>
@@ -4956,7 +5006,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
             <div v-for="slide in mobileLightboxSlides" :key="`${slide.position}:${slide.media}`" :class="['mobile-lightbox-slide', { current: slide.position === 0 }]">
               <template v-if="slide.position === 0">
                 <div :class="['mobile-lightbox-media-frame', { dragging: lightbox.dragging, 'zoom-animating': lightboxZoomAnimating, 'original-size': !lightbox.fit }]" :style="{ transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) rotate(${lightbox.rotation}deg) scale(${lightbox.scale})` }">
-                  <img class="mobile-lightbox-preview" :src="previewMedia(slide.media)" :alt="`${lightbox.author} 的动态图片 ${slide.index + 1}`" decoding="async" draggable="false">
+                  <img class="mobile-lightbox-preview" :src="retainedPreview(slide.media)" :alt="`${lightbox.author} 的动态图片 ${slide.index + 1}`" decoding="async" draggable="false">
                   <img ref="lightboxImageElement" class="mobile-lightbox-original" :src="slide.media" :alt="`${lightbox.author} 的动态图片 ${slide.index + 1}`" :class="{ 'original-loaded': lightboxOriginalLoaded }" decoding="async" fetchpriority="high" draggable="false" @load="handleLightboxImageLoad" @error="lightboxOriginalFailed = true">
                 </div>
                 <ImageLoadRing v-if="!lightboxOriginalLoaded" :failed="lightboxOriginalFailed" @retry="retryLightboxOriginal" />

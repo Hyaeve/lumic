@@ -122,11 +122,10 @@ onUnmounted(() => { cleanup(); if (menu.value || editing.value) emit('overlay', 
             <div class="post-edit-images">
               <div v-for="(image, index) in images" :key="image.url" class="post-edit-image"><button type="button" :disabled="busy" aria-label="替换图片" @click="pick(index)"><img :src="image.url" alt=""></button><div><button type="button" :disabled="busy || index === 0" aria-label="前移图片" @click="move(index,-1)"><ArrowLeft :size="20" /></button><button type="button" :disabled="busy" aria-label="移除图片" @click="remove(index)"><X :size="20" /></button><button type="button" :disabled="busy || index === images.length-1" aria-label="后移图片" @click="move(index,1)"><ArrowRight :size="20" /></button></div></div>
             </div>
-            <button type="button" class="post-add-images" :disabled="busy" @click="pick()"><Plus :size="20" /> 添加图片</button>
             <input ref="upload" type="file" accept="image/jpeg,image/png,image/gif,image/webp" multiple hidden @change="addFiles">
             <p v-if="error" role="alert">{{ error }}</p>
           </div>
-          <footer class="post-editor-footer"><span class="post-edit-actions"><button type="button" :disabled="busy" @click="cancel">取消</button><button type="button" :disabled="busy" @click="save">{{ busy ? '保存中' : '保存' }}</button></span></footer>
+          <footer class="post-editor-footer"><button type="button" class="post-add-images" :disabled="busy" @click="pick()"><Plus :size="20" /> 添加图片</button><span class="post-edit-actions"><button type="button" :disabled="busy" @click="cancel">取消</button><button type="button" :disabled="busy" @click="save">{{ busy ? '保存中' : '保存' }}</button></span></footer>
         </section>
       </div>
     </Teleport>
@@ -140,18 +139,18 @@ onUnmounted(() => { cleanup(); if (menu.value || editing.value) emit('overlay', 
 .post-actions .post-platform-action img { width: 100%; height: 100%; object-fit: contain; border-radius: 0; }
 .post-actions-scrim, .post-editor-backdrop { --editor-ink: #303641; --editor-surface: #fff; position: fixed; inset: 0; z-index: 115; background: #0004; display: grid; place-items: center; padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom)); color: var(--editor-ink); }
 html[data-theme="dark"] :is(.post-actions-scrim, .post-editor-backdrop) { --editor-ink: #e4e8f2; --editor-surface: #1b1e26; }
-.post-editor-backdrop { backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+.post-editor-backdrop { backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
 .post-action-menu, .post-editor { background: var(--editor-surface); box-shadow: 0 18px 70px #0004; border-radius: 16px; }
-.post-action-menu { position: absolute; padding: 4px; width: 112px; background: #ffffffa6; backdrop-filter: blur(18px) saturate(130%); -webkit-backdrop-filter: blur(18px) saturate(130%); border: 1px solid #ffffff30; border-radius: 12px; }
-html[data-theme="dark"] .post-action-menu { background: #20242ca6; }
+.post-action-menu { position: absolute; padding: 4px; width: 112px; background: #ffffffc4; backdrop-filter: blur(32px) saturate(115%); -webkit-backdrop-filter: blur(32px) saturate(115%); border: 1px solid #ffffff30; border-radius: 12px; }
+html[data-theme="dark"] .post-action-menu { background: #20242cc4; }
 .post-action-menu button { display: flex; gap: 9px; align-items: center; width: 100%; min-height: 44px; background: transparent; color: inherit; border-radius: 8px; padding: 8px 12px; font-size: 14px; }
 .post-action-menu button:hover, .post-edit-actions button:hover { background: #8a8dd322; }
 .post-delete-symbol { width: 21px; height: 21px; background: currentColor; mask: var(--delete-icon) center / contain no-repeat; }
 .edit-symbol { width: 21px; font-size: 23px; }
-.post-editor { width: min(680px,100%); max-height: calc(100dvh - max(16px, env(safe-area-inset-top)) - max(16px, env(safe-area-inset-bottom))); display: flex; flex-direction: column; overflow: hidden; background: #ffffffe0; backdrop-filter: blur(24px) saturate(125%); -webkit-backdrop-filter: blur(24px) saturate(125%); border: 1px solid #ffffff40; }
-html[data-theme="dark"] .post-editor { background: #1b1e26d6; border-color: #ffffff1c; }
+.post-editor { width: min(680px,100%); max-height: calc(100dvh - max(16px, env(safe-area-inset-top)) - max(16px, env(safe-area-inset-bottom))); display: flex; flex-direction: column; overflow: hidden; background: #ffffffe8; backdrop-filter: blur(40px) saturate(115%); -webkit-backdrop-filter: blur(40px) saturate(115%); border: 1px solid #ffffff40; }
+html[data-theme="dark"] .post-editor { background: #1b1e26e3; border-color: #ffffff1c; }
 .post-editor header { display: flex; flex: none; justify-content: space-between; align-items: center; padding: 14px 18px; border-bottom: 1px solid #8883; }
-.post-editor-footer { display: flex; flex: none; justify-content: flex-end; padding: 10px 18px; border-top: 1px solid #8883; }
+.post-editor-footer { display: flex; flex: none; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 18px; border-top: 1px solid #8883; }
 .post-edit-actions { display: inline-flex; gap: 8px; }
 .post-edit-actions button { min-height: 44px; padding: 8px 12px; background: transparent; color: inherit; border-radius: 10px; }
 .post-edit-actions button:last-child { color: #787ae0; }
