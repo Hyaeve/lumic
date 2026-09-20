@@ -234,6 +234,8 @@ const mobileLightboxEntering = ref(false)
 const mobileLightboxDotsVisible = ref(false)
 const lightboxZoomAnimating = ref(false)
 const mobileLightboxMenu = ref({ open: false, x: 0, y: 0 })
+let mobileMenuDismissArmed = false
+const iosImageCallout = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
 const mobileDetailTwoFingerPreparing = ref(false)
 const meteorBurst = ref([])
 const lightboxPointers = new Map()
@@ -2062,6 +2064,7 @@ function scheduleLightboxSingleTapClose() {
 }
 function scheduleLightboxLongPress(event) {
   clearLightboxLongPress()
+  if (iosImageCallout) return
   const imageTarget = event.target instanceof HTMLImageElement ? event.target : null
   const isCurrentImage = Boolean(imageTarget?.closest?.('.mobile-lightbox-slide.current'))
   if (!phonePortrait.value || event.pointerType !== 'touch' || !isCurrentImage) return
@@ -2073,18 +2076,49 @@ function scheduleLightboxLongPress(event) {
     if (!pointer || lightboxPointers.size !== 1 || Math.hypot(pointer.x - x, pointer.y - y) > 10) return
     if (lightboxGesture?.type === 'pan' && lightboxGesture.pointerId === pointerId) lightboxGesture.longPressed = true
     lightbox.value.dragging = false
+    mobileMenuDismissArmed = false
     mobileLightboxMenu.value = { open: true, x: 0, y: 0 }
     navigator.vibrate?.(12)
     lightboxLongPressTimer = 0
   }, 560)
 }
 function saveMobileLightboxImage() {
-  mobileLightboxMenu.value = { open: false, x: 0, y: 0 }
+  dismissMobileLightboxMenu()
   downloadLightboxImage()
 }
 function dismissMobileLightboxMenu() {
   clearLightboxSingleTap()
+  resetImageMenuGesture()
   mobileLightboxMenu.value = { open: false, x: 0, y: 0 }
+}
+function dismissMobileLightboxScrim(event) {
+  if (!mobileMenuDismissArmed && event.detail !== 0) return
+  mobileMenuDismissArmed = false
+  dismissMobileLightboxMenu()
+}
+function resetImageMenuGesture() {
+  clearLightboxLongPress()
+  clearLightboxSingleTap()
+  clearMobileLightboxInertia()
+  const carousel = document.querySelector('.mobile-lightbox-carousel')
+  for (const id of lightboxPointers.keys()) {
+    if (carousel?.hasPointerCapture?.(id)) carousel.releasePointerCapture(id)
+  }
+  lightboxPointers.clear()
+  lightboxGesture = null
+  lightboxGestureHadPinch = false
+  lightboxLastTap = { time: 0, x: 0, y: 0 }
+  lightbox.value.dragging = false
+  mobileLightboxExitDragging.value = false
+  mobileLightboxExitY.value = 0
+  if (mobileLightboxDragX.value) snapMobileLightboxTrack()
+}
+function handleLightboxContextMenu(event) {
+  if (iosImageCallout && event.target instanceof HTMLImageElement) {
+    resetImageMenuGesture()
+    return
+  }
+  event.preventDefault()
 }
 function scheduleLightboxScaleUpdate() {
   if (typeof window === 'undefined') return
@@ -2249,6 +2283,8 @@ function beginLightboxPinch() {
   }
 }
 function startLightboxGesture(event) {
+  if (!iosImageCallout) event.preventDefault()
+  if (iosImageCallout && event.isPrimary && lightboxPointers.size) resetImageMenuGesture()
   if (event.pointerType === 'mouse' && event.button !== 0) return
   if (phonePortrait.value && mobileLightboxAnimating.value) finishMobileLightboxTransition(true)
   if (phonePortrait.value) clearMobileLightboxInertia()
@@ -2257,7 +2293,7 @@ function startLightboxGesture(event) {
   if (lightboxZoomTimer) window.clearTimeout(lightboxZoomTimer)
   lightboxZoomTimer = 0
   lightboxZoomAnimating.value = false
-  event.currentTarget.setPointerCapture(event.pointerId)
+  if (!iosImageCallout) event.currentTarget.setPointerCapture(event.pointerId)
   const startedOnImage = event.target instanceof HTMLImageElement && Boolean(event.target.closest('.mobile-lightbox-slide.current'))
   lightboxPointers.set(event.pointerId, { id: event.pointerId, x: event.clientX, y: event.clientY, time: event.timeStamp, startedOnImage })
   lightbox.value.dragging = phonePortrait.value ? !isMobileLightboxDefaultView() : true
@@ -2269,6 +2305,7 @@ function startLightboxGesture(event) {
   else beginLightboxPinch()
 }
 function moveLightboxGesture(event) {
+  if (!iosImageCallout) event.preventDefault()
   const pointer = lightboxPointers.get(event.pointerId)
   if (!pointer) return
   pointer.x = event.clientX
@@ -2388,6 +2425,11 @@ function toggleLightboxDoubleTap(event) {
   scheduleLightboxScaleUpdate()
 }
 function stopLightboxGesture(event) {
+  if (!iosImageCallout) event.preventDefault()
+  if (iosImageCallout && event.type === 'pointercancel') {
+    resetImageMenuGesture()
+    return
+  }
   const pointer = lightboxPointers.get(event.pointerId)
   const gesture = lightboxGesture
   if (!pointer) return
@@ -2582,7 +2624,7 @@ function clearPhoneOverlayHistoryForNavigation() {
 function dismissPhoneOverlay(kind = phoneOverlayKey.value) {
   phoneOverlayDismissInProgress = true
   if (kind === 'gallery') galleryBackdropControl.value?.close()
-  else if (kind === 'lightbox-menu') mobileLightboxMenu.value = { open: false, x: 0, y: 0 }
+  else if (kind === 'lightbox-menu') dismissMobileLightboxMenu()
   else if (kind === 'confirm') closeConfirmDialog(false)
   else if (kind === 'feed-settings') showFeedSettings.value = false
   else if (kind === 'credential-platform') credentialPlatform.value = null
@@ -4836,8 +4878,8 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
       </div>
       <button v-if="!phonePortrait" :class="['lightbox-edge-nav', 'previous', { 'edge-visible': desktopLightboxHoverTarget === 'previous', disabled: lightbox.media.length < 2 }]" type="button" :aria-disabled="lightbox.media.length < 2" aria-label="上一张" @click.stop="moveLightbox(-1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 5-7 7 7 7"/></svg></button>
       <button v-if="!phonePortrait" :class="['lightbox-edge-nav', 'next', { 'edge-visible': desktopLightboxHoverTarget === 'next', disabled: lightbox.media.length < 2 }]" type="button" :aria-disabled="lightbox.media.length < 2" aria-label="下一张" @click.stop="moveLightbox(1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"/></svg></button>
-      <div :class="['lightbox-image-stage', `motion-${lightbox.motion}`, { 'mobile-original-size': phonePortrait && lightboxAtOriginalSize }]" @click.self="closeLightbox" @contextmenu.prevent>
-        <figure v-if="phonePortrait" class="mobile-lightbox-carousel" @click.stop @pointerdown.prevent="startLightboxGesture" @pointermove.prevent="moveLightboxGesture" @pointerup.prevent="stopLightboxGesture" @pointercancel.prevent="stopLightboxGesture">
+      <div :class="['lightbox-image-stage', `motion-${lightbox.motion}`, { 'mobile-original-size': phonePortrait && lightboxAtOriginalSize }]" @click.self="closeLightbox" @contextmenu="handleLightboxContextMenu">
+        <figure v-if="phonePortrait" class="mobile-lightbox-carousel" :class="{ 'ios-native-image-menu': iosImageCallout }" @click.stop @pointerdown="startLightboxGesture" @pointermove="moveLightboxGesture" @pointerup="stopLightboxGesture" @pointercancel="stopLightboxGesture">
           <div class="mobile-lightbox-track" :style="mobileLightboxTrackStyle">
             <div v-for="slide in mobileLightboxSlides" :key="`${slide.position}:${slide.media}`" :class="['mobile-lightbox-slide', { current: slide.position === 0 }]">
               <template v-if="slide.position === 0">
@@ -4873,9 +4915,10 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
         <button type="button" title="下载原图" aria-label="下载原图" @click="downloadLightboxImage"><span class="lightbox-tool-mask lightbox-download-symbol" :style="{ '--lightbox-tool-mask': `url(${downloadLightboxIcon})` }" aria-hidden="true"></span></button>
       </div>
       </div>
-      <button v-if="phonePortrait && mobileLightboxMenu.open" class="mobile-lightbox-menu-scrim" type="button" aria-label="关闭图片操作菜单" @pointerdown.stop @pointerup.stop @click.stop="dismissMobileLightboxMenu"></button>
+      <button v-if="phonePortrait && mobileLightboxMenu.open" class="mobile-lightbox-menu-scrim" type="button" aria-label="关闭图片操作菜单" @pointerdown.stop="mobileMenuDismissArmed = true" @pointerup.stop @click.stop="dismissMobileLightboxScrim"></button>
       <div v-if="phonePortrait && mobileLightboxMenu.open" class="mobile-lightbox-menu" role="menu" aria-label="图片操作" @pointerdown.stop @click.stop>
-        <button type="button" role="menuitem" @click="saveMobileLightboxImage"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7.5 10.5 12 15l4.5-4.5M5 19v2h14v-2"/></svg><span>保存图片</span></button>
+        <button type="button" role="menuitem" @click="saveMobileLightboxImage"><span class="mobile-save-icon" :style="{ '--save-icon': `url(${downloadLightboxIcon})` }" aria-hidden="true"></span><span>保存图片</span></button>
+        <button type="button" role="menuitem" class="mobile-save-cancel" @click="dismissMobileLightboxMenu">取消</button>
       </div>
     </div>
     <button v-if="isTimelinePage && isAllFeed && showScrollTop && !selectionMode && !lightbox.open" class="scroll-top-button random-refresh-button mobile-frosted-control" :class="{ 'mobile-control-hidden': phonePortrait && !mobileControlsVisible }" type="button" aria-label="刷新随机动态" @click="reshuffleTimeline"><span :style="{ '--scroll-top-mask': `url(${refreshIcon})` }" aria-hidden="true"></span></button>
