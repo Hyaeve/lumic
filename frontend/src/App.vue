@@ -5071,7 +5071,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
     </div>
     <button v-if="isTimelinePage && isAllFeed && showScrollTop && !selectionMode && !lightbox.open" class="scroll-top-button random-refresh-button mobile-frosted-control" :class="{ 'mobile-control-hidden': phonePortrait && !mobileControlsVisible }" type="button" aria-label="刷新随机动态" @click="reshuffleTimeline"><span :style="{ '--scroll-top-mask': `url(${refreshIcon})` }" aria-hidden="true"></span></button>
     <button v-if="isTimelinePage && showScrollTop && !selectionMode && !lightbox.open" class="scroll-top-button mobile-frosted-control" :class="{ 'mobile-control-hidden': phonePortrait && !mobileControlsVisible }" type="button" aria-label="回到顶部" @click="scrollTimelineToTop"><span :style="{ '--scroll-top-mask': `url(${scrollTopIcon})` }" aria-hidden="true"></span></button>
-    <button v-if="!showSettings && activeNav === 'pulls'" class="add-fab" @click="showAdd = true">＋ <span>添加订阅</span>
+    <button v-if="!showSettings && activeNav === 'pulls'" class="add-fab mobile-floating-add" :class="{ 'mobile-control-hidden': phonePortrait && !mobileControlsVisible }" @click="showMobileControls(); showAdd = true">＋ <span>添加订阅</span>
 </button>
     <div v-if="showAdd" class="modal-backdrop" @click.self="showAdd = false">
 <div class="modal">

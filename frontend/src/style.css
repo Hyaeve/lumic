@@ -1647,9 +1647,15 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
   .phone-ui .settings-window-grid,
   .phone-ui .settings-page .platform-auth-grid { grid-template-columns: 1fr; }
   .phone-ui .add-fab { right: 12px; bottom: max(14px, env(safe-area-inset-bottom)); z-index: 32; min-height: 44px; color: #52606c; background: linear-gradient(145deg, #ffffff9e, #fffaf05c); border: 0; border-radius: 12px; backdrop-filter: blur(8px) saturate(142%) contrast(.97); box-shadow: 0 10px 25px #46341f2b; }
+  .phone-ui .mobile-floating-add { transition: opacity .36s ease, transform .46s cubic-bezier(.18,1.15,.3,1), background .22s ease, box-shadow .28s ease; }
+  .phone-ui .mobile-floating-add.mobile-control-hidden { opacity: 0; pointer-events: none; transform: translateY(14px) scale(.94); transition-timing-function: ease, cubic-bezier(.4,0,.65,1), ease, ease; }
   .phone-ui.dark .add-fab { color: #e9effd; background: linear-gradient(145deg, #cdd9f64d, #4e5b7c38 52%, #080c164d); box-shadow: 0 11px 28px #0006; }
   .phone-ui .add-fab:hover { background: linear-gradient(145deg, #ffffffb8, #fffaf075); }
   .phone-ui.dark .add-fab:hover { background: linear-gradient(145deg, #cdd9f661, #4e5b7c4d 52%, #080c1661); }
+  @media (prefers-reduced-motion: reduce) {
+    .phone-ui .mobile-floating-add { transition: opacity .12s ease; }
+    .phone-ui .mobile-floating-add.mobile-control-hidden { transform: none; }
+  }
   .phone-ui .scroll-top-button { --mobile-glass-background: linear-gradient(142deg, rgba(255, 255, 255, .68) 0%, rgba(255, 248, 229, .43) 48%, rgba(232, 213, 181, .40) 100%); right: 12px; bottom: max(14px, env(safe-area-inset-bottom)); width: 44px; height: 44px; color: #6c765f; background: transparent; border-color: rgba(255, 255, 255, .78); border-radius: 10px; box-shadow: 0 12px 30px #54452a22, inset 0 1px 0 #ffffffb8, inset 0 -1px 0 #8b70451c; backdrop-filter: blur(24px) saturate(150%); transition: opacity .3s ease, transform .34s cubic-bezier(.16,.88,.22,1), filter .3s ease, background .22s ease, border-color .22s ease, box-shadow .28s ease; }
   .phone-ui .scroll-top-button > span { width: 22px; height: 22px; }
   .phone-ui.dark .scroll-top-button { --mobile-glass-background: linear-gradient(142deg, rgba(67, 76, 100, .62) 0%, rgba(18, 24, 38, .58) 50%, rgba(11, 15, 25, .66) 100%); color: #dfe7f8; background: transparent; border-color: rgba(225, 233, 255, .34); box-shadow: 0 12px 32px #0009, 0 0 16px #7189cd30, inset 0 1px 0 #eef3ff45, inset 0 -1px 0 #02050a45; backdrop-filter: blur(26px) saturate(155%); }
