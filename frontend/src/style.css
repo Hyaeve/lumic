@@ -600,9 +600,9 @@ body, button, input, textarea, select { font-size: 14px; }
 .timeline-context-menu svg, .selection-dock svg { width: 19px; height: 19px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .action-icon-mask { display: block; width: 19px; height: 19px; flex: none; background: currentColor; -webkit-mask: var(--action-icon-mask) center / contain no-repeat; mask: var(--action-icon-mask) center / contain no-repeat; }
 .selection-dock { position: fixed; right: 28px; bottom: 27px; z-index: 35; display: flex; align-items: center; gap: 11px; min-height: 50px; padding: 6px 7px 6px 15px; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 9px; box-shadow: 0 14px 34px #26342d2b; animation: selection-dock-in .18s ease-out; }
-.app-shell .selection-dock { gap: 8px; padding: 5px; border: 1px solid #ffffff24; border-radius: 12px; background: #ffffffc4; backdrop-filter: blur(32px) saturate(115%); -webkit-backdrop-filter: blur(32px) saturate(115%); }
+.app-shell .selection-dock { gap: 8px; padding: 5px; border: 1px solid #ffffff24; border-radius: 12px; background: #ffffffc4; backdrop-filter: blur(48px) saturate(115%); -webkit-backdrop-filter: blur(48px) saturate(115%); }
 .app-shell.dark .selection-dock { background: #20242cc4; }
-.app-shell .timeline-context-menu { width: max-content; min-width: 106px; padding: 4px; border-radius: 12px; background: #ffffffc4; backdrop-filter: blur(32px) saturate(115%); -webkit-backdrop-filter: blur(32px) saturate(115%); }
+.app-shell .timeline-context-menu { width: max-content; min-width: 106px; padding: 4px; border-radius: 12px; background: #ffffffc4; backdrop-filter: blur(48px) saturate(115%); -webkit-backdrop-filter: blur(48px) saturate(115%); }
 .app-shell.dark .timeline-context-menu { background: #20242cc4; }
 .app-shell .selection-dock button { width: 44px; height: 44px; padding: 0; border: 0; border-radius: 8px; color: var(--ink); background: transparent; }
 .app-shell .selection-dock button:hover, .app-shell .selection-dock button[aria-pressed="true"] { background: #8b98dd30; color: #758be5; }
