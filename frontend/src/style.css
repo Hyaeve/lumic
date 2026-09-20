@@ -27,7 +27,11 @@ a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color
 .login-input-field button { right: 6px; width: 44px; height: 44px; color: #8b8796; }
 .login-input-field button:hover { color: #696078; background: #f3f1f7; }
 .login-form .remember-password { color: #827b91; font-size: 14px; font-weight: 400; }
-.login-form .remember-password input { accent-color: #8c7da5; }
+.login-form .remember-password input { appearance: none; -webkit-appearance: none; display: grid; place-items: center; flex: none; background: transparent; border: 1px solid #a99fb6; border-radius: 4px; cursor: pointer; }
+.login-form .remember-password input::before { content: ''; width: 5px; height: 9px; border: solid white; border-width: 0 2px 2px 0; transform: translateY(-1px) rotate(45deg); visibility: hidden; }
+.login-form .remember-password input:checked { background: #8c7da5; border-color: #8c7da5; }
+.login-form .remember-password input:checked::before { visibility: visible; }
+.login-form .remember-password input:focus-visible { outline: 2px solid #8c7da5; outline-offset: 3px; }
 .app-shell { min-height: 100vh; display: flex; background: #f7faf7; transition: .3s ease; --ink: #34433f; --muted: #87938e; --line: #e5ebe5; --card: rgba(255,255,255,.8); --sidebar: #edf4ee; }
 .app-shell.dark { --ink: #e7eee9; --muted: #93a09a; --line: #35443e; --card: #26332f; --sidebar: #202c29; background: #17211f; }
 .sidebar { width: 258px; flex: none; display: flex; flex-direction: column; padding: 34px 20px 23px; background: var(--sidebar); border-right: 1px solid var(--line); user-select: none; -webkit-user-select: none; }.sidebar img { -webkit-user-drag: none; }

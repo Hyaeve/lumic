@@ -39,6 +39,8 @@ let sequence = []
 let sequenceIndex = -1
 let lockedUntil = 0
 let entryHoldUntil = 0
+let lastPointer = null
+let pointerInHeader = false
 let mounted = false
 const excludedTarget = target => Boolean(target?.closest('button, a, input, textarea, video, .media-frame, .modal, .lightbox-layer'))
 const presentationStyle = computed(() => {
@@ -54,9 +56,17 @@ const presentationStyle = computed(() => {
     '--gallery-chevron-top': `${entryScreenTop.value + (viewportHeight.value - 64 - entryScreenTop.value) * progress.value}px`,
     '--gallery-chevron-left': `${entryLeft.value}px`,
     '--gallery-chevron-width': `${entryWidth.value}px`,
-    '--gallery-chevron-angle': `${(1 - progress.value) * 180}deg`
+    '--gallery-chevron-angle': `${progress.value * 180}deg`
   }
 })
+const chevronStyle = computed(() => ({
+  left: `${parseFloat(boundsStyle.value.left || '0') + entryLeft.value}px`,
+  width: `${entryWidth.value}px`,
+  '--gallery-chevron-top': presentationStyle.value['--gallery-chevron-top'],
+  '--gallery-chevron-angle': presentationStyle.value['--gallery-chevron-angle'],
+  '--gallery-settle-duration': `${settleDuration.value}ms`,
+  '--gallery-settle-easing': settleEasing.value
+}))
 function measure() {
   if (!host.value) return
   viewportHeight.value = window.innerHeight
@@ -72,6 +82,7 @@ function measure() {
   boundsStyle.value = { left: `${props.mobile ? 0 : bounds.left}px`, width: `${props.mobile ? window.innerWidth : bounds.width}px`, '--gallery-fade-start': `${fadeStart}px` }
 }
 function updateHover(event) {
+  lastPointer = { clientX: event.clientX, clientY: event.clientY }
   if (props.mobile || presenting.value) return
   const bounds = host.value.getBoundingClientRect()
   const toolbar = host.value.querySelector('.section-heading')?.getBoundingClientRect()
@@ -82,15 +93,19 @@ function updateHover(event) {
     const rectangles = element.tagName === 'IMG' ? [element.getBoundingClientRect()] : [...range.getClientRects()]
     return rectangles.some(rect => event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom)
   })
-  if (current.value && toolbar && event.clientY >= bounds.top && event.clientY <= toolbar.bottom && !overIdentity) {
+  pointerInHeader = Boolean(current.value && toolbar && event.clientX >= bounds.left && event.clientX <= bounds.right && event.clientY >= bounds.top && event.clientY <= toolbar.bottom && !overIdentity)
+  if (pointerInHeader) {
     clearTimeout(hoverTimer)
     hoverTimer = null
     entryHovered.value = true
   } else clearHover()
 }
 function clearHover() {
-  if (hoverTimer || !entryHovered.value) return
-  hoverTimer = setTimeout(() => { entryHovered.value = false; hoverTimer = null }, Math.max(1000, entryHoldUntil - performance.now()))
+  if (pointerInHeader || hoverTimer || !entryHovered.value) return
+  hoverTimer = setTimeout(() => {
+    if (!pointerInHeader) entryHovered.value = false
+    hoverTimer = null
+  }, Math.max(1000, entryHoldUntil - performance.now()))
 }
 function preparePresentation() {
   if (presenting.value) return true
@@ -165,9 +180,13 @@ function closePresentation(options = {}) {
     hoverTimer = null
     entryHovered.value = !props.mobile && !options.immediate
     entryHoldUntil = entryHovered.value ? performance.now() + 2000 : 0
-    if (entryHovered.value) clearHover()
     document.documentElement.classList.remove('gallery-presenting')
     if (host.value) host.value.inert = false
+    if (entryHovered.value) {
+      pointerInHeader = false
+      if (lastPointer) updateHover(lastPointer)
+      clearHover()
+    }
     if (!options.immediate) previousFocus?.focus?.({ preventScroll: true })
     lockedUntil = performance.now() + 250
   }
@@ -337,8 +356,7 @@ onMounted(() => {
   if (toolbar) observer.observe(toolbar)
   measure()
   if (props.interactive) {
-    host.value.addEventListener('pointermove', updateHover)
-    host.value.addEventListener('pointerleave', clearHover)
+    window.addEventListener('pointermove', updateHover)
     host.value.addEventListener('touchstart', onTouchStart, { passive: true, capture: true })
     host.value.addEventListener('touchmove', onTouchMove, { passive: false, capture: true })
     host.value.addEventListener('touchend', onTouchEnd, true)
@@ -371,8 +389,7 @@ onBeforeUnmount(() => {
   cancelAnimationFrame(frame)
   observer?.disconnect()
   if (!props.interactive) return
-  host.value?.removeEventListener('pointermove', updateHover)
-  host.value?.removeEventListener('pointerleave', clearHover)
+  window.removeEventListener('pointermove', updateHover)
   host.value?.removeEventListener('touchstart', onTouchStart, true)
   host.value?.removeEventListener('touchmove', onTouchMove, true)
   host.value?.removeEventListener('touchend', onTouchEnd, true)
@@ -402,10 +419,10 @@ onBeforeUnmount(() => {
       <div class="gallery-presentation-tint"></div>
       <div class="gallery-presentation-fade"></div>
       <template v-if="!mobile">
-        <button class="gallery-exit-chevron gallery-chevron" type="button" aria-label="收起背景大图" @click.stop="closePresentation()"><svg viewBox="0 0 64 40" aria-hidden="true"><path d="m8 13 24 16 24-16"/></svg></button>
         <button v-for="direction in [-1, 1]" :key="direction" class="gallery-edge-nav" :class="{ previous: direction < 0, next: direction > 0 }" :disabled="!loadImages && images.length < 2" :aria-label="direction < 0 ? '上一张背景图' : '下一张背景图'" @click.stop="advance(direction, true)"><svg viewBox="0 0 24 24" aria-hidden="true"><path :d="direction < 0 ? 'm15 4-8 8 8 8' : 'm9 4 8 8-8 8'"/></svg></button>
       </template>
     </section>
+    <button v-if="presenting && !mobile" class="gallery-exit-chevron gallery-chevron" :class="{ dark, closing }" :style="chevronStyle" type="button" aria-label="收起背景大图" @click.stop="closePresentation()"><svg viewBox="0 0 64 40" aria-hidden="true"><path d="m8 13 24 16 24-16"/></svg></button>
   </Teleport>
 </template>
 
@@ -434,11 +451,13 @@ html.gallery-presenting, html.gallery-presenting body { overflow: hidden; oversc
 .gallery-chevron { position: absolute; left: calc(50% - 40px); width: 80px; height: 48px; display: grid; place-items: center; padding: 0; border: 0; background: transparent; color: var(--ink, #fff); z-index: 4; }
 .gallery-chevron svg { width: min(64px, 100%); height: 40px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; animation: gallery-chevron-breathe 2.2s ease-in-out infinite; filter: drop-shadow(0 2px 5px #0005); }
 .gallery-entry-chevron { opacity: 0; pointer-events: none; transition: opacity .65s ease; }
-.gallery-entry-chevron svg { rotate: 180deg; }
+.gallery-entry-chevron svg { rotate: 0deg; }
 .gallery-entry-chevron.visible, .gallery-entry-chevron:focus-visible { opacity: 1; pointer-events: auto; transition-duration: .35s; }
 .gallery-chevron:focus-visible { outline: 2px solid #a6a0ed; outline-offset: 2px; border-radius: 8px; }
-.gallery-exit-chevron { top: 0; left: var(--gallery-chevron-left); transform: translateY(var(--gallery-chevron-top)); width: var(--gallery-chevron-width); color: #fff; transition: transform .6s cubic-bezier(.32,.05,.2,1); }
-.gallery-exit-chevron svg { rotate: var(--gallery-chevron-angle); transition: rotate .6s cubic-bezier(.32,.05,.2,1); }
+.gallery-exit-chevron { position: fixed; z-index: 86; top: 0; transform: translateY(var(--gallery-chevron-top)); color: #fff; transition: transform var(--gallery-settle-duration) var(--gallery-settle-easing), color var(--gallery-settle-duration) ease; }
+.gallery-exit-chevron.closing { color: #34433f; }
+.gallery-exit-chevron.closing.dark { color: #eef3ff; }
+.gallery-exit-chevron svg { rotate: var(--gallery-chevron-angle); transition: rotate var(--gallery-settle-duration) var(--gallery-settle-easing); }
 .gallery-edge-nav { position: absolute; top: 0; bottom: 0; width: min(13%, 104px); padding: 0; display: grid; place-items: center; background: transparent; color: #fff; border: 0; opacity: 0; transition: opacity .2s ease; }
 .gallery-edge-nav.previous { left: 0; }
 .gallery-edge-nav.next { right: 0; }
