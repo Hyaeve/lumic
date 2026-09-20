@@ -21,6 +21,9 @@ const fastSwitch = ref(false)
 const manualSlide = ref(null)
 let manualSlideTimer
 let manualSlideFrame
+let neighborRequest = null
+let neighborBase = ''
+let decodedNeighbors = {}
 const entryHovered = ref(false)
 const entryTop = ref(0)
 const entryLeft = ref(0)
@@ -214,6 +217,61 @@ function scheduleRotation() {
     }, expanded.value ? (props.mobile ? 10000 : 9000) : 15000)
   }
 }
+async function prepareNeighbors() {
+  if (!props.mobile || !expanded.value || !current.value) return
+  const base = current.value
+  if (neighborBase === base && neighborRequest) return neighborRequest
+  if (neighborBase === base && decodedNeighbors[-1] && decodedNeighbors[1]) return
+  neighborBase = base
+  decodedNeighbors = {}
+  const version = scopeVersion
+  const request = (async () => {
+    await replenish()
+    if (current.value !== base || scopeVersion !== version) return
+    const options = [...new Set([...candidates, ...props.images])].filter(src => src && src !== base)
+    const next = sequence[sequenceIndex + 1] || options[0]
+    const previous = sequence[sequenceIndex - 1] || options.find(src => src !== next) || next
+    await Promise.all([[-1, previous], [1, next]].map(async ([direction, source]) => {
+      if (!source) return
+      const image = new Image()
+      image.src = source
+      try { await image.decode() } catch { return }
+      if (current.value !== base || scopeVersion !== version) return
+      decodedNeighbors[direction] = source
+      if (touch?.axis === 'x' && Math.sign(touch.dx) === -direction) stageManualDrag(touch.dx)
+    }))
+  })()
+  neighborRequest = request
+  try { await request } finally { if (neighborRequest === request) neighborRequest = null }
+}
+function stageManualDrag(dx) {
+  fastSwitch.value = true
+  const direction = dx < 0 ? 1 : -1
+  const source = neighborBase === current.value ? decodedNeighbors[direction] : null
+  if (!source) {
+    // Keep the current image in place until the adjacent original is decoded.
+    shift.value = 0
+    manualSlide.value = null
+    return
+  }
+  const next = 1 - active.value
+  layers.value[next] = source
+  shift.value = 0
+  manualSlide.value = {
+    from: active.value, to: next, direction, source,
+    offset: Math.max(-window.innerWidth * .82, Math.min(window.innerWidth * .82, dx)),
+    settling: false
+  }
+}
+function reboundManualSlide() {
+  shift.value = 0
+  if (!manualSlide.value) return
+  manualSlide.value = { ...manualSlide.value, rebound: true, settling: true }
+  manualSlideTimer = setTimeout(() => {
+    manualSlide.value = null
+    fastSwitch.value = true
+  }, 280)
+}
 async function replenish() {
   if (!props.loadImages || candidates.length > 3) return
   if (batchRequest) return batchRequest
@@ -231,7 +289,9 @@ async function advance(direction = 1, manual = false) {
   const choices = props.images.filter(image => image && image !== current.value)
   const nextIndex = sequenceIndex + direction
   candidates = candidates.filter(image => image !== current.value)
-  const source = sequence[nextIndex] || candidates.shift() || choices[Math.floor(Math.random() * choices.length)] || props.images[0]
+  const prepared = manual && props.mobile && neighborBase === current.value ? decodedNeighbors[direction] : null
+  const source = prepared || sequence[nextIndex] || candidates.shift() || choices[Math.floor(Math.random() * choices.length)] || props.images[0]
+  candidates = candidates.filter(image => image !== source)
   if (!source || source === current.value) { shift.value = 0; scheduleRotation(); return }
   const image = new Image()
   image.src = source
@@ -248,7 +308,7 @@ async function advance(direction = 1, manual = false) {
   const next = 1 - active.value
   layers.value[next] = source
   if (manual && props.mobile && expanded.value) {
-    manualSlide.value = { from: active.value, to: next, direction, offset: shift.value, settling: false }
+    manualSlide.value = { from: active.value, to: next, direction, offset: manualSlide.value?.offset ?? shift.value, settling: false }
     shift.value = 0
     await nextTick()
     presentationElement.value?.getBoundingClientRect()
@@ -259,6 +319,7 @@ async function advance(direction = 1, manual = false) {
   }
   active.value = next
   current.value = source
+  void prepareNeighbors()
   emit('image', source)
   void replenish()
   scheduleRotation()
@@ -267,9 +328,10 @@ function presentationImageStyle(index) {
   const slide = manualSlide.value
   if (!slide) return props.mobile && fastSwitch.value ? { opacity: index === active.value ? 1 : 0, transition: 'none' } : undefined
   const width = window.innerWidth
+  const finalOffset = slide.rebound ? 0 : -slide.direction * width
   const x = index === slide.to
-    ? (slide.settling ? 0 : slide.direction * width + slide.offset)
-    : (slide.settling ? -slide.direction * width : slide.offset)
+    ? slide.direction * width + (slide.settling ? finalOffset : slide.offset)
+    : (slide.settling ? finalOffset : slide.offset)
   return {
     opacity: 1,
     transform: `translate3d(${x}px,0,0)`,
@@ -277,6 +339,10 @@ function presentationImageStyle(index) {
   }
 }
 function onTouchStart(event) {
+  if (expanded.value) {
+    loadVersion++
+    void prepareNeighbors()
+  }
   if (manualSlide.value) {
     clearTimeout(manualSlideTimer)
     cancelAnimationFrame(manualSlideFrame)
@@ -310,7 +376,7 @@ function onTouchMove(event) {
     event.stopPropagation()
     touch.dx = dx
     dragging.value = true
-    shift.value = Math.max(-window.innerWidth * .82, Math.min(window.innerWidth * .82, dx))
+    stageManualDrag(dx)
     return
   }
   if (!presenting.value && dy <= 10) { touch = null; return }
@@ -334,8 +400,8 @@ function onTouchEnd(event) {
   const cancelled = event.type === 'touchcancel'
   if (gesture.axis === 'x') {
     dragging.value = false
-    if (!cancelled && Math.abs(gesture.dx) > 55) void advance(gesture.dx < 0 ? 1 : -1, true)
-    else shift.value = 0
+    if (!cancelled && Math.abs(gesture.dx) > 55 && manualSlide.value) void advance(gesture.dx < 0 ? 1 : -1, true)
+    else reboundManualSlide()
     return
   }
   const point = event.changedTouches[0]
@@ -399,11 +465,14 @@ onMounted(() => {
     window.addEventListener('resize', measure)
   }
 })
-watch([expanded, () => props.mobile], scheduleRotation)
+watch([expanded, () => props.mobile], () => { scheduleRotation(); void prepareNeighbors() })
 watch(() => `${props.scopeKey || ''}:${props.images.join('|')}`, () => {
   clearTimeout(timer)
   scopeVersion++
   batchRequest = null
+  neighborBase = ''
+  neighborRequest = null
+  decodedNeighbors = {}
   candidates = []
   loadVersion++
   sequence = []

@@ -265,9 +265,6 @@ let mobileAuthorPageTimer = 0
 let mobileAuthorHandoffTimer = 0
 let mobileDetailReturnHandoffTimer = 0
 let mobileTimelineReturnHandoffTimer = 0
-let mobilePostOriginVisual = null
-let mobileDetailRouteExitLayer = null
-let mobileDetailRouteExitTarget = null
 let mobileDetailGestureReturnPending = false
 let mobileLightboxAnimationTimer = 0
 let mobileLightboxAnimationFrame = 0
@@ -2839,16 +2836,6 @@ function openMasonryPost(post, event, options = {}) {
   resetMobileDetailPageSwipe()
   mobileMenuOpen.value = false
   mobileSourcesOpen.value = false
-  if (phonePortrait.value) {
-    const card = event?.currentTarget?.closest?.('.masonry-card') || event?.currentTarget
-    const origin = card?.querySelector?.('.masonry-cover') || card
-    const rect = origin?.getBoundingClientRect?.()
-    mobilePostOriginVisual = rect?.width && rect?.height ? {
-      postId: String(post.id),
-      rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
-      borderRadius: window.getComputedStyle(origin).borderRadius || '9px'
-    } : null
-  }
   masonryDetailPost.value = post
   mobileDetailOriginalLoaded.value = {}
   mobileDetailIndex.value = 0
@@ -2919,72 +2906,6 @@ function restoreMobileScroll(top = 0) {
     })
   })
 }
-function cleanupMobileDetailRouteExit() {
-  if (mobileDetailRouteExitTarget) mobileDetailRouteExitTarget.style.visibility = ''
-  mobileDetailRouteExitTarget = null
-  mobileDetailRouteExitLayer?.remove()
-  mobileDetailRouteExitLayer = null
-}
-function captureMobileDetailRouteExit(post) {
-  if (!phonePortrait.value || !post) return null
-  const page = document.querySelector('.mobile-post-detail-page')
-  const stage = page?.querySelector('.mobile-post-media-stage')
-  const mediaElement = stage?.querySelector('.mobile-post-media-slide.current img, .mobile-post-media-slide.current video')
-  if (!page || !stage || !mediaElement) return null
-  cleanupMobileDetailRouteExit()
-  const pageRect = page.getBoundingClientRect()
-  const stageRect = stage.getBoundingClientRect()
-  const offsetX = mobileDetailPageDragX.value || 0
-  const offsetY = mobileDetailPageDragY.value || 0
-  const sourceRect = {
-    left: stageRect.left - offsetX,
-    top: stageRect.top - offsetY,
-    width: stageRect.width,
-    height: stageRect.height
-  }
-  const layer = document.createElement('div')
-  layer.className = `mobile-detail-route-exit-layer phone-ui${isDark.value ? ' dark' : ''}`
-  layer.setAttribute('aria-hidden', 'true')
-  layer.inert = true
-  const shell = document.createElement('div')
-  shell.className = 'mobile-detail-route-exit-shell'
-  shell.style.setProperty('--mobile-detail-exit-page-top', `${pageRect.top - offsetY}px`)
-  const pageClone = page.cloneNode(true)
-  pageClone.style.transform = 'none'
-  pageClone.style.opacity = '1'
-  pageClone.style.transition = 'none'
-  const clonedStage = pageClone.querySelector('.mobile-post-media-stage')
-  if (clonedStage) clonedStage.style.visibility = 'hidden'
-  pageClone.querySelectorAll('video').forEach(video => { video.autoplay = false; video.controls = false; video.removeAttribute('src') })
-  shell.appendChild(pageClone)
-  const media = document.createElement('div')
-  media.className = 'mobile-detail-route-exit-media'
-  Object.assign(media.style, {
-    left: `${sourceRect.left}px`,
-    top: `${sourceRect.top}px`,
-    width: `${sourceRect.width}px`,
-    height: `${sourceRect.height}px`,
-    background: window.getComputedStyle(stage).backgroundColor
-  })
-  let mediaClone
-  if (mediaElement.tagName === 'VIDEO' && mediaElement.poster) {
-    mediaClone = document.createElement('img')
-    mediaClone.src = mediaElement.poster
-    mediaClone.alt = ''
-  } else {
-    mediaClone = mediaElement.cloneNode(true)
-    if (mediaClone.tagName === 'VIDEO') {
-      mediaClone.autoplay = false
-      mediaClone.controls = false
-      mediaClone.muted = true
-    }
-  }
-  media.appendChild(mediaClone)
-  layer.append(shell, media)
-  document.body.appendChild(layer)
-  mobileDetailRouteExitLayer = layer
-  return { layer, shell, media, postId: String(post.id), sourceRect }
-}
 function findMobileDetailReturnTarget(postId) {
   const card = [...document.querySelectorAll('.masonry-card[data-post-id], .post-card[data-post-id]')].find(element => element.dataset.postId === String(postId))
   if (!card) return null
@@ -2992,46 +2913,6 @@ function findMobileDetailReturnTarget(postId) {
   const rect = element.getBoundingClientRect()
   if (!rect.width || !rect.height) return null
   return { element, rect, borderRadius: window.getComputedStyle(element).borderRadius || '9px' }
-}
-function runMobileDetailRouteExit(snapshot) {
-  if (!snapshot?.layer?.isConnected) return
-  const animate = () => {
-    if (!snapshot.layer.isConnected) return
-    const foundTarget = findMobileDetailReturnTarget(snapshot.postId)
-    const storedTarget = mobilePostOriginVisual?.postId === snapshot.postId ? mobilePostOriginVisual : null
-    // The origin is already in viewport coordinates at the restored scroll
-    // position. Start with it now instead of waiting for virtualized cards.
-    const targetRect = storedTarget?.rect || foundTarget?.rect || null
-    const finalTargetRect = targetRect || snapshot.sourceRect
-    const targetRadius = foundTarget?.borderRadius || storedTarget?.borderRadius || '9px'
-    const translateX = finalTargetRect.left - snapshot.sourceRect.left
-    const translateY = finalTargetRect.top - snapshot.sourceRect.top
-    const scaleX = finalTargetRect.width / Math.max(1, snapshot.sourceRect.width)
-    const scaleY = finalTargetRect.height / Math.max(1, snapshot.sourceRect.height)
-    if (foundTarget?.element) {
-      mobileDetailRouteExitTarget = foundTarget.element
-      foundTarget.element.style.visibility = 'hidden'
-    }
-    if (typeof snapshot.media.animate !== 'function' || typeof snapshot.shell.animate !== 'function') {
-      cleanupMobileDetailRouteExit()
-      return
-    }
-    const easing = 'cubic-bezier(.22,.61,.36,1)'
-    const targetRadiusValue = Number.parseFloat(targetRadius) || 9
-    const shellAnimation = snapshot.shell.animate([
-      { opacity: 1, transform: 'scale(1)' },
-      { opacity: 0, transform: 'scale(.998)' }
-    ], { duration: 260, easing, fill: 'forwards' })
-    const mediaAnimation = snapshot.media.animate([
-      { transform: 'translate3d(0,0,0) scale(1,1)', borderRadius: '0px', boxShadow: '0 0 0 rgba(0,0,0,0)' },
-      { transform: `translate3d(${translateX}px,${translateY}px,0) scale(${scaleX},${scaleY})`, borderRadius: targetRadius || `${targetRadiusValue}px`, boxShadow: '0 8px 24px rgba(0,0,0,.14)' }
-    ], { duration: 260, easing, fill: 'forwards' })
-    Promise.allSettled([shellAnimation.finished, mediaAnimation.finished]).then(() => {
-      if (mobileDetailRouteExitLayer === snapshot.layer) cleanupMobileDetailRouteExit()
-    })
-  }
-  if (mobilePostOriginVisual?.postId === snapshot.postId) animate()
-  else nextTick(animate)
 }
 function closePostDetail() {
   if (phonePortrait.value && window.location.pathname.startsWith('/post/') && window.history.state?.lumicMobileDetail) {
@@ -4267,7 +4148,6 @@ function handlePopState() {
   const returningToTimeline = leavingDetail && !window.location.pathname.startsWith('/post/') && !window.location.pathname.startsWith('/author/')
   const returningFromDetailToPage = leavingDetail && !window.location.pathname.startsWith('/post/')
   const gestureTimelineReturn = returningToTimeline && mobileDetailGestureReturnPending
-  const detailRouteExit = returningFromDetailToPage && !gestureTimelineReturn ? captureMobileDetailRouteExit(departingDetailPost) : null
   const currentPath = window.location.pathname + window.location.search
   const forwardDetailState = mobileForwardPageAvailable.value
     && mobileForwardPageState.value?.kind === 'detail'
@@ -4355,11 +4235,9 @@ function handlePopState() {
   else if (returningToTimeline) {
     // The handoff owns scroll locking; a second restore here causes the
     // browser's stale position to paint for one frame before snapping back.
-    if (detailRouteExit) runMobileDetailRouteExit(detailRouteExit)
   }
-  else if (returningFromDetailToPage && mobileAuthorDetailState) {
-    restoreMobileScroll(mobileAuthorDetailState.authorScrollY || 0)
-    if (detailRouteExit) runMobileDetailRouteExit(detailRouteExit)
+  else if (returningFromDetailToPage) {
+    restoreMobileScroll(mobilePostReturnScrollY.value)
   }
   if (forwardPagedState && (authorProfile.value || selectedTag.value)) {
     // Keep the destination page covered by the already prepared preview until
@@ -4517,7 +4395,7 @@ watch(platformCards, cards => {
   selectedPlatform.value = cards.find(platform => platform.key === selectedPlatform.value.key) || null
 })
 onMounted(() => { isDark.value = localStorage.getItem('lumic-theme') === 'dark'; timelineView.value = localStorage.getItem('lumic-timeline-view') === 'masonry' ? 'masonry' : 'list'; if ('scrollRestoration' in window.history) window.history.scrollRestoration = 'manual'; loadRememberedLogin(); document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark.value ? '#080a0e' : '#fbf7ea'); phonePortraitQuery = window.matchMedia('(max-width: 760px)'); phonePortrait.value = isPhonePortraitScreen(); phonePortraitQuery.addEventListener('change', updatePhonePortrait); window.addEventListener('orientationchange', updatePhonePortrait); document.addEventListener('pointerover', useRoundedTooltip, true); document.addEventListener('wheel', preventModalWheel, { capture: true, passive: false }); postResizeObserver = new ResizeObserver(entries => { for (const entry of entries) { const post = postById.value.get(String(entry.target.dataset.postId)); const borderBox = Array.isArray(entry.borderBoxSize) ? entry.borderBoxSize[0] : entry.borderBoxSize; if (post) measurePostElement(post, entry.target, entry.target.dataset.layout || 'list', borderBox?.blockSize || entry.contentRect.height) }; scheduleTimelineWindow() }); initializeFeedListResizeObserver(); applyRoute(); if (phonePortrait.value && window.location.pathname === '/') openPhoneDefaultTimeline(); ensurePhoneExitBoundary(); checkSession(); sessionPollTimer = window.setInterval(() => checkSession(false), 60_000); window.addEventListener('keydown', handleGlobalKeydown); window.addEventListener('popstate', handlePopState); window.addEventListener('scroll', handleWindowScroll, { passive: true }); window.addEventListener('resize', handleWindowResize); scheduleTimelineWindow(); if (phonePortrait.value) showMobileControls() })
-onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLoop(); if (sessionPollTimer) window.clearInterval(sessionPollTimer); if (mobileControlsTimer) window.clearTimeout(mobileControlsTimer); if (mobileAuthorHandoffTimer) window.clearTimeout(mobileAuthorHandoffTimer); if (mobileDetailReturnHandoffTimer) window.clearTimeout(mobileDetailReturnHandoffTimer); if (mobileTimelineReturnHandoffTimer) window.clearTimeout(mobileTimelineReturnHandoffTimer); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); window.removeEventListener('orientationchange', updatePhonePortrait); document.removeEventListener('pointerover', useRoundedTooltip, true); document.removeEventListener('wheel', preventModalWheel, true); postResizeObserver?.disconnect(); feedListResizeObserver?.disconnect(); observedPostElements.clear(); preloadedPreviewUrls.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); clearMobileDetailAnimation(); resetMobileDetailPageSwipe(); cleanupMobileDetailRouteExit(); lightboxHistoryActive = false; resetLightboxState(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', handlePopState); window.removeEventListener('scroll', handleWindowScroll); window.removeEventListener('resize', handleWindowResize); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (masonryMetricsFrame) window.cancelAnimationFrame(masonryMetricsFrame); if (confirmResolver) closeConfirmDialog(false) })
+onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling(); stopNightMeteorLoop(); if (sessionPollTimer) window.clearInterval(sessionPollTimer); if (mobileControlsTimer) window.clearTimeout(mobileControlsTimer); if (mobileAuthorHandoffTimer) window.clearTimeout(mobileAuthorHandoffTimer); if (mobileDetailReturnHandoffTimer) window.clearTimeout(mobileDetailReturnHandoffTimer); if (mobileTimelineReturnHandoffTimer) window.clearTimeout(mobileTimelineReturnHandoffTimer); phonePortraitQuery?.removeEventListener('change', updatePhonePortrait); window.removeEventListener('orientationchange', updatePhonePortrait); document.removeEventListener('pointerover', useRoundedTooltip, true); document.removeEventListener('wheel', preventModalWheel, true); postResizeObserver?.disconnect(); feedListResizeObserver?.disconnect(); observedPostElements.clear(); preloadedPreviewUrls.clear(); transientTimers.forEach(timer => window.clearTimeout(timer)); transientTimers.clear(); clearMobileDetailAnimation(); resetMobileDetailPageSwipe(); lightboxHistoryActive = false; resetLightboxState(); closeContextMenu(); window.removeEventListener('keydown', handleGlobalKeydown); window.removeEventListener('popstate', handlePopState); window.removeEventListener('scroll', handleWindowScroll); window.removeEventListener('resize', handleWindowResize); if (timelineFrame) window.cancelAnimationFrame(timelineFrame); if (masonryMetricsFrame) window.cancelAnimationFrame(masonryMetricsFrame); if (confirmResolver) closeConfirmDialog(false) })
 </script>
 
 <template>

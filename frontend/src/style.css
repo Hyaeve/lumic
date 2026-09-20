@@ -2062,11 +2062,6 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
 .mobile-detail-return-preview .mobile-post-author strong { overflow: hidden; color: var(--ink); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
 .mobile-detail-return-preview .caption { margin: 0 0 14px; }
 .dark .mobile-detail-return-preview { background: #0e1015; }
-.mobile-detail-route-exit-layer { position: fixed; inset: 0; z-index: 88; overflow: hidden; pointer-events: none; contain: strict; }
-.mobile-detail-route-exit-shell { position: absolute; inset: 0; overflow: hidden; transform-origin: center top; will-change: opacity, transform; }
-.mobile-detail-route-exit-shell > .mobile-post-detail-page { position: absolute; top: var(--mobile-detail-exit-page-top, 0); right: 0; left: 0; width: 100%; min-height: 100dvh; margin: 0; box-shadow: none; pointer-events: none; }
-.mobile-detail-route-exit-media { position: fixed; z-index: 2; display: grid; place-items: center; overflow: hidden; transform-origin: left top; will-change: transform, border-radius, box-shadow; }
-.mobile-detail-route-exit-media > :is(img, video) { display: block; width: 100%; height: 100%; max-width: none; max-height: none; background: inherit; object-fit: contain; }
 .mobile-post-detail-page { position: relative; z-index: 1; min-height: 100dvh; background: #fbf7ea; box-shadow: -16px 0 38px #17130b24; }
 .mobile-post-detail-page.mobile-detail-two-finger-preparing > :not(.mobile-post-media-stage) { filter: blur(12px) saturate(.86); transition: filter .16s ease; }
 .dark .mobile-post-detail-page.mobile-detail-two-finger-preparing > :not(.mobile-post-media-stage) { filter: blur(14px) saturate(.82); }
