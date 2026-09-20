@@ -126,8 +126,8 @@ docker compose down
 
 ## 登录与安全
 
-- 浏览器勾选“保持登录”后，会话有效期为 30 天，可跨服务重启保留；未勾选时使用浏览器会话 Cookie，服务端最长保留 24 小时。升级后需要重新登录一次并勾选。
-- 保持登录的令牌摘要存于账号配置同目录的 `sessions.json`（默认 `/data/sessions.json`），需保留该数据目录；不保存明文令牌或密码。退出登录会撤销会话，修改账号凭证会使已记住的会话失效。Safari 隐私浏览或主动清除网站数据仍会清除登录状态。
+- 浏览器勾选“保持登录”后，从登录时起有效期为 7 天；未勾选时使用浏览器会话 Cookie，服务端最长保留 24 小时。容器或服务重启后，所有会话立即失效，需要重新登录。
+- 登录会话仅保存在服务内存，不写入或恢复 `sessions.json`，旧版本遗留的该文件不会被读取。退出登录会撤销会话，修改账号凭证会使已记住的会话失效。Safari 隐私浏览或主动清除网站数据仍会清除登录状态。
 - Web 会话使用 `HttpOnly`、`SameSite=Lax` Cookie；部署在 HTTPS 后时建议启用 `LUMIC_COOKIE_SECURE=true`。
 - Lumir 等客户端通过 `/api/v1/auth/login` 获取 24 小时 Bearer Token；服务重启后令牌失效。
 - 平台 Cookie、Token 和请求头不会返回给前端，服务使用 AES-GCM 加密后写入 `/data/bilibili.enc`，密钥写入 `/data/secret.key`。

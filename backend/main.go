@@ -714,10 +714,9 @@ type AuthBackup struct {
 
 type SessionStore struct {
 	sync.RWMutex
-	tokens      map[string]time.Time
-	remembered  map[string]rememberedSession
-	sessionFile string
-	auth        *AuthConfig
+	tokens     map[string]time.Time
+	remembered map[string]rememberedSession
+	auth       *AuthConfig
 }
 
 type AuthConfig struct {
@@ -1234,13 +1233,7 @@ func (s *SessionStore) revoke(token string) error {
 	s.Lock()
 	defer s.Unlock()
 	key := sessionDigest(token)
-	if record, ok := s.remembered[key]; ok {
-		delete(s.remembered, key)
-		if err := s.saveRemembered(); err != nil {
-			s.remembered[key] = record
-			return err
-		}
-	}
+	delete(s.remembered, key)
 	delete(s.tokens, token)
 	return nil
 }
@@ -7927,10 +7920,7 @@ func main() {
 		log.Fatal("unable to persist source storage paths: ", err)
 	}
 	bilibili.startScheduler()
-	sessions, err := loadSessionStore(filepath.Join(filepath.Dir(authFile), "sessions.json"), auth)
-	if err != nil {
-		log.Fatalf("load sessions: %v", err)
-	}
+	sessions := newSessionStore(auth)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/login", loginHandler(sessions, auth))
 	mux.HandleFunc("/api/session", sessionHandler(sessions))

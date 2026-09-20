@@ -5,13 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
-	"os"
-	"path/filepath"
 	"time"
 )
 
-const rememberedSessionLifetime = 30 * 24 * time.Hour
+const rememberedSessionLifetime = 7 * 24 * time.Hour
 
 type rememberedSession struct {
 	Expires     time.Time `json:"expires"`
@@ -32,52 +29,10 @@ func (s *SessionStore) credentialsDigest() string {
 	return sessionDigest(s.auth.Username + "\x00" + s.auth.PasswordHash)
 }
 
-func loadSessionStore(path string, auth *AuthConfig) (*SessionStore, error) {
-	s := &SessionStore{tokens: make(map[string]time.Time), remembered: make(map[string]rememberedSession), sessionFile: path, auth: auth}
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return s, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	if err = json.Unmarshal(data, &s.remembered); err != nil {
-		return nil, err
-	}
-	return s, nil
-}
-
-// Only token digests are persisted; the browser alone retains the bearer secret.
-func (s *SessionStore) saveRemembered() error {
-	if s.sessionFile == "" {
-		return nil
-	}
-	data, err := json.Marshal(s.remembered)
-	if err != nil {
-		return err
-	}
-	if err = os.MkdirAll(filepath.Dir(s.sessionFile), 0700); err != nil {
-		return err
-	}
-	file, err := os.CreateTemp(filepath.Dir(s.sessionFile), ".sessions-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(file.Name())
-	if err = file.Chmod(0600); err == nil {
-		_, err = file.Write(data)
-	}
-	if err == nil {
-		err = file.Sync()
-	}
-	closeErr := file.Close()
-	if err != nil {
-		return err
-	}
-	if closeErr != nil {
-		return closeErr
-	}
-	return os.Rename(file.Name(), s.sessionFile)
+// All sessions are process-local, including remembered browser sessions.
+// Never restore old sessions.json files after a container restart.
+func newSessionStore(auth *AuthConfig) *SessionStore {
+	return &SessionStore{tokens: make(map[string]time.Time), remembered: make(map[string]rememberedSession), auth: auth}
 }
 
 func (s *SessionStore) createRemembered() (string, error) {
@@ -99,9 +54,5 @@ func (s *SessionStore) createRemembered() (string, error) {
 	}
 	key := sessionDigest(token)
 	s.remembered[key] = rememberedSession{time.Now().Add(rememberedSessionLifetime), credentials}
-	if err := s.saveRemembered(); err != nil {
-		delete(s.remembered, key)
-		return "", err
-	}
 	return token, nil
 }
