@@ -2,7 +2,7 @@
 import { ref, watch, nextTick, onUnmounted } from 'vue'
 import { Pencil, ArrowLeft, ArrowRight, X, Plus } from '@lucide/vue'
 import deleteIcon from '../../icon/删除.png'
-const props = defineProps({ post: Object, icon: String })
+const props = defineProps({ post: Object, icon: String, preview: { type: Function, default: value => value } })
 const emit = defineEmits(['saved', 'delete', 'overlay'])
 const trigger = ref(null)
 const menuStyle = ref({})
@@ -120,7 +120,7 @@ onUnmounted(() => { cleanup(); if (menu.value || editing.value) emit('overlay', 
           <div class="post-editor-content">
             <textarea v-model="caption" aria-label="动态文本" rows="8" :disabled="busy"></textarea>
             <div class="post-edit-images">
-              <div v-for="(image, index) in images" :key="image.url" class="post-edit-image"><button type="button" :disabled="busy" aria-label="替换图片" @click="pick(index)"><img :src="image.url" alt=""></button><div><button type="button" :disabled="busy || index === 0" aria-label="前移图片" @click="move(index,-1)"><ArrowLeft :size="20" /></button><button type="button" :disabled="busy" aria-label="移除图片" @click="remove(index)"><X :size="20" /></button><button type="button" :disabled="busy || index === images.length-1" aria-label="后移图片" @click="move(index,1)"><ArrowRight :size="20" /></button></div></div>
+              <div v-for="(image, index) in images" :key="image.url" class="post-edit-image"><button type="button" :disabled="busy" aria-label="替换图片" @click="pick(index)"><img :src="image.file ? image.url : props.preview(image.url)" alt="" loading="lazy" decoding="async"></button><div><button type="button" :disabled="busy || index === 0" aria-label="前移图片" @click="move(index,-1)"><ArrowLeft :size="20" /></button><button type="button" :disabled="busy" aria-label="移除图片" @click="remove(index)"><X :size="20" /></button><button type="button" :disabled="busy || index === images.length-1" aria-label="后移图片" @click="move(index,1)"><ArrowRight :size="20" /></button></div></div>
             </div>
             <input ref="upload" type="file" accept="image/jpeg,image/png,image/gif,image/webp" multiple hidden @change="addFiles">
             <p v-if="error" role="alert">{{ error }}</p>

@@ -2604,6 +2604,9 @@ func (s *Store) postsHandler(w http.ResponseWriter, r *http.Request) {
 		result = filtered
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Published.After(result[j].Published) })
+	for index := range result {
+		result[index] = withAvailablePostImages(result[index])
+	}
 	writeJSON(w, result)
 }
 

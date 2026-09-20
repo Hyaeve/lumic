@@ -1696,9 +1696,14 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
   .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control > .nav-mask-symbol { color: #e9effd!important; }
   .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control > .mobile-platform-mask { color: #eef3ff; }
   .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control.active { color: #f5e4a4; }
-  .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle) { transition: opacity .3s ease, transform .34s cubic-bezier(.16,.88,.22,1), color .22s ease, background .22s ease, box-shadow .28s ease; }
+  .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button) { transition: opacity .36s ease, transform .46s cubic-bezier(.18,1.15,.3,1), color .22s ease, background .22s ease, box-shadow .28s ease; }
   .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-control-hidden { opacity: 0; pointer-events: none; transform: translateY(-10px) scale(.94); }
   .phone-ui .scroll-top-button.mobile-control-hidden { transform: translateY(14px) scale(.94); }
+  .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-control-hidden { transition-timing-function: ease, cubic-bezier(.4,0,.65,1), ease, ease, ease; }
+  @media (prefers-reduced-motion: reduce) {
+    .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button) { transition: opacity .12s ease; }
+    .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-control-hidden { transform: none; }
+  }
   .phone-ui .mobile-source-shortcuts .sidebar-source-icon {
     filter: grayscale(1) brightness(0) invert(.38) opacity(.96) drop-shadow(0 1px 2px rgba(255, 255, 255, .44))!important;
   }

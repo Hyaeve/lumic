@@ -202,7 +202,6 @@ let timelineFrame = 0
 let feedListDocumentTop = 0
 let feedListTopValid = false
 let mobileAuthorScrollY = 0
-let mobileControlsLastActivity = 0
 let masonryAssignmentColumnCount = 0
 let postResizeObserver = null
 let feedListResizeObserver = null
@@ -4174,17 +4173,24 @@ function scheduleTimelineWindow() {
 }
 function showMobileControls() {
   if (!phonePortrait.value || lightbox.value.open || masonryDetailPost.value) return
-  mobileControlsLastActivity = performance.now()
   mobileControlsVisible.value = true
   if (mobileControlsTimer) window.clearTimeout(mobileControlsTimer)
-  mobileControlsTimer = 0
+  mobileControlsTimer = window.setTimeout(() => {
+    mobileControlsTimer = 0
+    if (!mobileMenuOpen.value && !mobileSourcesOpen.value) mobileControlsVisible.value = false
+  }, 2000)
 }
 let mobileScrollAnchor = 0
 function handleWindowScroll() {
   if (phonePortrait.value && authorProfile.value && mobileAuthorDetailState.value) mobileAuthorScrollY = window.scrollY
   const top = Math.max(0, window.scrollY)
-  if (phonePortrait.value && !lightbox.value.open && !masonryDetailPost.value && Math.abs(top - mobileScrollAnchor) > 8) {
-    mobileControlsVisible.value = top < mobileScrollAnchor || top < 20 || mobileMenuOpen.value || mobileSourcesOpen.value
+  if (phonePortrait.value && !lightbox.value.open && !masonryDetailPost.value && Math.abs(top - mobileScrollAnchor) > .5) {
+    if (top < mobileScrollAnchor || mobileMenuOpen.value || mobileSourcesOpen.value) showMobileControls()
+    else {
+      window.clearTimeout(mobileControlsTimer)
+      mobileControlsTimer = 0
+      mobileControlsVisible.value = false
+    }
     mobileScrollAnchor = top
   }
   scheduleTimelineWindow()
@@ -4560,6 +4566,7 @@ watch(feedListElement, (element, previous) => {
 }, { flush: 'post' })
 watch(feeds, () => { subscriptionPage.value = Math.min(Math.max(1, subscriptionPage.value), subscriptionPageCount.value) })
 watch(subscriptionPageCount, count => { subscriptionPage.value = Math.min(Math.max(1, subscriptionPage.value), count) })
+watch([mobileMenuOpen, mobileSourcesOpen], showMobileControls)
 watch(phoneOverlayKey, next => {
   if (!phonePortrait.value || phoneOverlayDismissInProgress) return
   if (next) {
@@ -4746,7 +4753,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
 <button class="post-author-name" type="button" :aria-label="`查看 ${post.author} 的动态`" @click="openAuthor(post)"><strong>{{ post.author }}</strong></button>
 <PostTime :value="post.published" :with-time="!phonePortrait" :hover="!phonePortrait" />
 </div>
-<PostActions :post="post" :icon="sourceIconFor(post.source)" @saved="applyEditedPost" @delete="deletePost" @overlay="postActionOverlay = $event" />
+<PostActions :post="post" :icon="sourceIconFor(post.source)" :preview="previewMedia" @saved="applyEditedPost" @delete="deletePost" @overlay="postActionOverlay = $event" />
 </div>
 <PostCaption v-if="post.caption" v-model:expanded="expandedCaptions[post.id]" :text="post.caption" />
 <div v-if="post.media?.length" :class="['media-grid', `media-count-${Math.min(post.media.length, 9)}`]">
@@ -4930,7 +4937,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
       <header class="mobile-post-detail-head">
         <button class="mobile-post-back" type="button" title="返回动态页" aria-label="返回动态页" @click="closePostDetail"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg></button>
         <button class="mobile-post-author" type="button" @click="openAuthor(masonryDetailPost)"><img :src="postAvatar(masonryDetailPost)" data-fallback-index="0" :alt="masonryDetailPost.author" referrerpolicy="no-referrer" @error="handlePostAvatarError($event, masonryDetailPost)"><strong>{{ masonryDetailPost.author }}</strong></button>
-        <PostActions :post="masonryDetailPost" :icon="sourceIconFor(masonryDetailPost.source)" @saved="applyEditedPost" @delete="deletePost" @overlay="postActionOverlay = $event" />
+        <PostActions :post="masonryDetailPost" :icon="sourceIconFor(masonryDetailPost.source)" :preview="previewMedia" @saved="applyEditedPost" @delete="deletePost" @overlay="postActionOverlay = $event" />
       </header>
       <section v-if="mobileDetailCurrentMedia" :class="['mobile-post-media-stage', { 'video-media': mobileDetailCurrentMedia.type === 'video' }, mobileDetailCurrentMedia.type === 'video' ? postVideoFrameClass(masonryDetailPost) : '']" :style="mobileDetailCurrentMedia.type === 'video' ? postVideoFrameStyle(masonryDetailPost) : { height: `clamp(240px, ${100 / (mediaRatios[`${masonryDetailPost.id}:0`] || 1)}vw, 72dvh)` }" @touchstart="beginMobileDetailTouch" @touchmove="updateMobileDetailTouch" @touchend="finishMobileDetailTouch" @touchcancel="finishMobileDetailTouch" @pointerdown="beginMobileDetailSwipe" @pointermove="updateMobileDetailSwipe" @pointerup="finishMobileDetailSwipe" @pointercancel="cancelMobileDetailSwipe">
         <div class="mobile-post-media-track" :style="mobileDetailTrackStyle">
@@ -4971,7 +4978,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
           <header class="post-head">
             <button class="post-author-avatar" type="button" :aria-label="`查看 ${masonryDetailPost.author} 的动态`" @click="openAuthor(masonryDetailPost)"><img :src="postAvatar(masonryDetailPost)" data-fallback-index="0" :alt="masonryDetailPost.author" referrerpolicy="no-referrer" @error="handlePostAvatarError($event, masonryDetailPost)"></button>
             <div class="author"><button class="post-author-name" type="button" @click="openAuthor(masonryDetailPost)"><strong>{{ masonryDetailPost.author }}</strong></button></div>
-            <PostActions :post="masonryDetailPost" :icon="sourceIconFor(masonryDetailPost.source)" @saved="applyEditedPost" @delete="deletePost" @overlay="postActionOverlay = $event" />
+            <PostActions :post="masonryDetailPost" :icon="sourceIconFor(masonryDetailPost.source)" :preview="previewMedia" @saved="applyEditedPost" @delete="deletePost" @overlay="postActionOverlay = $event" />
           </header>
           <div class="desktop-detail-copy" tabindex="0" aria-label="动态正文"><p v-if="masonryDetailPost.caption" class="caption">{{ masonryDetailPost.caption }}</p></div>
           <footer class="post-foot masonry-detail-foot">

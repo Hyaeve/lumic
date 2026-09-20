@@ -25,6 +25,7 @@ func TestAPIV1RandomPaginationAndScopedMetadata(t *testing.T) {
 			Published: time.Date(2026, 9, 1, 0, i, 0, 0, time.UTC),
 		})
 	}
+	createPostImageFixtures(t, store.posts)
 	handler := apiV1PostsHandler(store)
 	get := func(path string) apiV1PostPage {
 		t.Helper()
@@ -171,6 +172,7 @@ func TestAPIV1PostCursorPaginationIsStable(t *testing.T) {
 		{ID: "post-c", Source: SourceBilibili, Author: "Charlie", Caption: "Third", Published: base.Add(2 * time.Hour)},
 		{ID: "post-d", Source: SourceWeibo, Author: "Delta", Caption: "Oldest", Published: base.Add(time.Hour)},
 	}}
+	createPostImageFixtures(t, store.posts)
 	handler := apiV1PostsHandler(store)
 
 	firstResponse := httptest.NewRecorder()
@@ -261,6 +263,7 @@ func TestAPIV1ScopedGalleryAndStatistics(t *testing.T) {
 		{ID: "b", Source: SourceWeibo, Author: "Alice", Tags: []string{"Art"}, Media: []string{"/flow/b.jpg"}, Published: base.Add(-24 * time.Hour)},
 		{ID: "c", Source: SourcePixiv, Author: "Beta", Media: []string{"/flow/c.jpg"}, Liked: true, Published: base},
 	}}
+	createPostImageFixtures(t, store.posts)
 	for _, filter := range []string{"author=Alice", "tag=Art", "liked=true"} {
 		response := httptest.NewRecorder()
 		apiV1PostsHandler(store)(response, httptest.NewRequest(http.MethodGet, "/api/v1/posts?"+filter+"&limit=1&statsDate=2026-09-19&tzOffset=0", nil))
@@ -310,6 +313,7 @@ func TestAPIV1HeaderMediaPreservesOriginalURLs(t *testing.T) {
 		"https://images.example.test/original.png?token=a%2Bb&size=original",
 	}
 	posts := []Post{{Media: append(append([]string{}, originals...), originals[0], "")}}
+	createPostImageFixtures(t, posts)
 	gallery := apiV1HeaderMedia(posts, "test")
 	if len(gallery) != len(originals) {
 		t.Fatalf("expected unique nonempty originals: %#v", gallery)
@@ -331,6 +335,7 @@ func TestAPIV1GallerySamplesEntireScope(t *testing.T) {
 		store.posts = append(store.posts, Post{ID: fmt.Sprint(i), Author: "Alice", Tags: []string{"Art"}, Liked: true, Media: []string{fmt.Sprintf("/flow/%d.jpg", i)}})
 	}
 	store.posts = append(store.posts, Post{ID: "outside", Author: "Bob", Media: []string{"/flow/outside.jpg"}})
+	createPostImageFixtures(t, store.posts)
 	for _, scope := range []string{"author=Alice", "tag=Art", "liked=true"} {
 		seen := map[string]bool{}
 		for i := 0; i < 12; i++ {

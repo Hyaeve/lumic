@@ -666,6 +666,9 @@ func apiV1HeaderMedia(posts []Post, seed string) []string {
 			if position >= 12 {
 				continue
 			}
+			if !availablePostImage(media) {
+				continue
+			}
 			sample = append(sample, candidate{})
 			copy(sample[position+1:], sample[position:])
 			sample[position] = item
@@ -711,6 +714,7 @@ func containsEqualFold(values []string, target string) bool {
 }
 
 func toAPIV1Post(post Post) apiV1Post {
+	post = withAvailablePostImages(post)
 	previews := make([]string, 0, len(post.Media))
 	for _, media := range post.Media {
 		previews = append(previews, apiV1PreviewPath(media))
