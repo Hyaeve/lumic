@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } fr
 import { capturePageSnapshot } from './pageSnapshot'
 import PageSnapshot from './components/PageSnapshot.vue'
 import PostActions from './components/PostActions.vue'
+import ImageLoadRing from './components/ImageLoadRing.vue'
 import QRCode from 'qrcode'
 import { createPostPager, postQueryKey } from './postPager'
 import { resistVerticalSwipe, shouldCommitVerticalSwipe, verticalSettleDuration, verticalSwipeEasing, verticalReboundEasing } from './verticalSwipe'
@@ -221,6 +222,9 @@ const lightboxClosing = ref(false)
 const lightboxTransitioning = ref(false)
 const lightboxDisplaySource = ref('')
 const lightboxOriginalLoaded = ref(false)
+const lightboxOriginalFailed = ref(false)
+const lightboxNaturalSize = ref({ width: 0, height: 0 })
+const mobileDetailOriginalFailed = ref({})
 // Mobile detail pages keep the preview mounted while the full-resolution image
 // loads over it, preventing a layout flash or a jump when the source changes.
 const mobileDetailOriginalLoaded = ref({})
@@ -1950,10 +1954,12 @@ function moveLightbox(step) {
 }
 function prepareLightboxSource() {
   const source = lightbox.value.media[lightbox.value.index] || ''
-  const preview = phonePortrait.value ? previewMedia(source) : source
-  const sequence = ++lightboxLoadSequence
+  const preview = previewMedia(source)
+  ++lightboxLoadSequence
   lightboxDisplaySource.value = preview
-  lightboxOriginalLoaded.value = preview === source
+  lightboxOriginalLoaded.value = false
+  lightboxOriginalFailed.value = false
+  lightboxNaturalSize.value = { width: 0, height: 0 }
   if (phonePortrait.value && lightbox.value.media.length > 1) {
     for (const offset of [-1, 1]) {
       const index = (lightbox.value.index + offset + lightbox.value.media.length) % lightbox.value.media.length
@@ -1961,32 +1967,29 @@ function prepareLightboxSource() {
       preload.src = previewMedia(lightbox.value.media[index])
     }
   }
-  // Mobile keeps the preview mounted while the full image is fetched by its
-  // overlay layer. Replacing the display source here would rebuild the slide.
-  if (phonePortrait.value) return
-  if (!source || preview === source) return
-  const original = new Image()
-  original.decoding = 'async'
-  original.onload = () => {
-    if (sequence !== lightboxLoadSequence || !lightbox.value.open) return
-    lightboxDisplaySource.value = source
-    lightboxOriginalLoaded.value = true
-  }
-  original.src = source
 }
-function handleLightboxImageLoad() {
-  if (phonePortrait.value) {
-    const sequence = lightboxLoadSequence
-    // Keep one painted frame of the preview before the original fades over it.
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        if (sequence === lightboxLoadSequence && lightbox.value.open) lightboxOriginalLoaded.value = true
-      })
-    })
+async function handleLightboxImageLoad(event) {
+  const image = event.target
+  const sequence = lightboxLoadSequence
+  try {
+    await image.decode()
+  } catch {
+    if (sequence === lightboxLoadSequence && image.isConnected) lightboxOriginalFailed.value = true
     return
   }
-  lightboxOriginalLoaded.value = lightboxDisplaySource.value === lightbox.value.media[lightbox.value.index]
+  if (sequence !== lightboxLoadSequence || !image.isConnected || !lightbox.value.open) return
+  lightboxNaturalSize.value = { width: image.naturalWidth, height: image.naturalHeight }
+  lightboxOriginalLoaded.value = true
+  lightboxOriginalFailed.value = false
   scheduleLightboxScaleUpdate()
+}
+function retryLightboxOriginal() {
+  const image = currentLightboxImage()
+  if (!image) return
+  lightboxOriginalFailed.value = false
+  const source = lightbox.value.media[lightbox.value.index]
+  image.removeAttribute('src')
+  image.src = source
 }
 function zoomLightbox(event) {
   zoomLightboxBy(event.deltaY < 0 ? 0.15 : -0.15)
@@ -1996,6 +1999,7 @@ function zoomLightboxBy(step) {
   scheduleLightboxScaleUpdate()
 }
 function toggleLightboxFit() {
+  if (!lightboxOriginalLoaded.value) return
   lightbox.value.fit = !lightbox.value.fit
   lightbox.value.scale = 1
   lightbox.value.x = 0
@@ -2132,7 +2136,7 @@ function scheduleLightboxScaleUpdate() {
     lightboxScaleFrame = 0
     const image = currentLightboxImage()
     if (!image?.naturalWidth) return
-    const baseScale = lightbox.value.fit ? image.clientWidth / image.naturalWidth : 1
+    const baseScale = lightbox.value.fit ? Math.min(image.clientWidth / image.naturalWidth, image.clientHeight / image.naturalHeight) : 1
     const renderedScale = baseScale * lightbox.value.scale
     lightboxScalePercent.value = Math.max(1, Math.round(renderedScale * 100))
     lightboxAtOriginalSize.value = Math.abs(renderedScale - 1) < 0.015
@@ -2148,7 +2152,7 @@ function currentLightboxImage() {
 function lightboxBaseScale() {
   const image = currentLightboxImage()
   if (!image?.naturalWidth || !lightbox.value.fit) return 1
-  return Math.max(0.01, image.clientWidth / image.naturalWidth)
+  return Math.max(0.01, Math.min(image.clientWidth / image.naturalWidth, image.clientHeight / image.naturalHeight))
 }
 function lightboxMaximumScale() {
   return Math.min(20, Math.max(5, 2 / lightboxBaseScale()))
@@ -2959,6 +2963,7 @@ function openMasonryPost(post, event, options = {}) {
   mobileSourcesOpen.value = false
   masonryDetailPost.value = post
   mobileDetailOriginalLoaded.value = {}
+  mobileDetailOriginalFailed.value = {}
   mobileDetailIndex.value = 0
   resetMobileDetailTrack()
   if (phonePortrait.value) {
@@ -3001,8 +3006,22 @@ function mobileDetailOriginalSource(media) {
   const source = String(media?.src || media || '')
   return source
 }
-function markMobileDetailOriginalLoaded(key) {
+async function markMobileDetailOriginalLoaded(key, event) {
+  const image = event.target
+  try { await image.decode() } catch {
+    if (image.isConnected) mobileDetailOriginalFailed.value = { ...mobileDetailOriginalFailed.value, [key]: true }
+    return
+  }
+  if (!image.isConnected) return
   mobileDetailOriginalLoaded.value = { ...mobileDetailOriginalLoaded.value, [key]: true }
+}
+function retryDetailOriginal(key, event) {
+  mobileDetailOriginalFailed.value = { ...mobileDetailOriginalFailed.value, [key]: false }
+  const image = event.target.closest('.mobile-post-media-slide')?.querySelector('.mobile-detail-original-image')
+  if (!image) return
+  const source = image.src
+  image.removeAttribute('src')
+  image.src = source
 }
 function preloadMobileDetailOriginals(post) {
   const media = postDetailMedia(post).filter(item => item.type === 'image')
@@ -3012,7 +3031,6 @@ function preloadMobileDetailOriginals(post) {
     const image = new Image()
     image.decoding = 'async'
     image.fetchPriority = index === 0 ? 'high' : 'low'
-    image.onload = () => markMobileDetailOriginalLoaded(item.key)
     image.src = source
   })
 }
@@ -4867,7 +4885,8 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
           <div v-for="slide in mobileDetailSlides" :key="`${slide.position}:${slide.media.key}`" :class="['mobile-post-media-slide', { current: slide.position === 0 }]">
             <template v-if="slide.media.type === 'image'">
               <img class="mobile-detail-preview-image" :src="previewMedia(slide.media.src)" :alt="`${masonryDetailPost.author} 的第 ${slide.index + 1} 张图片`" :loading="slide.position === 0 ? 'eager' : 'lazy'" decoding="async" :fetchpriority="slide.position === 0 ? 'high' : 'low'" @click="slide.position === 0 && openMobileDetailImage()">
-              <img class="mobile-detail-original-image" :class="{ loaded: mobileDetailOriginalLoaded[slide.media.key] }" :src="mobileDetailOriginalSource(slide.media)" alt="" aria-hidden="true" decoding="async" draggable="false" @load="markMobileDetailOriginalLoaded(slide.media.key)">
+              <img class="mobile-detail-original-image" :class="{ loaded: mobileDetailOriginalLoaded[slide.media.key] }" :src="mobileDetailOriginalSource(slide.media)" alt="" aria-hidden="true" decoding="async" draggable="false" @load="markMobileDetailOriginalLoaded(slide.media.key, $event)" @error="mobileDetailOriginalFailed[slide.media.key] = true">
+              <ImageLoadRing v-if="!mobileDetailOriginalLoaded[slide.media.key] && slide.position === 0" :failed="mobileDetailOriginalFailed[slide.media.key]" @retry="retryDetailOriginal(slide.media.key, $event)" />
             </template>
             <video v-else :src="slide.media.src" :poster="slide.media.poster ? previewMedia(slide.media.poster) : undefined" :controls="slide.position === 0" playsinline :autoplay="slide.position === 0" muted :preload="slide.position === 0 ? 'metadata' : 'none'" @loadedmetadata="slide.position === 0 && setPostVideoRatio(masonryDetailPost, $event)"></video>
           </div>
@@ -4943,16 +4962,21 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
               <template v-if="slide.position === 0">
                 <div :class="['mobile-lightbox-media-frame', { dragging: lightbox.dragging, 'zoom-animating': lightboxZoomAnimating, 'original-size': !lightbox.fit }]" :style="{ transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) rotate(${lightbox.rotation}deg) scale(${lightbox.scale})` }">
                   <img class="mobile-lightbox-preview" :src="previewMedia(slide.media)" :alt="`${lightbox.author} 的动态图片 ${slide.index + 1}`" decoding="async" draggable="false">
-                  <img ref="lightboxImageElement" class="mobile-lightbox-original" :src="slide.media" :alt="`${lightbox.author} 的动态图片 ${slide.index + 1}`" :class="{ 'original-loaded': lightboxOriginalLoaded }" decoding="async" fetchpriority="high" draggable="false" @load="handleLightboxImageLoad">
+                  <img ref="lightboxImageElement" class="mobile-lightbox-original" :src="slide.media" :alt="`${lightbox.author} 的动态图片 ${slide.index + 1}`" :class="{ 'original-loaded': lightboxOriginalLoaded }" decoding="async" fetchpriority="high" draggable="false" @load="handleLightboxImageLoad" @error="lightboxOriginalFailed = true">
                 </div>
+                <ImageLoadRing v-if="!lightboxOriginalLoaded" :failed="lightboxOriginalFailed" @retry="retryLightboxOriginal" />
               </template>
               <img v-else :src="slide.source" alt="" draggable="false">
             </div>
           </div>
           <div :class="['mobile-lightbox-dots', { visible: mobileLightboxDotsVisible }]" aria-hidden="true"><i v-for="(_, index) in lightbox.media" :key="index" :class="{ active: index === lightbox.index }"></i></div>
         </figure>
-        <figure v-else :key="`${lightbox.media[lightbox.index]}:${lightbox.motion}`" @click.self="closeLightbox">
-          <img ref="lightboxImageElement" :src="lightboxDisplaySource" :alt="`${lightbox.author} 的动态图片 ${lightbox.index + 1}`" :class="{ dragging: lightbox.dragging, 'original-size': !lightbox.fit, 'original-loaded': lightboxOriginalLoaded }" :style="{ transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) rotate(${lightbox.rotation}deg) scale(${lightbox.scale})` }" draggable="false" @click.stop @pointerdown.prevent.stop="startLightboxGesture" @pointermove.prevent.stop="moveLightboxGesture" @pointerup.prevent.stop="stopLightboxGesture" @pointercancel.prevent.stop="stopLightboxGesture" @load="handleLightboxImageLoad">
+        <figure v-else :key="lightbox.media[lightbox.index]" @click.self="closeLightbox">
+          <div class="desktop-lightbox-media-frame" :class="{ dragging: lightbox.dragging }" :style="{ transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) rotate(${lightbox.rotation}deg) scale(${lightbox.scale})`, width: !lightbox.fit && lightboxNaturalSize.width ? `${lightboxNaturalSize.width}px` : undefined, height: !lightbox.fit && lightboxNaturalSize.height ? `${lightboxNaturalSize.height}px` : undefined }" @click.stop @pointerdown.prevent.stop="startLightboxGesture" @pointermove.prevent.stop="moveLightboxGesture" @pointerup.prevent.stop="stopLightboxGesture" @pointercancel.prevent.stop="stopLightboxGesture">
+            <img class="desktop-lightbox-preview" :src="lightboxDisplaySource" alt="" draggable="false">
+            <img ref="lightboxImageElement" class="desktop-lightbox-original" :src="lightbox.media[lightbox.index]" :alt="`${lightbox.author} 的动态图片 ${lightbox.index + 1}`" :class="{ 'original-loaded': lightboxOriginalLoaded }" decoding="async" draggable="false" @load="handleLightboxImageLoad" @error="lightboxOriginalFailed = true">
+          </div>
+          <ImageLoadRing v-if="!lightboxOriginalLoaded" :failed="lightboxOriginalFailed" @retry="retryLightboxOriginal" />
         </figure>
       </div>
       <div v-if="!phonePortrait" class="lightbox-dock-zone" @pointerenter="showLightboxDock(false)" @pointermove="showLightboxDock(false)" @pointerleave="scheduleLightboxDockHide(1650)">
@@ -4964,7 +4988,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
         <button type="button" title="缩小" aria-label="缩小" @click="zoomLightboxBy(-0.15)"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M8 11h6M16 16l5 5"/></svg></button>
         <span class="lightbox-scale">{{ lightboxScalePercent }}%</span>
         <button type="button" title="放大" aria-label="放大" @click="zoomLightboxBy(0.15)"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M8 11h6M11 8v6M16 16l5 5"/></svg></button>
-        <button type="button" :title="lightbox.fit ? '原始尺寸' : '适应页面'" :aria-label="lightbox.fit ? '原始尺寸' : '适应页面'" :class="{ active: !lightbox.fit }" @click="toggleLightboxFit">
+        <button type="button" :title="lightbox.fit ? '原始尺寸' : '适应页面'" :aria-label="lightbox.fit ? '原始尺寸' : '适应页面'" :class="{ active: !lightbox.fit }" :disabled="!lightboxOriginalLoaded" @click="toggleLightboxFit">
           <span v-if="lightbox.fit" class="lightbox-tool-mask lightbox-original-size-symbol" :style="{ '--lightbox-tool-mask': `url(${originalSizeIcon})` }" aria-hidden="true"></span>
           <svg v-else class="lightbox-fit-symbol" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H6a2 2 0 0 0-2 2v2M16 4h2a2 2 0 0 1 2 2v2M8 20H6a2 2 0 0 1-2-2v-2M16 20h2a2 2 0 0 0 2-2v-2"/><rect x="8" y="8" width="8" height="8" rx="2.2"/></svg>
         </button>

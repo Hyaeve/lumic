@@ -82,6 +82,11 @@ a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color
 .mobile-lightbox-media-frame :is(.mobile-lightbox-preview, .mobile-lightbox-original) { position: absolute; inset: 0; z-index: 0; display: block; width: 100%!important; height: 100%!important; max-width: 100%; max-height: 100%; margin: 0; object-fit: contain; object-position: center; backface-visibility: hidden; transform: translateZ(0); }
 .mobile-lightbox-media-frame .mobile-lightbox-original { z-index: 1!important; opacity: 0; pointer-events: none; }
 .mobile-lightbox-original.original-loaded { opacity: 1; }
+.desktop-lightbox-media-frame { position: relative; width: min(1180px, 92vw); height: calc(100dvh - 142px); transform-origin: center; transition: transform .3s cubic-bezier(.18,.84,.22,1); }
+.desktop-lightbox-media-frame.dragging { transition: none; }
+.lightbox-layer .desktop-lightbox-media-frame img { position: absolute; inset: 0; width: 100%; height: 100%; max-width: none; max-height: none; object-fit: contain; }
+.desktop-lightbox-original { opacity: 0; transition: opacity .2s ease!important; }
+.desktop-lightbox-original.original-loaded { opacity: 1; }
 .phone-ui .masonry-card { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .ios-native-image-menu .mobile-lightbox-media-frame img { -webkit-touch-callout: default; }
 .ios-native-image-menu .mobile-lightbox-original { pointer-events: auto; }
