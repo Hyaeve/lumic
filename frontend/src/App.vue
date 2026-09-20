@@ -2945,7 +2945,8 @@ watch(() => masonryDetailPost.value?.id, () => {
 async function moveDesktopDetailMedia(direction) {
   const count = desktopDetailMedia.value.length
   if (count < 2) return
-  const target = Math.max(0, Math.min(count - 1, (desktopDetailRequestedIndex ?? desktopDetailIndex.value) + direction))
+  const step = direction > 0 ? 1 : -1
+  const target = ((desktopDetailRequestedIndex ?? desktopDetailIndex.value) + step + count) % count
   const token = ++desktopDetailLoadVersion
   desktopDetailRequestedIndex = target
   const media = desktopDetailMedia.value[target]
@@ -2959,7 +2960,7 @@ async function moveDesktopDetailMedia(direction) {
     }
   }
   if (token !== desktopDetailLoadVersion) return
-  desktopDetailDirection.value = target >= desktopDetailIndex.value ? 1 : -1
+  desktopDetailDirection.value = step
   desktopDetailIndex.value = target
   desktopDetailRequestedIndex = null
 }
@@ -4983,8 +4984,8 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
             <div v-else class="desktop-detail-no-media">暂无图片</div>
           </Transition>
           <template v-if="desktopDetailMedia.length > 1">
-            <button class="desktop-gallery-nav previous" type="button" :disabled="desktopDetailIndex === 0" aria-label="上一张" @click="moveDesktopDetailMedia(-1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 5-7 7 7 7"/></svg></button>
-            <button class="desktop-gallery-nav next" type="button" :disabled="desktopDetailIndex === desktopDetailMedia.length - 1" aria-label="下一张" @click="moveDesktopDetailMedia(1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"/></svg></button>
+            <button class="desktop-gallery-nav previous" type="button" aria-label="上一张" @click="moveDesktopDetailMedia(-1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 5-7 7 7 7"/></svg></button>
+            <button class="desktop-gallery-nav next" type="button" aria-label="下一张" @click="moveDesktopDetailMedia(1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"/></svg></button>
             <span class="desktop-gallery-count">{{ desktopDetailIndex + 1 }} / {{ desktopDetailMedia.length }}</span>
           </template>
         </section>
