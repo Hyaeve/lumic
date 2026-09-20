@@ -755,6 +755,7 @@ const phoneOverlayKey = computed(() => {
   if (contextMenu.value.open) return 'context-menu'
   if (mobileMenuOpen.value) return 'mobile-menu'
   if (mobileSourcesOpen.value) return 'mobile-sources'
+  if (selectionMode.value) return 'selection'
   return ''
 })
 const visiblePosts = computed(() => filteredPosts.value.slice(timelineStart.value, timelineEnd.value))
@@ -2590,6 +2591,10 @@ function handleGlobalKeydown(event) {
     credentialPlatform.value = null
     return
   }
+  if (selectionMode.value && !confirmDialog.value.open && event.key === 'Escape') {
+    stopSelection()
+    return
+  }
   if (!confirmDialog.value.open) return
   if (event.key === 'Escape') closeConfirmDialog(false)
   if (event.key === 'Enter') closeConfirmDialog(true)
@@ -2666,7 +2671,16 @@ function dismissPhoneOverlay(kind = phoneOverlayKey.value) {
   else if (kind === 'context-menu') closeContextMenu()
   else if (kind === 'mobile-menu') mobileMenuOpen.value = false
   else if (kind === 'mobile-sources') mobileSourcesOpen.value = false
-  nextTick(() => { phoneOverlayDismissInProgress = false })
+  else if (kind === 'selection') stopSelection()
+  nextTick(() => {
+    phoneOverlayDismissInProgress = false
+    // A system return can dismiss a confirmation above selection. Re-arm the
+    // remaining selection layer so the next return stays on the same feed.
+    if (phonePortrait.value && phoneOverlayKey.value === 'selection' && !phoneOverlayHistoryActive) {
+      window.history.pushState({ ...(window.history.state || {}), lumicOverlay: 'selection' }, '', window.location.href)
+      phoneOverlayHistoryActive = 'selection'
+    }
+  })
 }
 function togglePostSelection(post) {
   selectedPostIds.value = selectedPostIds.value.includes(post.id) ? selectedPostIds.value.filter(id => id !== post.id) : [...selectedPostIds.value, post.id]
