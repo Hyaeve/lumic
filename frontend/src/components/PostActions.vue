@@ -1,6 +1,6 @@
 <script setup>
 import { ref, watch, nextTick, onUnmounted } from 'vue'
-import { Pencil, ArrowLeft, ArrowRight, X, Plus, Check } from '@lucide/vue'
+import { Pencil, ArrowLeft, ArrowRight, X, Plus } from '@lucide/vue'
 import deleteIcon from '../../icon/删除.png'
 const props = defineProps({ post: Object, icon: String })
 const emit = defineEmits(['saved', 'delete', 'overlay'])
@@ -16,7 +16,7 @@ const upload = ref(null)
 let replaceIndex = -1
 function toggleMenu() {
   const rect = trigger.value.getBoundingClientRect()
-  menuStyle.value = { left: `${Math.max(12, Math.min(innerWidth - 162, rect.right - 150))}px`, top: `${Math.min(innerHeight - 160, rect.bottom + 8)}px` }
+  menuStyle.value = { left: `${Math.max(12, Math.min(innerWidth - 124, rect.right - 112))}px`, top: `${Math.max(12, Math.min(innerHeight - 108, rect.bottom + 8))}px` }
   menu.value = !menu.value
 }
 watch([menu, editing], () => {
@@ -106,14 +106,12 @@ onUnmounted(() => { cleanup(); if (menu.value || editing.value) emit('overlay', 
 
 <template>
   <span class="post-actions" @click.stop @touchstart.stop @touchend.stop>
-    <button v-if="!editing" ref="trigger" type="button" class="post-platform-action" aria-label="动态操作" :aria-expanded="menu" @click="toggleMenu"><img :src="icon" alt=""></button>
-    <span v-else class="post-edit-actions"><button type="button" aria-label="取消编辑" :disabled="busy" @click="cancel"><X :size="22" /></button><button type="button" aria-label="保存动态" :disabled="busy" @click="save"><Check :size="22" /></button></span>
+    <button ref="trigger" type="button" class="post-platform-action" aria-label="动态操作" :aria-expanded="menu" @click="!editing && toggleMenu()"><img :src="icon" alt=""></button>
     <Teleport to="body">
       <div v-if="menu" class="post-actions-scrim" @click.self="menu = false" @keydown="onKey">
         <div class="post-action-menu" :style="menuStyle" role="menu" aria-label="动态操作">
           <button type="button" role="menuitem" @click="edit"><Pencil :size="21" aria-hidden="true" />编辑</button>
           <button type="button" role="menuitem" @click="menu = false; emit('delete', post)"><span class="post-delete-symbol" :style="{'--delete-icon': `url(${deleteIcon})`}" aria-hidden="true"></span>删除</button>
-          <button type="button" role="menuitem" @click="menu = false">取消</button>
         </div>
       </div>
       <div v-if="editing" class="post-editor-backdrop" @click.self="cancel" @keydown="onKey" @wheel.stop @touchstart.stop @touchmove.stop @touchend.stop>
@@ -141,8 +139,9 @@ onUnmounted(() => { cleanup(); if (menu.value || editing.value) emit('overlay', 
 .post-actions-scrim, .post-editor-backdrop { --editor-ink: #303641; --editor-surface: #fff; position: fixed; inset: 0; z-index: 115; background: #0004; display: grid; place-items: center; padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom)); color: var(--editor-ink); }
 html[data-theme="dark"] :is(.post-actions-scrim, .post-editor-backdrop) { --editor-ink: #e4e8f2; --editor-surface: #1b1e26; }
 .post-action-menu, .post-editor { background: var(--editor-surface); box-shadow: 0 18px 70px #0004; border-radius: 16px; }
-.post-action-menu { position: absolute; padding: 6px; width: 150px; }
-.post-action-menu button { display: flex; gap: 12px; align-items: center; width: 100%; min-height: 44px; background: transparent; color: inherit; border-radius: 10px; padding: 8px 14px; }
+.post-action-menu { position: absolute; padding: 4px; width: 112px; background: #ffffffa6; backdrop-filter: blur(18px) saturate(130%); -webkit-backdrop-filter: blur(18px) saturate(130%); border: 1px solid #ffffff30; border-radius: 12px; }
+html[data-theme="dark"] .post-action-menu { background: #20242ca6; }
+.post-action-menu button { display: flex; gap: 9px; align-items: center; width: 100%; min-height: 44px; background: transparent; color: inherit; border-radius: 8px; padding: 8px 12px; font-size: 14px; }
 .post-action-menu button:hover, .post-edit-actions button:hover { background: #8a8dd322; }
 .post-delete-symbol { width: 21px; height: 21px; background: currentColor; mask: var(--delete-icon) center / contain no-repeat; }
 .edit-symbol { width: 21px; font-size: 23px; }

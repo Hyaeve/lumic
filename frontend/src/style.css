@@ -600,7 +600,20 @@ body, button, input, textarea, select { font-size: 14px; }
 .timeline-context-menu svg, .selection-dock svg { width: 19px; height: 19px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .action-icon-mask { display: block; width: 19px; height: 19px; flex: none; background: currentColor; -webkit-mask: var(--action-icon-mask) center / contain no-repeat; mask: var(--action-icon-mask) center / contain no-repeat; }
 .selection-dock { position: fixed; right: 28px; bottom: 27px; z-index: 35; display: flex; align-items: center; gap: 11px; min-height: 50px; padding: 6px 7px 6px 15px; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 9px; box-shadow: 0 14px 34px #26342d2b; animation: selection-dock-in .18s ease-out; }
-.selection-dock > span { min-width: 82px; color: var(--muted); font-size: 11px; white-space: nowrap; }
+.app-shell .selection-dock { gap: 8px; padding: 5px; border: 1px solid #ffffff24; border-radius: 12px; background: #ffffffa6; backdrop-filter: blur(18px) saturate(130%); -webkit-backdrop-filter: blur(18px) saturate(130%); }
+.app-shell.dark .selection-dock { background: #20242ca6; }
+.app-shell .timeline-context-menu { width: max-content; min-width: 106px; padding: 4px; border-radius: 12px; background: #ffffffa6; backdrop-filter: blur(18px) saturate(130%); -webkit-backdrop-filter: blur(18px) saturate(130%); }
+.app-shell.dark .timeline-context-menu { background: #20242ca6; }
+.app-shell .selection-dock button { width: 44px; height: 44px; padding: 0; border: 0; border-radius: 8px; color: var(--ink); background: transparent; }
+.app-shell .selection-dock button:hover, .app-shell .selection-dock button[aria-pressed="true"] { background: #8b98dd30; color: #758be5; }
+.app-shell .selection-dock .selection-delete-button { color: #d4777d; }
+.app-shell .selection-dock svg, .app-shell .selection-dock .action-icon-mask { width: 23px; height: 23px; }
+.app-shell :is(.post-card, .masonry-card).selectable:not(.selected) { filter: grayscale(1); opacity: .64; }
+.app-shell :is(.post-card, .masonry-card).selectable.selected { filter: none; opacity: 1; outline: 2px solid #8999e5; outline-offset: -2px; box-shadow: 0 0 16px #8798df38; }
+.confirm-dialog.compact { width: min(300px, calc(100vw - 40px)); padding: 20px; }
+.confirm-dialog.compact .confirm-dialog-icon, .confirm-dialog.compact .eyebrow { display: none; }
+.confirm-dialog.compact h3 { font-size: 18px; }
+.confirm-dialog.compact .confirm-dialog-content > p { margin: 9px 0 18px; }
 .selection-cancel-button, .selection-select-all-button, .selection-delete-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 38px; padding: 0 10px; border-radius: 6px; }
 .selection-cancel-button { width: 38px; padding: 0; color: var(--muted); background: transparent; }
 .selection-cancel-button:hover { background: #edf3ee; }
@@ -2092,6 +2105,9 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
 .mobile-post-media-slide > .mobile-detail-preview-image { position: relative; z-index: 1; }
 .mobile-post-media-slide > .mobile-detail-original-image { position: absolute; inset: 0; z-index: 2; width: 100%; height: 100%; max-height: none; object-fit: contain; opacity: 0; pointer-events: none; transition: opacity .34s cubic-bezier(.22,.72,.2,1); }
 .mobile-post-media-slide > .mobile-detail-original-image.loaded { opacity: 1; }
+.mobile-post-media-stage:not(.video-media) .mobile-post-media-track,
+.mobile-post-media-stage:not(.video-media) .mobile-post-media-slide { height: 100%; min-height: 0; }
+.mobile-post-media-stage:not(.video-media) .mobile-detail-preview-image { height: 100%; min-height: 0; }
 .mobile-post-media-slide.current > img { cursor: zoom-in; }
 .mobile-post-media-slide > video { height: 100%; min-height: 240px; }
 .mobile-post-media-dots { position: absolute; right: 0; bottom: 9px; left: 0; display: flex; justify-content: center; gap: 5px; pointer-events: none; }

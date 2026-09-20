@@ -4,6 +4,8 @@ import { capturePageSnapshot } from './pageSnapshot'
 import PageSnapshot from './components/PageSnapshot.vue'
 import PostActions from './components/PostActions.vue'
 import ImageLoadRing from './components/ImageLoadRing.vue'
+import DetailImage from './components/DetailImage.vue'
+import { ListChecks } from '@lucide/vue'
 import QRCode from 'qrcode'
 import { createPostPager, postQueryKey } from './postPager'
 import { resistVerticalSwipe, shouldCommitVerticalSwipe, verticalSettleDuration, verticalSwipeEasing, verticalReboundEasing } from './verticalSwipe'
@@ -37,7 +39,6 @@ import closeLightboxIcon from '../icon/取消.png'
 import visitPostIcon from '../icon/访问.png'
 import scrollTopIcon from '../icon/回到顶部.png'
 import deleteIcon from '../icon/删除.png'
-import selectAllIcon from '../icon/全选.png'
 
 const authenticated = ref(false)
 const sessionChecked = ref(false)
@@ -159,6 +160,7 @@ const masonryViewportTop = ref(0)
 const masonryViewportBottom = ref(900)
 const masonryDetailPost = ref(null)
 const mobileDetailIndex = ref(0)
+const mobileDetailCarouselPosition = ref(0)
 const mobileDetailDragX = ref(0)
 const mobileDetailTrackShift = ref(0)
 const mobileDetailDragging = ref(false)
@@ -224,10 +226,6 @@ const lightboxDisplaySource = ref('')
 const lightboxOriginalLoaded = ref(false)
 const lightboxOriginalFailed = ref(false)
 const lightboxNaturalSize = ref({ width: 0, height: 0 })
-const mobileDetailOriginalFailed = ref({})
-// Mobile detail pages keep the preview mounted while the full-resolution image
-// loads over it, preventing a layout flash or a jump when the source changes.
-const mobileDetailOriginalLoaded = ref({})
 const mobileLightboxDragX = ref(0)
 const mobileLightboxTrackShift = ref(0)
 const mobileLightboxDragging = ref(false)
@@ -1734,17 +1732,23 @@ async function syncSource(feed, full = false) {
     if (result.status !== 'failed') void loadPostsIncrementally()
   } catch (error) { settingsError.value = error.message } finally { sourceActionBusy.value = '' }
 }
-function closeConfirmDialog(result = false) {
+async function closeConfirmDialog(result = false) {
   confirmDialog.value.open = false
   if (confirmResolver) {
     const resolve = confirmResolver
     confirmResolver = null
+    // Wait for the overlay's history entry to leave before a confirmed action
+    // can replace the underlying detail route (notably with fast local APIs).
+    await nextTick()
+    if (phoneOverlayHistoryClosing) {
+      await new Promise(done => window.addEventListener('popstate', done, { once: true }))
+    }
     resolve(result)
   }
 }
-function askConfirm({ title, message, confirmText = '确认', cancelText = '取消', tone = 'danger' }) {
+function askConfirm({ title, message, confirmText = '确认', cancelText = '取消', tone = 'danger', compact = false }) {
   if (confirmResolver) closeConfirmDialog(false)
-  confirmDialog.value = { open: true, title, message, confirmText, cancelText, tone }
+  confirmDialog.value = { open: true, title, message, confirmText, cancelText, tone, compact }
   return new Promise(resolve => { confirmResolver = resolve })
 }
 function clearMobileLightboxAnimation() {
@@ -2607,18 +2611,29 @@ async function deleteSource(feed) {
   } catch (error) { settingsError.value = error.message } finally { sourceActionBusy.value = '' }
 }
 async function deletePost(post) {
-  const summary = post.caption?.trim() ? `“${post.caption.trim().slice(0, 36)}${post.caption.trim().length > 36 ? '…' : ''}”` : '这条动态'
   const confirmed = await askConfirm({
-    title: '删除动态',
-    message: `确定删除 ${post.author} 的${summary}吗？该操作会同时删除时间线记录及已下载到 /flow 的关联媒体文件。`,
-    confirmText: '删除动态'
+    title: '删除这条动态？',
+    message: '删除后无法恢复。',
+    confirmText: '删除',
+    compact: true
   })
   if (!confirmed) return
   postActionBusy.value = post.id; timelineMessage.value = ''
   try {
     const response = await fetch(`/api/posts?id=${encodeURIComponent(post.id)}`, { method: 'DELETE' })
     if (!response.ok) throw new Error(await responseError(response, '删除动态失败'))
-    if (masonryDetailPost.value?.id === post.id) closePostDetail()
+    if (masonryDetailPost.value?.id === post.id) {
+      const timeline = filteredPosts.value
+      const index = timeline.findIndex(item => item.id === post.id)
+      const next = timeline[index + 1] || timeline[index - 1]
+      if (next) {
+        if (phonePortrait.value) switchMobileDetailPost(next, 1)
+        else {
+          masonryDetailPost.value = next
+          desktopDetailIndex.value = 0
+        }
+      } else closePostDetail()
+    }
     posts.value = posts.value.filter(item => item.id !== post.id)
     void refreshFeedMetadata()
     timelineMessage.value = '动态已从时间线删除'
@@ -2667,6 +2682,10 @@ function handlePostSelectionClick(event, post) {
   togglePostSelection(post)
 }
 function stopSelection() { selectionMode.value = false; selectionAction.value = 'delete'; selectedPostIds.value = [] }
+function dismissSelectionOutside(event) {
+  if (!selectionMode.value || performance.now() < masonryLongPressSuppressUntil) return
+  if (!event.target.closest('.post-card, .masonry-card, .selection-dock, .confirm-dialog-layer, .timeline-context-menu')) stopSelection()
+}
 function closeContextMenu() { contextMenu.value = { open: false, x: 0, y: 0, post: null } }
 function openContextMenu(event, post = null) {
   if (phonePortrait.value && timelineView.value === 'masonry' && post) {
@@ -2745,7 +2764,7 @@ async function unfavoriteContextPost() {
 }
 async function deleteSelectedPosts() {
   if (!selectedPostCount.value) return
-  const confirmed = await askConfirm({ title: '批量删除动态', message: `确定永久删除选中的 ${selectedPostCount.value} 条动态吗？关联媒体文件也会一并删除。`, confirmText: '删除所选动态' })
+  const confirmed = await askConfirm({ title: `删除 ${selectedPostCount.value} 条动态？`, message: '删除后无法恢复。', confirmText: '删除', compact: true })
   if (!confirmed) return
   postActionBusy.value = 'batch-delete'
   try {
@@ -2962,8 +2981,6 @@ function openMasonryPost(post, event, options = {}) {
   mobileMenuOpen.value = false
   mobileSourcesOpen.value = false
   masonryDetailPost.value = post
-  mobileDetailOriginalLoaded.value = {}
-  mobileDetailOriginalFailed.value = {}
   mobileDetailIndex.value = 0
   resetMobileDetailTrack()
   if (phonePortrait.value) {
@@ -3005,23 +3022,6 @@ function openMasonryPost(post, event, options = {}) {
 function mobileDetailOriginalSource(media) {
   const source = String(media?.src || media || '')
   return source
-}
-async function markMobileDetailOriginalLoaded(key, event) {
-  const image = event.target
-  try { await image.decode() } catch {
-    if (image.isConnected) mobileDetailOriginalFailed.value = { ...mobileDetailOriginalFailed.value, [key]: true }
-    return
-  }
-  if (!image.isConnected) return
-  mobileDetailOriginalLoaded.value = { ...mobileDetailOriginalLoaded.value, [key]: true }
-}
-function retryDetailOriginal(key, event) {
-  mobileDetailOriginalFailed.value = { ...mobileDetailOriginalFailed.value, [key]: false }
-  const image = event.target.closest('.mobile-post-media-slide')?.querySelector('.mobile-detail-original-image')
-  if (!image) return
-  const source = image.src
-  image.removeAttribute('src')
-  image.src = source
 }
 function preloadMobileDetailOriginals(post) {
   const media = postDetailMedia(post).filter(item => item.type === 'image')
@@ -3258,6 +3258,7 @@ function finishMobileDetailTransition(commit = true) {
   mobileDetailTrackShift.value = 0
   if (commit && transition && mobileDetailMedia.value.length > 1) {
     const count = mobileDetailMedia.value.length
+    mobileDetailCarouselPosition.value += transition.step
     mobileDetailIndex.value = transition.targetIndex == null
       ? (mobileDetailIndex.value + transition.step + count) % count
       : transition.targetIndex
@@ -3266,6 +3267,7 @@ function finishMobileDetailTransition(commit = true) {
 }
 function resetMobileDetailTrack() {
   clearMobileDetailAnimation()
+  mobileDetailCarouselPosition.value = 0
   mobileDetailPointers.clear()
   mobileDetailTwoFinger = null
   mobileDetailDragX.value = 0
@@ -4562,7 +4564,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
       </form>
     </div>
   </div>
-  <div v-else class="app-shell" :class="{ dark: isDark, 'lightbox-active': lightbox.open, 'lightbox-closing': lightboxClosing, 'phone-ui': phonePortrait, 'timeline-search-focused': timelineSearchFocused, 'mobile-page-switching': mobilePageSwitching }" @click="showBrandMenu = false">
+  <div v-else class="app-shell" :class="{ dark: isDark, 'lightbox-active': lightbox.open, 'lightbox-closing': lightboxClosing, 'phone-ui': phonePortrait, 'timeline-search-focused': timelineSearchFocused, 'mobile-page-switching': mobilePageSwitching }" @click.capture="dismissSelectionOutside" @click="showBrandMenu = false">
     <button v-if="phonePortrait && !lightbox.open && !masonryDetailPost" class="mobile-timeline-toggle mobile-frosted-control" type="button" :class="{ open: mobileSourcesOpen, active: mobileAtAllTimeline, 'icon-switching': mobileTimelineIconSwitching, 'mobile-control-hidden': !mobileControlsVisible && !mobileSourcesOpen }" :aria-expanded="mobileSourcesOpen" :title="mobileSourcesOpen ? `收起${mobileTimelineTitle}栏目` : `展开${mobileTimelineTitle}栏目`" :aria-label="mobileSourcesOpen ? `收起${mobileTimelineTitle}栏目` : `展开${mobileTimelineTitle}栏目`" @pointerdown.stop @click.stop="showMobileControls(); toggleMobileTimelineShortcut()">
       <span v-if="mobileTimelineMeta" class="mobile-platform-mask" :style="{ '--mobile-platform-mask': `url(${mobileTimelineMeta.lineImage})` }" aria-hidden="true"></span>
       <span v-else class="nav-line-symbol nav-mask-symbol" :style="{ '--nav-mask': `url(${timelineNavIcon})` }" aria-hidden="true"></span>
@@ -4880,14 +4882,10 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
         <button class="mobile-post-author" type="button" @click="openAuthor(masonryDetailPost)"><img :src="postAvatar(masonryDetailPost)" data-fallback-index="0" :alt="masonryDetailPost.author" referrerpolicy="no-referrer" @error="handlePostAvatarError($event, masonryDetailPost)"><strong>{{ masonryDetailPost.author }}</strong></button>
         <PostActions :post="masonryDetailPost" :icon="sourceIconFor(masonryDetailPost.source)" @saved="applyEditedPost" @delete="deletePost" @overlay="postActionOverlay = $event" />
       </header>
-      <section v-if="mobileDetailCurrentMedia" :class="['mobile-post-media-stage', { 'video-media': mobileDetailCurrentMedia.type === 'video' }, mobileDetailCurrentMedia.type === 'video' ? postVideoFrameClass(masonryDetailPost) : '']" :style="mobileDetailCurrentMedia.type === 'video' ? postVideoFrameStyle(masonryDetailPost) : undefined" @touchstart="beginMobileDetailTouch" @touchmove="updateMobileDetailTouch" @touchend="finishMobileDetailTouch" @touchcancel="finishMobileDetailTouch" @pointerdown="beginMobileDetailSwipe" @pointermove="updateMobileDetailSwipe" @pointerup="finishMobileDetailSwipe" @pointercancel="cancelMobileDetailSwipe">
+      <section v-if="mobileDetailCurrentMedia" :class="['mobile-post-media-stage', { 'video-media': mobileDetailCurrentMedia.type === 'video' }, mobileDetailCurrentMedia.type === 'video' ? postVideoFrameClass(masonryDetailPost) : '']" :style="mobileDetailCurrentMedia.type === 'video' ? postVideoFrameStyle(masonryDetailPost) : { height: `clamp(240px, ${100 / (mediaRatios[`${masonryDetailPost.id}:0`] || 1)}vw, 72dvh)` }" @touchstart="beginMobileDetailTouch" @touchmove="updateMobileDetailTouch" @touchend="finishMobileDetailTouch" @touchcancel="finishMobileDetailTouch" @pointerdown="beginMobileDetailSwipe" @pointermove="updateMobileDetailSwipe" @pointerup="finishMobileDetailSwipe" @pointercancel="cancelMobileDetailSwipe">
         <div class="mobile-post-media-track" :style="mobileDetailTrackStyle">
-          <div v-for="slide in mobileDetailSlides" :key="`${slide.position}:${slide.media.key}`" :class="['mobile-post-media-slide', { current: slide.position === 0 }]">
-            <template v-if="slide.media.type === 'image'">
-              <img class="mobile-detail-preview-image" :src="previewMedia(slide.media.src)" :alt="`${masonryDetailPost.author} 的第 ${slide.index + 1} 张图片`" :loading="slide.position === 0 ? 'eager' : 'lazy'" decoding="async" :fetchpriority="slide.position === 0 ? 'high' : 'low'" @click="slide.position === 0 && openMobileDetailImage()">
-              <img class="mobile-detail-original-image" :class="{ loaded: mobileDetailOriginalLoaded[slide.media.key] }" :src="mobileDetailOriginalSource(slide.media)" alt="" aria-hidden="true" decoding="async" draggable="false" @load="markMobileDetailOriginalLoaded(slide.media.key, $event)" @error="mobileDetailOriginalFailed[slide.media.key] = true">
-              <ImageLoadRing v-if="!mobileDetailOriginalLoaded[slide.media.key] && slide.position === 0" :failed="mobileDetailOriginalFailed[slide.media.key]" @retry="retryDetailOriginal(slide.media.key, $event)" />
-            </template>
+          <div v-for="slide in mobileDetailSlides" :key="mobileDetailMedia.length === 2 ? `${slide.media.key}:${mobileDetailCarouselPosition + slide.position}` : slide.media.key" :class="['mobile-post-media-slide', { current: slide.position === 0 }]">
+            <DetailImage v-if="slide.media.type === 'image'" :source="mobileDetailOriginalSource(slide.media)" :preview="previewMedia(slide.media.src)" :alt="`${masonryDetailPost.author} 的第 ${slide.index + 1} 张图片`" @open="slide.position === 0 && openMobileDetailImage()" />
             <video v-else :src="slide.media.src" :poster="slide.media.poster ? previewMedia(slide.media.poster) : undefined" :controls="slide.position === 0" playsinline :autoplay="slide.position === 0" muted :preload="slide.position === 0 ? 'metadata' : 'none'" @loadedmetadata="slide.position === 0 && setPostVideoRatio(masonryDetailPost, $event)"></video>
           </div>
         </div>
@@ -4943,11 +4941,8 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
       <button v-else-if="contextMenu.post" type="button" class="danger" role="menuitem" @click="deleteContextPost"><span class="action-icon-mask" :style="{ '--action-icon-mask': `url(${deleteIcon})` }" aria-hidden="true"></span><span>删除</span></button>
     </div>
     <div v-if="selectionMode" class="selection-dock">
-      <button type="button" class="selection-cancel-button" title="取消多选" aria-label="取消多选" @click="stopSelection"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
-      <button type="button" class="selection-select-all-button" :disabled="!loadedSelectionPosts.length" :title="allLoadedPostsSelected ? '取消选择当前已加载动态' : '全选当前已加载动态'" :aria-label="allLoadedPostsSelected ? '取消选择当前已加载动态' : '全选当前已加载动态'" @click="toggleSelectAllLoadedPosts"><span class="action-icon-mask" :style="{ '--action-icon-mask': `url(${selectAllIcon})` }" aria-hidden="true"></span><b>{{ allLoadedPostsSelected ? '取消全选' : '全选' }}</b></button>
-      <span>已选择 {{ selectedPostCount }} 条</span>
-      <button v-if="selectionAction === 'unfavorite'" type="button" class="selection-delete-button selection-unfavorite-button" :disabled="!selectedPostCount || postActionBusy === 'batch-unfavorite'" title="取消收藏所选动态" aria-label="取消收藏所选动态" @click="unfavoriteSelectedPosts"><svg viewBox="0 0 24 24"><path d="M12 20.5S4.5 16.2 4.5 10.2A4.2 4.2 0 0 1 12 7.6a4.2 4.2 0 0 1 7.5 2.6c0 6-7.5 10.3-7.5 10.3Z"/><path d="M8.5 11.5h7"/></svg><b>取消收藏</b></button>
-      <button v-else type="button" class="selection-delete-button" :disabled="!selectedPostCount || postActionBusy === 'batch-delete'" title="删除所选动态" aria-label="删除所选动态" @click="deleteSelectedPosts"><span class="action-icon-mask" :style="{ '--action-icon-mask': `url(${deleteIcon})` }" aria-hidden="true"></span><b>删除</b></button>
+      <button type="button" class="selection-select-all-button" :disabled="!loadedSelectionPosts.length" :aria-pressed="allLoadedPostsSelected" :aria-label="allLoadedPostsSelected ? '取消全选' : '全选当前已加载动态'" @click="toggleSelectAllLoadedPosts"><ListChecks aria-hidden="true" /></button>
+      <button type="button" class="selection-delete-button" :disabled="!selectedPostCount || postActionBusy === 'batch-delete'" aria-label="删除所选动态" @click="deleteSelectedPosts"><span class="action-icon-mask" :style="{ '--action-icon-mask': `url(${deleteIcon})` }" aria-hidden="true"></span></button>
     </div>
     <div v-if="lightbox.open" :class="['lightbox-layer', { closing: lightboxClosing, 'mobile-entering': mobileLightboxEntering, 'mobile-exit-dragging': mobileLightboxExitDragging, 'mobile-gesture-exiting': mobileLightboxExitAnimating }]" :style="phonePortrait ? mobileLightboxLayerStyle : undefined" role="dialog" aria-modal="true" :aria-label="`${lightbox.author} 的动态媒体`" @click.self="closeLightbox" @pointermove="updateDesktopLightboxHover" @pointerleave="clearDesktopLightboxHover" @wheel.prevent="zoomLightbox">
       <div v-if="!phonePortrait" class="lightbox-close-hotspot" @pointerenter="showDesktopLightboxClose" @pointerleave="hideDesktopLightboxClose">
@@ -5219,7 +5214,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
       </div>
     </div>
     <div v-if="confirmDialog.open" class="confirm-dialog-layer" @click.self="closeConfirmDialog(false)">
-      <section class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
+      <section class="confirm-dialog" :class="{ compact: confirmDialog.compact }" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
         <div :class="['confirm-dialog-icon', confirmDialog.tone]">!</div>
         <div class="confirm-dialog-content">
           <p class="eyebrow">PLEASE CONFIRM</p>
