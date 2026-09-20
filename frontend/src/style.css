@@ -2409,7 +2409,7 @@ html.gallery-presenting .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-togg
     content: '';
     position: fixed;
     inset: 0 0 auto;
-    height: env(safe-area-inset-top, 0px);
+    height: calc(env(safe-area-inset-top, 0px) * .65);
     z-index: 61;
     pointer-events: none;
     background: color-mix(in srgb, var(--page-background) 12%, transparent);

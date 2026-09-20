@@ -18,6 +18,9 @@ const progress = ref(0)
 const dragging = ref(false)
 const shift = ref(0)
 const fastSwitch = ref(false)
+const manualSlide = ref(null)
+let manualSlideTimer
+let manualSlideFrame
 const entryHovered = ref(false)
 const entryTop = ref(0)
 const entryLeft = ref(0)
@@ -158,6 +161,9 @@ function settleGesture(cancelled = false, gesture = touch) {
 }
 function closePresentation(options = {}) {
   if (!presenting.value || closing.value) return
+  clearTimeout(manualSlideTimer)
+  cancelAnimationFrame(manualSlideFrame)
+  manualSlide.value = null
   const duration = options.duration ?? 600
   settleDuration.value = duration
   settleEasing.value = options.easing || 'cubic-bezier(.22,.8,.24,1)'
@@ -203,7 +209,7 @@ function scheduleRotation() {
   clearTimeout(timer)
   if (props.loadImages || props.images.length > 1) {
     timer = setTimeout(() => {
-      if (!touch && !dragging.value && !closing.value) void advance(1, false)
+      if (!touch && !dragging.value && !closing.value && !manualSlide.value) void advance(1, false)
       else scheduleRotation()
     }, expanded.value ? (props.mobile ? 10000 : 9000) : 15000)
   }
@@ -226,10 +232,10 @@ async function advance(direction = 1, manual = false) {
   const nextIndex = sequenceIndex + direction
   candidates = candidates.filter(image => image !== current.value)
   const source = sequence[nextIndex] || candidates.shift() || choices[Math.floor(Math.random() * choices.length)] || props.images[0]
-  if (!source || source === current.value) { scheduleRotation(); return }
+  if (!source || source === current.value) { shift.value = 0; scheduleRotation(); return }
   const image = new Image()
   image.src = source
-  try { await image.decode() } catch { if (token === loadVersion) scheduleRotation(); return }
+  try { await image.decode() } catch { if (token === loadVersion) { shift.value = 0; scheduleRotation() } return }
   if (token !== loadVersion) return
   if (nextIndex < 0) {
     sequence.unshift(source)
@@ -241,13 +247,41 @@ async function advance(direction = 1, manual = false) {
   fastSwitch.value = manual
   const next = 1 - active.value
   layers.value[next] = source
+  if (manual && props.mobile && expanded.value) {
+    manualSlide.value = { from: active.value, to: next, direction, offset: shift.value, settling: false }
+    shift.value = 0
+    await nextTick()
+    presentationElement.value?.getBoundingClientRect()
+    manualSlideFrame = requestAnimationFrame(() => {
+      if (manualSlide.value) manualSlide.value = { ...manualSlide.value, settling: true }
+    })
+    manualSlideTimer = setTimeout(() => { manualSlide.value = null }, 300)
+  }
   active.value = next
   current.value = source
   emit('image', source)
   void replenish()
   scheduleRotation()
 }
+function presentationImageStyle(index) {
+  const slide = manualSlide.value
+  if (!slide) return props.mobile && fastSwitch.value ? { opacity: index === active.value ? 1 : 0, transition: 'none' } : undefined
+  const width = window.innerWidth
+  const x = index === slide.to
+    ? (slide.settling ? 0 : slide.direction * width + slide.offset)
+    : (slide.settling ? -slide.direction * width : slide.offset)
+  return {
+    opacity: 1,
+    transform: `translate3d(${x}px,0,0)`,
+    transition: slide.settling ? 'transform 265ms cubic-bezier(.2,.78,.18,1)' : 'none'
+  }
+}
 function onTouchStart(event) {
+  if (manualSlide.value) {
+    clearTimeout(manualSlideTimer)
+    cancelAnimationFrame(manualSlideFrame)
+    manualSlide.value = null
+  }
   clearTimeout(tapTimer)
   if (event.touches.length !== 1) lastTap = null
   if (touch && event.touches.length !== 1) {
@@ -276,7 +310,7 @@ function onTouchMove(event) {
     event.stopPropagation()
     touch.dx = dx
     dragging.value = true
-    shift.value = dx * .3
+    shift.value = Math.max(-window.innerWidth * .82, Math.min(window.innerWidth * .82, dx))
     return
   }
   if (!presenting.value && dy <= 10) { touch = null; return }
@@ -300,8 +334,8 @@ function onTouchEnd(event) {
   const cancelled = event.type === 'touchcancel'
   if (gesture.axis === 'x') {
     dragging.value = false
-    shift.value = 0
     if (!cancelled && Math.abs(gesture.dx) > 55) void advance(gesture.dx < 0 ? 1 : -1, true)
+    else shift.value = 0
     return
   }
   const point = event.changedTouches[0]
@@ -380,6 +414,8 @@ watch(() => `${props.scopeKey || ''}:${props.images.join('|')}`, () => {
   void advance(1)
 }, { immediate: true })
 onBeforeUnmount(() => {
+  clearTimeout(manualSlideTimer)
+  cancelAnimationFrame(manualSlideFrame)
   loadVersion++
   clearTimeout(timer)
   clearTimeout(closeTimer)
@@ -415,7 +451,7 @@ onBeforeUnmount(() => {
   </Teleport>
   <Teleport to="body">
     <section v-if="presenting" ref="presentationElement" class="gallery-presentation" :class="{ expanded, closing, dark, dragging, 'fast-switch': fastSwitch }" :style="presentationStyle" tabindex="-1" role="dialog" aria-modal="true" aria-label="背景图片幻灯片" @wheel.prevent @dblclick="!mobile && openCurrentPost($event)" @touchstart.passive="onTouchStart" @touchmove="onTouchMove" @touchend="onTouchEnd" @touchcancel="onTouchEnd">
-      <div class="gallery-presentation-images" :style="{ transform: `translateX(${shift}px)` }"><img v-for="(image, index) in layers" :key="index" :src="image || undefined" :class="{ active: image && index === active }" alt="" draggable="false"></div>
+      <div class="gallery-presentation-images" :style="{ transform: `translateX(${shift}px)`, transition: manualSlide ? 'none' : undefined }"><img v-for="(image, index) in layers" :key="index" :src="image || undefined" :class="{ active: image && index === active }" :style="presentationImageStyle(index)" alt="" draggable="false"></div>
       <div class="gallery-presentation-tint"></div>
       <div class="gallery-presentation-fade"></div>
       <template v-if="!mobile">

@@ -3280,6 +3280,7 @@ function selectMobileDetailMedia(index) {
   moveMobileDetailMedia(forwardDistance <= backwardDistance ? 1 : -1, index)
 }
 function openMobileDetailImage() {
+  if (lightbox.value.open) return
   if (mobileDetailSwipeClickBlocked || mobileDetailCurrentMedia.value?.type !== 'image') {
     mobileDetailSwipeClickBlocked = false
     return
@@ -3404,6 +3405,7 @@ function beginMobileDetailSwipe(event) {
   const touch = mobileGesturePoint(event)
   if (!touch || !masonryDetailPost.value) return
   if (event.pointerType !== 'touch') return
+  if (mobileDetailPointers.size === 0) mobileDetailSwipeClickBlocked = false
   mobileDetailPointers.set(event.pointerId, { id: event.pointerId, x: touch.clientX, y: touch.clientY })
   if (mobileDetailPointers.size >= 2 && mobileDetailCurrentMedia.value?.type === 'image') {
     const points = [...mobileDetailPointers.values()].slice(0, 2)
@@ -3696,6 +3698,13 @@ function finishMobileDetailPageSwipe(event) {
   const velocityX = (mobileDetailPageTouch.lastX - mobileDetailPageTouch.prevX) / velocityDuration
   const velocityY = (mobileDetailPageTouch.lastY - mobileDetailPageTouch.prevY) / velocityDuration
   mobileDetailPageTouch = null
+  if (!cancelled && touchState.targetIsMedia && !touchState.axis
+    && Math.hypot(dx, dy) <= 10 && event.timeStamp - touchState.time <= 350
+    && mobileDetailCurrentMedia.value?.type === 'image' && !mobileDetailSwipeClickBlocked) {
+    event.preventDefault?.()
+    openMobileDetailImage()
+    return
+  }
   if (touchState.targetIsMedia && horizontal) {
     mobileDetailPageDragging.value = false
     mobileDetailPageAnimating.value = false
