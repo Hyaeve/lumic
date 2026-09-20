@@ -38,6 +38,7 @@ let loadVersion = 0
 let sequence = []
 let sequenceIndex = -1
 let lockedUntil = 0
+let entryHoldUntil = 0
 let mounted = false
 const excludedTarget = target => Boolean(target?.closest('button, a, input, textarea, video, .media-frame, .modal, .lightbox-layer'))
 const presentationStyle = computed(() => {
@@ -53,7 +54,7 @@ const presentationStyle = computed(() => {
     '--gallery-chevron-top': `${entryScreenTop.value + (viewportHeight.value - 64 - entryScreenTop.value) * progress.value}px`,
     '--gallery-chevron-left': `${entryLeft.value}px`,
     '--gallery-chevron-width': `${entryWidth.value}px`,
-    '--gallery-chevron-angle': `${progress.value * 180}deg`
+    '--gallery-chevron-angle': `${(1 - progress.value) * 180}deg`
   }
 })
 function measure() {
@@ -89,7 +90,7 @@ function updateHover(event) {
 }
 function clearHover() {
   if (hoverTimer || !entryHovered.value) return
-  hoverTimer = setTimeout(() => { entryHovered.value = false; hoverTimer = null }, 1000)
+  hoverTimer = setTimeout(() => { entryHovered.value = false; hoverTimer = null }, Math.max(1000, entryHoldUntil - performance.now()))
 }
 function preparePresentation() {
   if (presenting.value) return true
@@ -97,6 +98,7 @@ function preparePresentation() {
   previousFocus = document.activeElement
   clearTimeout(hoverTimer)
   hoverTimer = null
+  entryHoldUntil = 0
   measure()
   const top = host.value.getBoundingClientRect().top
   entryScreenTop.value = entryTop.value + top
@@ -159,7 +161,11 @@ function closePresentation(options = {}) {
   const finish = () => {
     presenting.value = false
     closing.value = false
-    entryHovered.value = false
+    clearTimeout(hoverTimer)
+    hoverTimer = null
+    entryHovered.value = !props.mobile && !options.immediate
+    entryHoldUntil = entryHovered.value ? performance.now() + 2000 : 0
+    if (entryHovered.value) clearHover()
     document.documentElement.classList.remove('gallery-presenting')
     if (host.value) host.value.inert = false
     if (!options.immediate) previousFocus?.focus?.({ preventScroll: true })
@@ -428,6 +434,7 @@ html.gallery-presenting, html.gallery-presenting body { overflow: hidden; oversc
 .gallery-chevron { position: absolute; left: calc(50% - 40px); width: 80px; height: 48px; display: grid; place-items: center; padding: 0; border: 0; background: transparent; color: var(--ink, #fff); z-index: 4; }
 .gallery-chevron svg { width: min(64px, 100%); height: 40px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; animation: gallery-chevron-breathe 2.2s ease-in-out infinite; filter: drop-shadow(0 2px 5px #0005); }
 .gallery-entry-chevron { opacity: 0; pointer-events: none; transition: opacity .65s ease; }
+.gallery-entry-chevron svg { rotate: 180deg; }
 .gallery-entry-chevron.visible, .gallery-entry-chevron:focus-visible { opacity: 1; pointer-events: auto; transition-duration: .35s; }
 .gallery-chevron:focus-visible { outline: 2px solid #a6a0ed; outline-offset: 2px; border-radius: 8px; }
 .gallery-exit-chevron { top: 0; left: var(--gallery-chevron-left); transform: translateY(var(--gallery-chevron-top)); width: var(--gallery-chevron-width); color: #fff; transition: transform .6s cubic-bezier(.32,.05,.2,1); }

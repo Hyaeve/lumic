@@ -2395,6 +2395,10 @@ html.gallery-presenting .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-togg
 
 /* Frost only the real status-bar inset, ending before the floating controls. */
 @supports (-webkit-touch-callout: none) {
+  @media (max-width: 760px) {
+    .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle) { top: calc(env(safe-area-inset-top, 0px) + 12px); }
+    .phone-ui :is(.mobile-source-shortcuts, .sidebar.mobile-open) { top: calc(env(safe-area-inset-top, 0px) + 66px); }
+  }
   html, body { overscroll-behavior-y: none; }
   body, #app { min-height: 100dvh; }
   html::before {
