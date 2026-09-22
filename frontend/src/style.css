@@ -307,6 +307,53 @@ html:has(.credential-modal-backdrop), body:has(.credential-modal-backdrop) { ove
 .credential-config-body .pixiv-browser-form textarea { width: 100%; min-height: 70px; padding: 10px 12px; color: var(--ink); background: #fbfcfb; border: 1px solid var(--line); border-radius: 7px; font: inherit; line-height: 1.45; outline: none; resize: vertical; }
 .dark .credential-config-body .pixiv-browser-form textarea { background: #202d29; }
 .credential-config-body .pixiv-browser-form .login-button { grid-column: 1 / -1; width: 100%; margin-top: 1px; }
+/* Fixed-width pages preserve card geometry as more platforms are connected. */
+.app-shell .settings-page .platform-auth-grid { display: grid; grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: calc((100% - 36px) / 4); gap: 12px; overflow-x: auto; overflow-y: hidden; scroll-snap-type: x mandatory; scrollbar-width: none; padding: 3px 0 10px; }
+.settings-page .platform-auth-grid::-webkit-scrollbar { display: none; }
+.app-shell .settings-page .platform-auth-card { min-width: 0; scroll-snap-align: start; padding: 16px 14px; background: color-mix(in srgb, var(--card) 90%, #9192bb 10%); }
+.settings-page .platform-auth-head { flex-wrap: wrap; gap: 8px; }
+.settings-page .platform-auth-head > div { flex: 1; min-width: 0; }
+.settings-page .platform-auth-head .connection-dot { margin-left: 0; font-size: 10px; }
+.credential-pagination { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+.credential-pagination > span { margin-right: 8px; }
+.credential-pagination button { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px; background: transparent; color: var(--muted); }
+.credential-pagination button:hover { background: #9094bc20; color: var(--ink); }
+.credential-pagination svg { width: 18px; height: 18px; }
+.app-shell .settings-page .proxy-settings-pane .form-actions { grid-template-columns: 1fr; }
+.settings-page .quality-slider-list { --quality-accent: #7471bb; --quality-track: #dedee8; --quality-thumb: #fff; gap: 23px; padding-top: 7px; }
+.dark .settings-page .quality-slider-list { --quality-accent: #a29bec; --quality-track: #373846; --quality-thumb: #262735; }
+.settings-page .quality-slider-list input[type='range']::-webkit-slider-runnable-track { height: 5px; background: linear-gradient(to right, var(--quality-accent) 0 var(--quality-progress), var(--quality-track) var(--quality-progress) 100%); box-shadow: none; }
+.settings-page .quality-slider-list input[type='range']::-moz-range-track { height: 5px; background: linear-gradient(to right, var(--quality-accent) 0 var(--quality-progress), var(--quality-track) var(--quality-progress) 100%); box-shadow: none; }
+.settings-page .quality-slider-list input[type='range']::-webkit-slider-thumb { background: var(--quality-thumb); border-color: var(--quality-accent); box-shadow: 0 1px 4px #0002; }
+.settings-page .quality-slider-list input[type='range']::-moz-range-thumb { background: var(--quality-thumb); border-color: var(--quality-accent); box-shadow: 0 1px 4px #0002; }
+.settings-page .quality-slider-list input[type='range']:focus-visible { outline: 2px solid var(--quality-accent); outline-offset: 5px; border-radius: 8px; }
+@media (max-width: 760px) {
+  .app-shell .settings-page .platform-auth-grid { grid-auto-columns: 100%; }
+  .app-shell .credential-modal-backdrop .modal.credential-settings-modal { padding: 22px 16px; height: min(700px, calc(100dvh - 32px)); }
+  .credential-settings-modal .credential-config-body .credential-field-grid { grid-template-columns: 1fr; }
+}
+/* Credentials use a real translucent panel; the scrim must not be a backdrop root. */
+.app-shell .credential-modal-backdrop { background: #1b20302b; backdrop-filter: none; -webkit-backdrop-filter: none; animation: none; }
+.credential-modal-backdrop::before { content: ''; position: absolute; inset: 0; pointer-events: none; backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px); }
+.app-shell .credential-modal-backdrop .credential-settings-modal { display: flex; flex-direction: column; width: min(780px, calc(100vw - 32px)); height: min(700px, calc(100dvh - 40px)); max-height: none; overflow: hidden; padding: 26px; background: #ffffffbd; border: 1px solid #ffffff8a; backdrop-filter: blur(40px) saturate(130%); -webkit-backdrop-filter: blur(40px) saturate(130%); box-shadow: 0 24px 80px #10182838, inset 0 1px 0 #ffffff38; }
+.app-shell.dark .credential-modal-backdrop .credential-settings-modal { background: #191d29b8; border-color: #dce5ff26; }
+.credential-settings-modal .credential-modal-head { flex: none; }
+.credential-settings-modal .credential-config-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; padding: 20px 4px 4px; }
+.credential-config-body::-webkit-scrollbar { display: none; }
+.credential-config-body .credential-section { margin: 20px 0; padding-top: 18px; border-top: 1px solid var(--line); }
+.credential-config-body .credential-section:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.credential-section h3 { margin: 0; color: var(--ink); font-size: 14px; font-weight: 600; }
+.credential-config-body .credential-field-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.credential-config-body .credential-field { display: grid; min-width: 0; gap: 7px; margin: 0; color: var(--muted); font-size: 12px; }
+.credential-config-body .credential-wide { grid-column: 1 / -1; }
+.credential-config-body .credential-field :is(input, textarea) { width: 100%; min-width: 0; margin: 0; padding: 10px 12px; color: var(--ink); background: #ffffff60; border: 1px solid var(--line); border-radius: 8px; font: inherit; }
+.credential-config-body .credential-field input { height: 42px; }
+.credential-config-body .credential-field textarea { resize: vertical; min-height: 78px; }
+.dark .credential-config-body .credential-field :is(input, textarea) { background: #11162155; }
+.credential-config-body .credential-field :is(input, textarea):focus-visible { outline: 2px solid #9692dc; outline-offset: 1px; }
+.credential-config-body .login-button { min-height: 42px; }
+.credential-config-body > .platform-login-button { margin: 0 0 16px; }
+.credential-config-body .credential-note { grid-column: 1 / -1; }
 .credential-unavailable { display: grid; justify-items: center; padding: 48px 20px 28px; text-align: center; }
 .credential-unavailable img { width: 58px; height: 58px; margin-bottom: 15px; border-radius: 13px; }
 .credential-unavailable strong { color: var(--ink); font-size: 14px; }
@@ -2295,7 +2342,9 @@ html:has(.desktop-post-detail), body:has(.desktop-post-detail) { overflow: hidde
 .scoped-gallery-header::before, .scoped-gallery-header::after { display: none!important; }
 .author-page-header.scoped-gallery-header { width: 100%; }
 
-.masonry-detail-backdrop:has(.desktop-post-detail) { backdrop-filter: blur(6px) saturate(.88); }
+.masonry-detail-backdrop:has(.desktop-post-detail) { backdrop-filter: none; background: #17192330; animation: none; }
+.masonry-detail-backdrop:has(.desktop-post-detail)::before { content: ''; position: fixed; inset: 0; pointer-events: none; backdrop-filter: blur(6px); }
+.dark .masonry-detail-backdrop:has(.desktop-post-detail) { background: #03040a45; }
 .masonry-detail-modal.desktop-post-detail {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(300px, 1fr);
@@ -2308,6 +2357,18 @@ html:has(.desktop-post-detail), body:has(.desktop-post-detail) { overflow: hidde
   overflow: hidden;
 }
 .desktop-detail-gallery { position: relative; min-width: 0; min-height: 0; display: grid; place-items: center; overflow: hidden; background: color-mix(in srgb, var(--card) 90%, var(--muted) 10%); }
+@media (min-width: 761px) {
+  html { --desktop-dialog-glass: #ffffffb8; --desktop-dialog-glass-edge: #ffffff70; }
+  html[data-theme="dark"] { --desktop-dialog-glass: #191d29ad; --desktop-dialog-glass-edge: #dce5ff26; }
+  .app-shell .masonry-detail-modal.desktop-post-detail,
+  html[data-theme] .post-editor-backdrop .post-editor {
+    background: var(--desktop-dialog-glass);
+    border-color: var(--desktop-dialog-glass-edge);
+    backdrop-filter: blur(40px) saturate(135%);
+    box-shadow: 0 24px 70px #0004, inset 0 1px 0 #ffffff24;
+  }
+  .desktop-post-detail .desktop-detail-gallery { background: #9aa4b010; }
+}
 .desktop-detail-gallery > :is(.desktop-detail-image, video, .desktop-detail-no-media) { grid-area: 1 / 1; }
 .desktop-detail-image { display: block; width: 100%; height: 100%; min-height: 0; padding: 0; background: transparent; cursor: zoom-in; }
 .desktop-detail-image img, .desktop-detail-gallery > video { display: block; width: 100%; height: 100%; max-height: 100%; object-fit: contain; }

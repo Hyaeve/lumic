@@ -5,7 +5,7 @@ import PageSnapshot from './components/PageSnapshot.vue'
 import PostActions from './components/PostActions.vue'
 import ImageLoadRing from './components/ImageLoadRing.vue'
 import DetailImage from './components/DetailImage.vue'
-import { ListChecks } from '@lucide/vue'
+import { ListChecks, ChevronLeft, ChevronRight } from '@lucide/vue'
 import QRCode from 'qrcode'
 import { createPostPager, postQueryKey } from './postPager'
 import { resistVerticalSwipe, shouldCommitVerticalSwipe, verticalSettleDuration, verticalSwipeEasing, verticalReboundEasing } from './verticalSwipe'
@@ -60,6 +60,12 @@ const showStartDatePicker = ref(false)
 const startDatePickerView = ref({ year: new Date().getFullYear(), month: new Date().getMonth() })
 const selectedPlatform = ref(null)
 const credentialPlatform = ref(null)
+const credentialRail = ref(null)
+function pageCredentials(direction) {
+  const rail = credentialRail.value
+  if (!rail) return
+  rail.scrollBy({ left: direction * (rail.clientWidth + 12), behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' })
+}
 const sourceActionBusy = ref('')
 const sourceActionMessage = ref('')
 const confirmDialog = ref({ open: false, title: '', message: '', confirmText: '确认', cancelText: '取消', tone: 'danger' })
@@ -5141,8 +5147,8 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
     <main v-if="showSettings" class="settings-page">
       <div class="settings-page-inner">
         <section class="settings-pane platform-credentials-pane">
-          <div class="pane-heading"><div><h3>平台凭证</h3></div><span>4 个平台</span></div>
-          <div class="platform-auth-grid">
+          <div class="pane-heading"><div><h3>平台凭证</h3></div><div class="credential-pagination"><span>{{ platformCards.length }} 个平台</span><template v-if="platformCards.length > 4 || phonePortrait"><button type="button" aria-label="上一页平台" @click="pageCredentials(-1)"><ChevronLeft /></button><button type="button" aria-label="下一页平台" @click="pageCredentials(1)"><ChevronRight /></button></template></div></div>
+          <div ref="credentialRail" class="platform-auth-grid" tabindex="0" aria-label="平台凭证" @keydown.left.prevent="pageCredentials(-1)" @keydown.right.prevent="pageCredentials(1)">
             <article v-for="platform in platformCards" :key="platform.key" :class="['platform-auth-card', platform.key]" tabindex="0" @contextmenu.prevent="openCredentialSettings(platform.key)" @click="handleCredentialCardClick(platform.key)" @keydown.enter="openCredentialSettings(platform.key)">
               <header class="platform-auth-head"><img :class="['source-icon', { 'twitter-night-icon': platform.key === 'twitter' && isDark }]" :src="platform.image" :alt="`${platform.label}图标`"><div><h3>{{ platform.label }}</h3><span>平台账号凭证</span></div><em :class="['connection-dot', { online: platform.configured }]">{{ platform.configured ? '已连接' : '未连接' }}</em></header>
               <div class="platform-account-summary"><img :src="platform.avatar || platform.image" :alt="`${platform.account}头像`" @error="$event.target.src = platform.image"><div><span>接入账号</span><strong>{{ platform.account }}</strong></div></div>
@@ -5150,7 +5156,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
           </div>
         </section>
         <div class="settings-window-grid">
-          <section class="settings-pane compact-settings-pane">
+          <section class="settings-pane compact-settings-pane proxy-settings-pane">
             <div class="pane-heading"><div><h3>网络代理</h3></div><span>{{ proxyStatus.proxyEnabled ? '已启用' : '未启用' }}</span></div>
             <form class="settings-form" @submit.prevent="saveProxy" autocomplete="off"><label>代理地址</label><input v-model="proxyForm.proxyUrl" placeholder="socks5://host.docker.internal:7890"><div class="form-actions"><button type="button" class="secondary-button" @click="testProxy" :disabled="settingsBusy">测试</button><button class="login-button" :disabled="settingsBusy">保存</button></div></form>
             <p v-if="proxyMessage" class="success-message">{{ proxyMessage }}</p>
@@ -5158,8 +5164,8 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
           <section class="settings-pane quality-settings-pane">
             <div class="pane-heading"><div><h3>画质调节</h3></div></div>
             <div class="quality-slider-list">
-              <label><span><b>桌面端</b><em>{{ previewQuality.desktop }} · {{ previewQualityLabel(previewQuality.desktop) }}</em></span><input v-model.number="previewQuality.desktop" type="range" min="0" max="5" step="1" :disabled="settingsBusy" @change="savePreviewQuality"><i><small v-for="level in 6" :key="level">{{ level - 1 }}</small></i></label>
-              <label><span><b>移动端</b><em>{{ previewQuality.mobile }} · {{ previewQualityLabel(previewQuality.mobile) }}</em></span><input v-model.number="previewQuality.mobile" type="range" min="0" max="5" step="1" :disabled="settingsBusy" @change="savePreviewQuality"><i><small v-for="level in 6" :key="level">{{ level - 1 }}</small></i></label>
+              <label><span><b>桌面端</b><em>{{ previewQuality.desktop }} · {{ previewQualityLabel(previewQuality.desktop) }}</em></span><input v-model.number="previewQuality.desktop" :style="{ '--quality-progress': `${previewQuality.desktop * 20}%` }" aria-label="桌面端压缩率" type="range" min="0" max="5" step="1" :disabled="settingsBusy" @change="savePreviewQuality"><i><small v-for="level in 6" :key="level">{{ level - 1 }}</small></i></label>
+              <label><span><b>移动端</b><em>{{ previewQuality.mobile }} · {{ previewQualityLabel(previewQuality.mobile) }}</em></span><input v-model.number="previewQuality.mobile" :style="{ '--quality-progress': `${previewQuality.mobile * 20}%` }" aria-label="移动端压缩率" type="range" min="0" max="5" step="1" :disabled="settingsBusy" @change="savePreviewQuality"><i><small v-for="level in 6" :key="level">{{ level - 1 }}</small></i></label>
             </div>
           </section>
           <section class="settings-pane backup-settings-pane">
@@ -5175,7 +5181,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
       </div>
     </main>
     <div v-if="credentialPlatform" class="modal-backdrop credential-modal-backdrop" @click.self="credentialPlatform = null">
-      <div class="modal credential-settings-modal">
+      <div class="modal credential-settings-modal" role="dialog" aria-modal="true" :aria-label="`${credentialPlatform.label}平台凭证`">
         <button class="modal-close" type="button" aria-label="关闭平台配置" @click="credentialPlatform = null">×</button>
         <div class="credential-modal-head">
           <img :class="['source-icon', { 'twitter-night-icon': credentialPlatform.key === 'twitter' && isDark }]" :src="credentialPlatform.image" :alt="`${credentialPlatform.label}图标`">
@@ -5186,15 +5192,31 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
         <div v-if="credentialPlatform.key === 'bilibili'" class="credential-config-body">
           <div v-if="biliQRImage" class="weibo-qr"><img :src="biliQRImage" alt="哔哩哔哩登录二维码"><span>{{ biliQRStatus }}</span></div>
           <button class="login-button platform-login-button" type="button" @click="startBilibiliQR" :disabled="biliBusy && !biliQR">{{ biliQR ? '刷新二维码' : biliBusy ? '获取中…' : biliAccount.configured ? '扫码切换 B 站账号' : '扫码连接 B 站' }}</button>
-          <details class="manual-credential"><summary>手动导入 Cookie</summary><form class="settings-form bili-credentials" @submit.prevent="saveBilibiliAccount" autocomplete="off"><label>完整 Cookie</label><textarea v-model="biliCredentials.cookie" rows="4" placeholder="仅在扫码不可用时使用"></textarea><label>SESSDATA</label><input v-model="biliCredentials.SESSDATA" type="password"><label>bili_jct</label><input v-model="biliCredentials.bili_jct" type="password"><label>buvid3</label><input v-model="biliCredentials.buvid3" type="password"><label>DedeUserID</label><input v-model="biliCredentials.DedeUserID" inputmode="numeric"><button class="login-button" :disabled="biliBusy">验证并保存手动凭证</button></form></details>
+          <section class="credential-section"><h3>手动导入 Cookie</h3><form class="settings-form credential-field-grid" @submit.prevent="saveBilibiliAccount" autocomplete="off">
+            <label class="credential-field credential-wide"><span>完整 Cookie</span><textarea v-model="biliCredentials.cookie" rows="3" placeholder="仅在扫码不可用时使用"></textarea></label>
+            <label class="credential-field"><span>SESSDATA</span><input v-model="biliCredentials.SESSDATA" type="password"></label>
+            <label class="credential-field"><span>bili_jct</span><input v-model="biliCredentials.bili_jct" type="password"></label>
+            <label class="credential-field"><span>buvid3</span><input v-model="biliCredentials.buvid3" type="password"></label>
+            <label class="credential-field"><span>DedeUserID</span><input v-model="biliCredentials.DedeUserID" inputmode="numeric"></label>
+            <button class="login-button credential-wide" :disabled="biliBusy">验证并保存手动凭证</button>
+          </form></section>
           <p v-if="biliError" class="login-error bili-error">{{ biliError }}</p>
         </div>
 
         <div v-else-if="credentialPlatform.key === 'weibo'" class="credential-config-body">
-          <details class="platform-auth-details"><summary>{{ weiboAccount.cookieConfigured ? '保存备用账号密码' : '账号密码登录' }}</summary><form class="settings-form platform-auth-form weibo-password-form" @submit.prevent="loginWeiboAccount" autocomplete="off"><label>微博账号</label><input v-model="weiboPasswordCredentials.username" type="text" autocomplete="username" required placeholder="手机号、邮箱或微博账号"><label>微博密码</label><input v-model="weiboPasswordCredentials.password" type="password" autocomplete="current-password" required><p class="credential-note">{{ weiboAccount.cookieConfigured ? '当前扫码会话会继续使用，账号密码将加密保存，用于会话失效后自动重新登录。' : '账号密码会加密保存，后续可用于自动恢复微博会话。' }}</p><button class="login-button" :disabled="weiboBusy">{{ weiboBusy ? '验证中…' : weiboAccount.cookieConfigured ? '验证并保存备用密码' : '账号密码登录并保存' }}</button></form></details>
+          <section class="credential-section"><h3>{{ weiboAccount.cookieConfigured ? '保存备用账号密码' : '账号密码登录' }}</h3><form class="settings-form credential-field-grid" @submit.prevent="loginWeiboAccount" autocomplete="off">
+            <label class="credential-field"><span>微博账号</span><input v-model="weiboPasswordCredentials.username" type="text" autocomplete="username" required placeholder="手机号、邮箱或微博账号"></label>
+            <label class="credential-field"><span>微博密码</span><input v-model="weiboPasswordCredentials.password" type="password" autocomplete="current-password" required></label>
+            <p class="credential-note credential-wide">{{ weiboAccount.cookieConfigured ? '当前扫码会话会继续使用，账号密码将加密保存，用于会话失效后自动重新登录。' : '账号密码会加密保存，后续可用于自动恢复微博会话。' }}</p>
+            <button class="login-button credential-wide" :disabled="weiboBusy">{{ weiboBusy ? '验证中…' : weiboAccount.cookieConfigured ? '验证并保存备用密码' : '账号密码登录并保存' }}</button>
+          </form></section>
           <div v-if="weiboQR" class="weibo-qr"><img :src="weiboQR.image.startsWith('//') ? `https:${weiboQR.image}` : weiboQR.image" alt="微博登录二维码"><span>请在二维码过期前扫码并确认</span></div>
           <button class="login-button platform-login-button" type="button" @click="startWeiboQR" :disabled="weiboBusy && !weiboQR">{{ weiboQR ? '刷新二维码' : weiboBusy ? '获取中…' : weiboAccount.configured ? '扫码切换微博账号' : '扫码连接微博' }}</button>
-          <details class="manual-credential"><summary>手动导入 Cookie</summary><form class="settings-form bili-credentials" @submit.prevent="saveWeiboAccount" autocomplete="off"><label>微博 UID</label><input v-model="weiboCredentials.userId" inputmode="numeric" required placeholder="个人主页地址中的数字 UID"><label>完整 Cookie</label><textarea v-model="weiboCredentials.cookie" rows="4" required placeholder="可粘贴浏览器请求头中的 Cookie: 完整内容"></textarea><p class="credential-note">保存前会验证账号资料，不会回显原始 Cookie。</p><button class="login-button" :disabled="weiboBusy">{{ weiboBusy ? '验证中…' : '验证并保存 Cookie' }}</button></form></details>
+          <section class="credential-section"><h3>手动导入 Cookie</h3><form class="settings-form" @submit.prevent="saveWeiboAccount" autocomplete="off">
+            <label class="credential-field"><span>微博 UID</span><input v-model="weiboCredentials.userId" inputmode="numeric" required placeholder="个人主页地址中的数字 UID"></label>
+            <label class="credential-field"><span>完整 Cookie</span><textarea v-model="weiboCredentials.cookie" rows="3" required placeholder="可粘贴浏览器请求头中的 Cookie: 完整内容"></textarea></label>
+            <p class="credential-note credential-wide">保存前会验证账号资料，不会回显原始 Cookie。</p><button class="login-button" :disabled="weiboBusy">{{ weiboBusy ? '验证中…' : '验证并保存 Cookie' }}</button>
+          </form></section>
           <p v-if="weiboError" class="login-error">{{ weiboError }}</p>
         </div>
 
