@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch, nextTick, onUnmounted } from 'vue'
+import { computed, ref, watch, nextTick, onUnmounted } from 'vue'
 import { Pencil, ArrowLeft, ArrowRight, X, Plus } from '@lucide/vue'
 import deleteIcon from '../../icon/删除.png'
 const props = defineProps({ post: Object, icon: String, preview: { type: Function, default: value => value } })
@@ -13,6 +13,19 @@ const images = ref([])
 const busy = ref(false)
 const error = ref('')
 const upload = ref(null)
+const confirmExit = ref(false)
+const exitDialog = ref(null)
+let initialCaption = ''
+let initialImages = []
+const hasChanges = computed(() => caption.value !== initialCaption
+  || images.value.length !== initialImages.length
+  || images.value.some((image, index) => image.file || image.url !== initialImages[index]))
+function requestOutsideExit() {
+  if (busy.value || confirmExit.value) return
+  if (!hasChanges.value) { cancel(); return }
+  confirmExit.value = true
+  nextTick(() => exitDialog.value?.querySelector('button')?.focus({ preventScroll: true }))
+}
 let replaceIndex = -1
 function toggleMenu() {
   const rect = trigger.value.getBoundingClientRect()
@@ -33,7 +46,7 @@ function onKey(event) {
     cancel()
   }
   if (event.key !== 'Tab') return
-  const controls = [...event.currentTarget.querySelectorAll('button:not(:disabled), textarea:not(:disabled)')]
+  const controls = [...(confirmExit.value ? exitDialog.value : event.currentTarget).querySelectorAll('button:not(:disabled), textarea:not(:disabled)')]
   const first = controls[0], last = controls.at(-1)
   if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
   else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
@@ -46,12 +59,16 @@ function edit() {
   cleanup()
   caption.value = props.post.caption || ''
   images.value = (props.post.media || []).map(url => ({ url }))
+  initialCaption = caption.value
+  initialImages = images.value.map(image => image.url)
+  confirmExit.value = false
   error.value = ''
   editing.value = true
 }
 function cancel() {
   if (busy.value) return
   editing.value = false
+  confirmExit.value = false
   cleanup()
   images.value = []
 }
@@ -114,8 +131,8 @@ onUnmounted(() => { cleanup(); if (menu.value || editing.value) emit('overlay', 
           <button type="button" role="menuitem" @click="menu = false; emit('delete', post)"><span class="post-delete-symbol" :style="{'--delete-icon': `url(${deleteIcon})`}" aria-hidden="true"></span>删除</button>
         </div>
       </div>
-      <div v-if="editing" class="post-editor-backdrop" @click.self="cancel" @keydown="onKey" @wheel.stop @touchstart.stop @touchmove.stop @touchend.stop>
-        <section class="post-editor" role="dialog" aria-modal="true" aria-label="编辑动态">
+      <div v-if="editing" class="post-editor-backdrop" @click.self="requestOutsideExit" @keydown="onKey" @wheel.stop @touchstart.stop @touchmove.stop @touchend.stop>
+        <section class="post-editor" :inert="confirmExit" role="dialog" aria-modal="true" aria-label="编辑动态">
           <header><strong>编辑动态</strong></header>
           <div class="post-editor-content">
             <textarea v-model="caption" aria-label="动态文本" rows="8" :disabled="busy"></textarea>
@@ -127,6 +144,13 @@ onUnmounted(() => { cleanup(); if (menu.value || editing.value) emit('overlay', 
           </div>
           <footer class="post-editor-footer"><button type="button" class="post-add-images" :disabled="busy" @click="pick()"><Plus :size="20" /> 添加图片</button><span class="post-edit-actions"><button type="button" :disabled="busy" @click="cancel">取消</button><button type="button" :disabled="busy" @click="save">{{ busy ? '保存中' : '保存' }}</button></span></footer>
         </section>
+        <div v-if="confirmExit" class="post-exit-backdrop">
+          <section ref="exitDialog" class="post-exit-dialog" role="alertdialog" aria-modal="true" aria-label="保存修改？">
+            <strong>保存修改？</strong>
+            <p v-if="error" role="alert">{{ error }}</p>
+            <div class="post-edit-actions"><button type="button" :disabled="busy" @click="cancel">不保存退出</button><button type="button" :disabled="busy" @click="save">{{ busy ? '保存中' : '保存' }}</button></div>
+          </section>
+        </div>
       </div>
     </Teleport>
   </span>
@@ -170,4 +194,10 @@ html[data-theme="dark"] .post-editor { background: #1b1e26e3; border-color: #fff
 html:has(.post-editor-backdrop, .post-actions-scrim) { overflow: hidden; }
 .post-editor button:disabled { opacity: .4; }
 .post-editor [role=alert] { color: #dd5757; }
+.post-exit-backdrop { position: absolute; inset: 0; display: grid; place-items: center; padding: 20px; background: #0003; backdrop-filter: blur(8px); }
+.post-exit-dialog { width: min(300px, 100%); padding: 20px; border-radius: 16px; color: var(--editor-ink); background: #ffffffdf; backdrop-filter: blur(48px); box-shadow: 0 18px 60px #0004; }
+html[data-theme="dark"] .post-exit-dialog { background: #1b1e26e3; }
+.post-exit-dialog > .post-edit-actions { display: flex; justify-content: flex-end; margin-top: 18px; }
+.post-exit-dialog [role=alert] { color: #dd5757; font-size: 13px; }
+.post-exit-dialog button:disabled { opacity: .5; }
 </style>
