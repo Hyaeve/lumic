@@ -2365,8 +2365,8 @@ html:has(.desktop-post-detail), body:has(.desktop-post-detail) { overflow: hidde
   html[data-theme] .post-editor-backdrop .post-editor {
     background: var(--desktop-dialog-glass);
     border-color: var(--desktop-dialog-glass-edge);
-    backdrop-filter: blur(64px) saturate(125%);
-    -webkit-backdrop-filter: blur(64px) saturate(125%);
+    backdrop-filter: blur(96px) saturate(125%);
+    -webkit-backdrop-filter: blur(96px) saturate(125%);
     box-shadow: 0 24px 70px #0004, inset 0 1px 0 #ffffff24;
   }
   .desktop-post-detail .desktop-detail-gallery { background: #9aa4b010; }
