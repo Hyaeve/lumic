@@ -199,7 +199,7 @@ html[data-theme="dark"] .post-edit-actions button:last-child { color: #c8c1ff; b
 html:has(.post-editor-backdrop, .post-actions-scrim) { overflow: hidden; }
 .post-editor button:disabled { opacity: .4; }
 .post-editor textarea:focus-visible { outline: 2px solid #9388ce; outline-offset: 1px; }
-html[data-theme] .post-editor { backdrop-filter: blur(96px) saturate(125%); -webkit-backdrop-filter: blur(96px) saturate(125%); }
+html[data-theme] .post-editor { backdrop-filter: blur(128px) saturate(125%); -webkit-backdrop-filter: blur(128px) saturate(125%); }
 .post-editor [role=alert] { color: #dd5757; }
 .post-exit-backdrop { position: absolute; inset: 0; display: grid; place-items: center; padding: 20px; background: #0003; backdrop-filter: blur(8px); }
 .post-exit-dialog { width: min(300px, 100%); padding: 20px; border-radius: 16px; color: var(--editor-ink); background: #ffffffdf; backdrop-filter: blur(48px); box-shadow: 0 18px 60px #0004; }
