@@ -489,19 +489,19 @@ body, button, input, textarea, select { font-size: 14px; }
 .source-pill.twitter { color: #536e82; background: #e4edf2; }
 .platform-source-card.twitter::before { background: radial-gradient(circle at top right, #7c9eb42b, transparent 68%); }
 .post-foot .post-like-button { color: #9aa49e; border: 1px solid transparent; line-height: 1; }
-.post-foot .post-like-button:hover { color: #bd6b70; background: #f8e9e9; }
-.post-foot .post-like-button.liked { color: #bf5f67; background: #f8e4e5; border-color: #edc8cb; }
+.post-foot .post-like-button:hover { color: #bd6b70; }
+.post-foot .post-like-button.liked { color: #bf5f67; }
 .post-foot .post-like-button:disabled { opacity: .55; cursor: wait; }
 .post-action-mask { display: block; width: 19px; height: 19px; flex: none; background: currentColor; -webkit-mask: var(--post-action-mask) center / contain no-repeat; mask: var(--post-action-mask) center / contain no-repeat; }
 .post-favorite-symbol { width: 20px; height: 20px; }
 .post-visit-symbol { width: 18px; height: 18px; }
 .post-foot .post-visit-button { color: #929d97; }
-.post-foot .post-visit-button:hover:not(:disabled) { color: #687b71; background: #edf2ed; }
+.post-foot .post-visit-button:hover:not(:disabled) { color: #687b71; }
 .dark .post-foot .post-like-button { color: #9da5b4; }
-.dark .post-foot .post-like-button:hover { color: #edb4bd; background: #2d2228; }
-.dark .post-foot .post-like-button.liked { color: #f0bec6; background: #32242a; border-color: #593941; }
+.dark .post-foot .post-like-button:hover { color: #edb4bd; }
+.dark .post-foot .post-like-button.liked { color: #f0bec6; }
 .dark .post-foot .post-visit-button { color: #9da5b4; }
-.dark .post-foot .post-visit-button:hover:not(:disabled) { color: #dce5f8; background: #222630; }
+.dark .post-foot .post-visit-button:hover:not(:disabled) { color: #dce5f8; }
 .media-grid { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px; width: min(100%, 820px); margin: 14px 0 18px; }
 .media-grid .media-frame { display: flex; align-items: flex-start; justify-content: center; overflow: hidden; width: min(100%, 400px); height: auto; aspect-ratio: auto; padding: 0; background: #edf1ee; border: 1px solid #e0e7e2; }
 .media-grid .media-frame.landscape { width: min(100%, 520px); }
@@ -2408,8 +2408,9 @@ html:has(.desktop-post-detail), body:has(.desktop-post-detail) { overflow: hidde
 .desktop-detail-info .tag-row { min-width: 0; flex: 1; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
 .desktop-detail-info .tag-row button { flex: none; margin: 0; white-space: nowrap; }
 .desktop-detail-info .post-foot-actions { flex: none; gap: 5px; }
-.app-shell .post-foot-actions :is(.post-like-button, .post-visit-button),
-.app-shell .post-foot-actions :is(.post-like-button, .post-visit-button):hover { background: transparent; border-color: transparent; box-shadow: none; }
+.app-shell button:is(.post-like-button, .post-visit-button),
+.app-shell button:is(.post-like-button, .post-visit-button):is(:hover, :active, :focus, .liked) { background: transparent!important; border-color: transparent!important; box-shadow: none!important; -webkit-tap-highlight-color: transparent; }
+.app-shell button:is(.post-like-button, .post-visit-button):active { color: var(--author-accent, #9388cf); }
 .app-shell .post-foot-actions :is(.post-like-button, .post-visit-button):hover { color: var(--author-accent, #9388cf); filter: drop-shadow(0 0 5px #a79be655); }
 .pulls-page .platform-source-card dt { font-size: 13px; }
 .pulls-page .platform-source-card dd { font-size: 14px; max-width: 65%; }
