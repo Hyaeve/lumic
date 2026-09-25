@@ -2003,6 +2003,34 @@ function retryLightboxOriginal() {
   image.removeAttribute('src')
   image.src = source
 }
+function updateDetailArrowColors(event) {
+  const image = event.target
+  const gallery = image.closest('.desktop-detail-gallery')
+  if (!gallery || !image.naturalWidth) return
+  // Sample the visible cover crop at each arrow, not the uncropped image edges.
+  try {
+    const canvas = document.createElement('canvas')
+    canvas.width = 48; canvas.height = 48
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })
+    const scale = Math.max(gallery.clientWidth / image.naturalWidth, gallery.clientHeight / image.naturalHeight)
+    const width = gallery.clientWidth / scale, height = gallery.clientHeight / scale
+    ctx.drawImage(image, (image.naturalWidth - width) / 2, (image.naturalHeight - height) / 2, width, height, 0, 0, 48, 48)
+    for (const [side, x] of [['previous', 0], ['next', 40]]) {
+      const data = ctx.getImageData(x, 18, 8, 12).data
+      let r = 0, g = 0, b = 0
+      for (let i = 0; i < data.length; i += 4) { r += data[i]; g += data[i + 1]; b += data[i + 2] }
+      const n = data.length / 4
+      r /= n; g /= n; b /= n
+      const bright = .2126 * r + .7152 * g + .0722 * b > 145
+      const tint = [r, g, b].map(c => Math.round(bright ? (255 - c) * .16 : 222 + (255 - c) * .13))
+      gallery.style.setProperty(`--arrow-${side}`, `rgb(${tint.join(' ')})`)
+    }
+  } catch {
+    // Cross-origin media may forbid sampling; dual shadows retain contrast.
+    gallery.style.removeProperty('--arrow-previous')
+    gallery.style.removeProperty('--arrow-next')
+  }
+}
 function zoomLightbox(event) {
   zoomLightboxBy(event.deltaY < 0 ? 0.15 : -0.15)
 }
@@ -2052,7 +2080,7 @@ function clearLightboxDockTimer() {
   if (lightboxDockTimer) window.clearTimeout(lightboxDockTimer)
   lightboxDockTimer = 0
 }
-function scheduleLightboxDockHide(delay = 2400) {
+function scheduleLightboxDockHide(delay = 3200) {
   clearLightboxDockTimer()
   if (phonePortrait.value) return
   lightboxDockTimer = window.setTimeout(() => {
@@ -2584,8 +2612,8 @@ function handleGlobalKeydown(event) {
     if (event.key === 'Escape') closeLightbox()
     if (event.key === 'ArrowLeft') moveLightbox(-1)
     if (event.key === 'ArrowRight') moveLightbox(1)
-    if (event.key === '+' || event.key === '=') zoomLightboxBy(0.15)
-    if (event.key === '-') zoomLightboxBy(-0.15)
+    if (event.key === '+' || event.key === '=') zoomLightboxBy(0.25)
+    if (event.key === '-') zoomLightboxBy(-0.25)
     if (event.key.toLowerCase() === 'r') rotateLightbox()
     return
   }
@@ -4985,7 +5013,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
       <article class="masonry-detail-modal desktop-post-detail" :style="authorAccent(masonryDetailPost.source)" role="dialog" aria-modal="true" :aria-label="`${masonryDetailPost.author} 的动态详情`">
         <section class="desktop-detail-gallery" tabindex="0" aria-label="动态媒体" @wheel.stop.prevent="wheelDesktopDetailMedia" @keydown.left.prevent="moveDesktopDetailMedia(-1)" @keydown.right.prevent="moveDesktopDetailMedia(1)">
           <Transition :name="desktopDetailDirection > 0 ? 'detail-media-next' : 'detail-media-previous'" @before-leave="element => { if (element.tagName === 'VIDEO') element.pause() }">
-            <button v-if="desktopCurrentMedia?.type === 'image'" :key="desktopCurrentMedia.key" class="desktop-detail-image" type="button" aria-label="查看大图" @click="openLightbox(masonryDetailPost, desktopDetailIndex)"><img :src="previewMedia(desktopCurrentMedia.src)" :alt="`${masonryDetailPost.author} 的第 ${desktopDetailIndex + 1} 张图片`"></button>
+            <button v-if="desktopCurrentMedia?.type === 'image'" :key="desktopCurrentMedia.key" class="desktop-detail-image" type="button" aria-label="查看大图" @click="openLightbox(masonryDetailPost, desktopDetailIndex)"><img :src="previewMedia(desktopCurrentMedia.src)" :alt="`${masonryDetailPost.author} 的第 ${desktopDetailIndex + 1} 张图片`" @load="updateDetailArrowColors"></button>
             <video v-else-if="desktopCurrentMedia?.type === 'video'" :key="desktopCurrentMedia.key" :src="desktopCurrentMedia.src" :poster="desktopCurrentMedia.poster ? previewMedia(desktopCurrentMedia.poster) : undefined" controls playsinline autoplay muted preload="metadata"></video>
             <div v-else class="desktop-detail-no-media">暂无图片</div>
           </Transition>
@@ -5052,15 +5080,15 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
           <ImageLoadRing v-if="!lightboxOriginalLoaded" :failed="lightboxOriginalFailed" @retry="retryLightboxOriginal" />
         </figure>
       </div>
-      <div v-if="!phonePortrait" class="lightbox-dock-zone" @pointerenter="showLightboxDock(false)" @pointermove="showLightboxDock(false)" @pointerleave="scheduleLightboxDockHide(1650)">
+      <div v-if="!phonePortrait" class="lightbox-dock-zone" @pointerenter="showLightboxDock(false)" @pointermove="showLightboxDock(false)" @pointerleave="scheduleLightboxDockHide(2400)">
       <div :class="['lightbox-dock', { hidden: !lightboxDockVisible }]" role="toolbar" aria-label="图片查看工具">
         <button type="button" title="上一张" aria-label="上一张" :disabled="lightbox.media.length < 2" @click="moveLightbox(-1)"><svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg></button>
         <span class="lightbox-counter">{{ lightbox.index + 1 }}/{{ lightbox.media.length }}</span>
         <button type="button" title="下一张" aria-label="下一张" :disabled="lightbox.media.length < 2" @click="moveLightbox(1)"><svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></button>
         <i></i>
-        <button type="button" title="缩小" aria-label="缩小" @click="zoomLightboxBy(-0.15)"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M8 11h6M16 16l5 5"/></svg></button>
+        <button type="button" title="缩小" aria-label="缩小" @click="zoomLightboxBy(-0.25)"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M8 11h6M16 16l5 5"/></svg></button>
         <span class="lightbox-scale">{{ lightboxScalePercent }}%</span>
-        <button type="button" title="放大" aria-label="放大" @click="zoomLightboxBy(0.15)"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M8 11h6M11 8v6M16 16l5 5"/></svg></button>
+        <button type="button" title="放大" aria-label="放大" @click="zoomLightboxBy(0.25)"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M8 11h6M11 8v6M16 16l5 5"/></svg></button>
         <button type="button" :title="lightbox.fit ? '原始尺寸' : '适应页面'" :aria-label="lightbox.fit ? '原始尺寸' : '适应页面'" :class="{ active: !lightbox.fit }" :disabled="!lightboxOriginalLoaded" @click="toggleLightboxFit">
           <span v-if="lightbox.fit" class="lightbox-tool-mask lightbox-original-size-symbol" :style="{ '--lightbox-tool-mask': `url(${originalSizeIcon})` }" aria-hidden="true"></span>
           <svg v-else class="lightbox-fit-symbol" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H6a2 2 0 0 0-2 2v2M16 4h2a2 2 0 0 1 2 2v2M8 20H6a2 2 0 0 1-2-2v-2M16 20h2a2 2 0 0 0 2-2v-2"/><rect x="8" y="8" width="8" height="8" rx="2.2"/></svg>
