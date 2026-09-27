@@ -2327,7 +2327,7 @@ html:has(.desktop-post-detail), body:has(.desktop-post-detail) { overflow: hidde
 .masonry-author { gap: 6px; }
 .masonry-author > .post-author-avatar,
 .masonry-author > .post-author-avatar img { width: 25px; height: 25px; border-radius: 50%; object-fit: cover; }
-.masonry-author > .post-author-name { min-width: 0; flex: 1; overflow: hidden; }
+.masonry-author > .post-author-name { min-width: 0; flex: 0 1 auto; overflow: hidden; }
 .masonry-author strong { font-size: 12px; }
 .masonry-author > .post-time { flex: none; font-size: 12px; }
 .post-author-avatar { transition: box-shadow .18s ease; }
@@ -2366,8 +2366,8 @@ html:has(.desktop-post-detail), body:has(.desktop-post-detail) { overflow: hidde
   html[data-theme] .post-editor-backdrop .post-editor {
     background: var(--desktop-dialog-glass);
     border-color: var(--desktop-dialog-glass-edge);
-    backdrop-filter: blur(128px) saturate(125%);
-    -webkit-backdrop-filter: blur(128px) saturate(125%);
+    backdrop-filter: blur(160px) saturate(125%);
+    -webkit-backdrop-filter: blur(160px) saturate(125%);
     box-shadow: 0 24px 70px #0004, inset 0 1px 0 #ffffff24;
   }
   .desktop-post-detail .desktop-detail-gallery { background: #9aa4b010; }
@@ -2377,13 +2377,13 @@ html:has(.desktop-post-detail), body:has(.desktop-post-detail) { overflow: hidde
 .desktop-detail-image img, .desktop-detail-gallery > video { display: block; width: 100%; height: 100%; max-height: 100%; object-fit: contain; }
 .desktop-detail-image img { object-fit: cover; object-position: center; }
 .desktop-detail-no-media { color: var(--muted); font-size: 13px; }
-.desktop-gallery-nav { position: absolute; top: calc(50% - 20px); display: grid; place-items: center; width: 36px; height: 40px; padding: 0; color: #fff; background: transparent; border: 0; border-radius: 0; box-shadow: none; opacity: 0; pointer-events: none; transition: opacity .17s ease, color .17s ease; }
+.desktop-gallery-nav { position: absolute; top: calc(50% - 44px); display: grid; place-items: center; width: 60px; height: 88px; padding: 0; color: #fff; background: transparent; border: 0; border-radius: 0; box-shadow: none; opacity: 0; pointer-events: none; cursor: pointer; transition: opacity .17s ease; }
 .desktop-gallery-nav.previous, .desktop-gallery-nav.previous:hover { color: var(--arrow-previous, #fff); }
 .desktop-gallery-nav.next, .desktop-gallery-nav.next:hover { color: var(--arrow-next, #fff); }
 .desktop-gallery-nav:hover { background: transparent; }
 .desktop-gallery-nav:focus-visible { outline: 2px solid #a8b8ff; outline-offset: 2px; }
-.desktop-gallery-nav.previous { left: 12px; }
-.desktop-gallery-nav.next { right: 12px; }
+.desktop-gallery-nav.previous { left: 0; }
+.desktop-gallery-nav.next { right: 0; }
 .desktop-gallery-nav svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0 1px 3px #000b); }
 .desktop-detail-gallery:hover .desktop-gallery-nav,
 .desktop-detail-gallery:focus-within .desktop-gallery-nav { opacity: 1; pointer-events: auto; }
@@ -2409,6 +2409,33 @@ html:has(.desktop-post-detail), body:has(.desktop-post-detail) { overflow: hidde
 .desktop-detail-info .tag-row { min-width: 0; flex: 1; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
 .desktop-detail-info .tag-row button { flex: none; margin: 0; white-space: nowrap; }
 .desktop-detail-info .post-foot-actions { flex: none; gap: 5px; }
+/* Content-sized identity buttons leave the remaining card footer clickable. */
+.app-shell .masonry-author > .post-author-name { flex: 0 1 auto; width: auto; padding-inline: 0; }
+.app-shell .masonry-tags { font-size: 12px; }
+.app-shell .masonry-tags button { font-size: 12px; padding: 4px 6px; }
+.app-shell .pull-info small { font-family: system-ui, "Microsoft YaHei", sans-serif; font-size: 13px; line-height: 1.6; color: var(--muted); }
+.app-shell .subscription-pagination span { font-family: system-ui, sans-serif; font-size: 15px; font-weight: 600; color: var(--ink); }
+.app-shell .credential-config-body .pixiv-browser-form .credential-field > span { color: var(--ink); font-size: 13px; }
+.app-shell .settings-page .platform-credentials-pane { padding: 0 0 24px; background: transparent; border: 0; box-shadow: none; }
+.app-shell .settings-page .platform-auth-card { min-height: 158px; padding: 20px 16px; }
+.app-shell .settings-page .platform-auth-head h3 { font-size: 16px; }
+.app-shell .settings-page .platform-account-summary strong { font-size: 14px; }
+.app-shell .settings-page .settings-window-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; margin-top: 0; }
+.app-shell .settings-page .settings-window-grid .settings-pane { padding: 22px; }
+.app-shell .settings-page .settings-window-grid .settings-form label { font-size: 13px; }
+.app-shell .settings-page .settings-window-grid .settings-form input { height: 42px; }
+.dark .sidebar-theme-button { position: relative; }
+.dark .sidebar-theme-button::before, .dark .sidebar-theme-button::after { content: ''; position: absolute; pointer-events: none; width: 5px; height: 5px; background: #f8e9b8; clip-path: polygon(50% 0, 62% 38%, 100% 50%, 62% 62%, 50% 100%, 38% 62%, 0 50%, 38% 38%); animation: night-star-twinkle 3.7s ease-in-out infinite; }
+.dark .sidebar-theme-button::before { top: 8px; right: 9px; }
+.dark .sidebar-theme-button::after { bottom: 9px; left: 8px; width: 4px; height: 4px; background: #cbc0ff; animation-duration: 5.1s; animation-delay: -2s; }
+@media (max-width: 760px) {
+  .app-shell .settings-page .settings-window-grid { grid-template-columns: 1fr; gap: 14px; }
+  .app-shell .settings-page .settings-window-grid .settings-pane { padding: 18px; }
+  .app-shell .pull-info small { white-space: normal; overflow-wrap: anywhere; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dark .sidebar-theme-button::before, .dark .sidebar-theme-button::after { animation: none; opacity: .7; }
+}
 .app-shell button:is(.post-like-button, .post-visit-button),
 .app-shell button:is(.post-like-button, .post-visit-button):is(:hover, :active, :focus, .liked) { background: transparent!important; border-color: transparent!important; box-shadow: none!important; -webkit-tap-highlight-color: transparent; }
 .app-shell button:is(.post-like-button, .post-visit-button):active { color: var(--author-accent, #9388cf); }

@@ -4843,7 +4843,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
         <button class="post-author-name" type="button" @click.stop="openAuthor(item.post)"><strong>{{ item.post.author }}</strong></button>
         <PostTime :value="item.post.published" :hover="!phonePortrait" />
       </div>
-      <button :class="['masonry-like-button', { liked: item.post.liked }]" type="button" :disabled="postActionBusy === `like:${item.post.id}`" :title="item.post.liked ? '取消收藏' : '收藏'" @click.stop="togglePostLike(item.post)"><span class="post-action-mask post-favorite-symbol" :style="{ '--post-action-mask': `url(${favoriteNavIcon})` }" aria-hidden="true"></span></button>
+      <button :class="['masonry-like-button', { liked: item.post.liked }]" type="button" data-tooltip-disabled="true" :disabled="postActionBusy === `like:${item.post.id}`" :aria-label="item.post.liked ? '取消收藏' : '收藏'" @click.stop="togglePostLike(item.post)"><span class="post-action-mask post-favorite-symbol" :style="{ '--post-action-mask': `url(${favoriteNavIcon})` }" aria-hidden="true"></span></button>
     </footer>
   </div>
 </article>
