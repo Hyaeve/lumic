@@ -2366,8 +2366,8 @@ html:has(.desktop-post-detail), body:has(.desktop-post-detail) { overflow: hidde
   html[data-theme] .post-editor-backdrop .post-editor {
     background: var(--desktop-dialog-glass);
     border-color: var(--desktop-dialog-glass-edge);
-    backdrop-filter: blur(160px) saturate(125%);
-    -webkit-backdrop-filter: blur(160px) saturate(125%);
+    backdrop-filter: blur(200px) saturate(125%);
+    -webkit-backdrop-filter: blur(200px) saturate(125%);
     box-shadow: 0 24px 70px #0004, inset 0 1px 0 #ffffff24;
   }
   .desktop-post-detail .desktop-detail-gallery { background: #9aa4b010; }
@@ -2415,6 +2415,8 @@ html:has(.desktop-post-detail), body:has(.desktop-post-detail) { overflow: hidde
 .app-shell .masonry-tags button { font-size: 12px; padding: 4px 6px; }
 .app-shell .pull-info small { font-family: system-ui, "Microsoft YaHei", sans-serif; font-size: 13px; line-height: 1.6; color: var(--muted); }
 .app-shell .subscription-pagination span { font-family: system-ui, sans-serif; font-size: 15px; font-weight: 600; color: var(--ink); }
+.app-shell :is(.pulls-page, .settings-page, .credential-settings-modal, .platform-detail-modal, .feed-settings-modal),
+.app-shell :is(.pulls-page, .settings-page, .credential-settings-modal, .platform-detail-modal, .feed-settings-modal) * { font-family: "Microsoft YaHei", "微软雅黑", sans-serif!important; }
 .app-shell .credential-config-body .pixiv-browser-form .credential-field > span { color: var(--ink); font-size: 13px; }
 .app-shell .settings-page .platform-credentials-pane { padding: 0 0 24px; background: transparent; border: 0; box-shadow: none; }
 .app-shell .settings-page .platform-auth-card { min-height: 158px; padding: 20px 16px; }
