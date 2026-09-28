@@ -2527,6 +2527,20 @@ html[data-theme] .post-editor-backdrop .post-editor,
 }
 .app-shell.dark .timeline-context-menu,
 .app-shell.dark .confirm-dialog { background-color: var(--window-frost-surface); background-image: var(--window-frost-sheen); }
+.app-shell .masonry-detail-modal.desktop-post-detail,
+html[data-theme] .post-editor-backdrop .post-editor,
+html[data-theme] .post-action-menu {
+  background-color: rgba(250, 251, 255, .96);
+  background-image: var(--window-frost-sheen);
+}
+.app-shell.dark .masonry-detail-modal.desktop-post-detail,
+html[data-theme="dark"] .post-editor-backdrop .post-editor,
+html[data-theme="dark"] .post-action-menu { background-color: rgba(26, 30, 42, .96); }
+html[data-theme] .post-action-menu {
+  border-color: var(--window-frost-edge);
+  backdrop-filter: blur(240px) saturate(145%);
+  -webkit-backdrop-filter: blur(240px) saturate(145%);
+}
 .masonry-detail-backdrop:has(.desktop-post-detail)::before { backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); }
 @media (min-width: 761px) {
   .app-shell:not(.phone-ui) :is(.add-fab, .scroll-top-button),
