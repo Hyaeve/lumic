@@ -2360,14 +2360,14 @@ html:has(.desktop-post-detail), body:has(.desktop-post-detail) { overflow: hidde
 }
 .desktop-detail-gallery { position: relative; min-width: 0; min-height: 0; display: grid; place-items: center; overflow: hidden; background: color-mix(in srgb, var(--card) 90%, var(--muted) 10%); }
 @media (min-width: 761px) {
-  html { --desktop-dialog-glass: #ffffffdf; --desktop-dialog-glass-edge: #ffffff70; }
-  html[data-theme="dark"] { --desktop-dialog-glass: #191d29de; --desktop-dialog-glass-edge: #dce5ff26; }
+  html { --desktop-dialog-glass: #fffffff0; --desktop-dialog-glass-edge: #ffffff70; }
+  html[data-theme="dark"] { --desktop-dialog-glass: #191d29f0; --desktop-dialog-glass-edge: #dce5ff26; }
   .app-shell .masonry-detail-modal.desktop-post-detail,
   html[data-theme] .post-editor-backdrop .post-editor {
     background: var(--desktop-dialog-glass);
     border-color: var(--desktop-dialog-glass-edge);
-    backdrop-filter: blur(200px) saturate(125%);
-    -webkit-backdrop-filter: blur(200px) saturate(125%);
+    backdrop-filter: blur(240px) saturate(125%);
+    -webkit-backdrop-filter: blur(240px) saturate(125%);
     box-shadow: 0 24px 70px #0004, inset 0 1px 0 #ffffff24;
   }
   .desktop-post-detail .desktop-detail-gallery { background: #9aa4b010; }
@@ -2409,6 +2409,14 @@ html:has(.desktop-post-detail), body:has(.desktop-post-detail) { overflow: hidde
 .desktop-detail-info .tag-row { min-width: 0; flex: 1; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
 .desktop-detail-info .tag-row button { flex: none; margin: 0; white-space: nowrap; }
 .desktop-detail-info .post-foot-actions { flex: none; gap: 5px; }
+.masonry-meta > .post-time { flex: none; margin-left: auto; font-size: 12px; }
+.app-shell .masonry-meta .masonry-like-button { flex: none; margin-left: 4px; }
+.app-shell .feed-timeline-stats { justify-content: flex-start; margin: 0 0 18px; min-height: 44px; }
+.app-shell .confirm-dialog-layer { backdrop-filter: none; -webkit-backdrop-filter: none; animation: none; }
+.confirm-dialog-layer::before { content: ''; position: absolute; inset: 0; pointer-events: none; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+.app-shell .confirm-dialog { position: relative; }
+.app-shell .timeline-context-menu, .app-shell .confirm-dialog { background: #fffffff0; backdrop-filter: blur(240px) saturate(125%); -webkit-backdrop-filter: blur(240px) saturate(125%); border-color: #ffffff70; }
+.app-shell.dark .timeline-context-menu, .app-shell.dark .confirm-dialog { background: #191d29f0; border-color: #dce5ff26; }
 /* Content-sized identity buttons leave the remaining card footer clickable. */
 .app-shell .masonry-author > .post-author-name { flex: 0 1 auto; width: auto; padding-inline: 0; }
 .app-shell .masonry-tags { font-size: 12px; }
@@ -2448,8 +2456,8 @@ html:has(.desktop-post-detail), body:has(.desktop-post-detail) { overflow: hidde
 .platform-detail-summary span { font-size: 12px; }
 .platform-detail-summary strong { font-size: 14px; }
 @media (min-width: 761px) {
-  .app-shell:not(.phone-ui) :is(.add-fab, .scroll-top-button) { background: #ffffffb3; color: #4c5268; border: 1px solid #ffffff50; backdrop-filter: blur(18px) saturate(125%); -webkit-backdrop-filter: blur(18px) saturate(125%); box-shadow: 0 8px 26px #242b4426; }
-  .app-shell.dark:not(.phone-ui) :is(.add-fab, .scroll-top-button) { background: #252936b8; color: #e4e6f2; border-color: #ffffff16; }
+  .app-shell:not(.phone-ui) :is(.add-fab, .scroll-top-button) { background: #fffffff0; color: #4c5268; border: 1px solid #ffffff50; backdrop-filter: blur(240px) saturate(125%); -webkit-backdrop-filter: blur(240px) saturate(125%); box-shadow: 0 8px 26px #242b4426; }
+  .app-shell.dark:not(.phone-ui) :is(.add-fab, .scroll-top-button) { background: #191d29f0; color: #e4e6f2; border-color: #ffffff16; }
 }
 .settings-page .quality-slider-list { --quality-accent: #597baf; --quality-track: #dce3ed; }
 .dark .settings-page .quality-slider-list { --quality-accent: #afa0e9; --quality-track: #353342; }

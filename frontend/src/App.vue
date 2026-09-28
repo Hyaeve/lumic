@@ -5,7 +5,8 @@ import PageSnapshot from './components/PageSnapshot.vue'
 import PostActions from './components/PostActions.vue'
 import ImageLoadRing from './components/ImageLoadRing.vue'
 import DetailImage from './components/DetailImage.vue'
-import { ListChecks, ChevronLeft, ChevronRight } from '@lucide/vue'
+import { ListChecks, ChevronLeft, ChevronRight, Heart } from '@lucide/vue'
+import TimelineStats from './components/TimelineStats.vue'
 import QRCode from 'qrcode'
 import { createPostPager, postQueryKey } from './postPager'
 import { resistVerticalSwipe, shouldCommitVerticalSwipe, verticalSettleDuration, verticalSwipeEasing, verticalReboundEasing } from './verticalSwipe'
@@ -4747,32 +4748,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
 <p class="subtitle">这里有你关注的世界，和刚刚发生的一切。</p>
 </div>
 </header>
-      <section v-if="!isScopedTimeline" class="stats">
-<div class="stat-card">
-<div class="stat-icon mint"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9h8M8 13h5"/></svg></div>
-<div>
-<span>全部动态</span>
-<strong>{{ totalStatsCount }}</strong>
-</div>
-<small>{{ activeSource === 'all' ? '全部平台' : sourceMeta[activeSource]?.label }}</small>
-</div>
-<div class="stat-card">
-<div class="stat-icon sand"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg></div>
-<div>
-<span>今日动态</span>
-<strong>{{ todayStatsCount }}</strong>
-</div>
-<small>本地日期</small>
-</div>
-<div class="stat-card">
-<div class="stat-icon rose"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20.5S4.5 16.2 4.5 10.2A4.2 4.2 0 0 1 12 7.6a4.2 4.2 0 0 1 7.5 2.6c0 6-7.5 10.3-7.5 10.3Z"/></svg></div>
-<div>
-<span>收藏动态</span>
-<strong>{{ favoriteStatsCount }}</strong>
-</div>
-<small>{{ activeSource === 'all' ? '全部平台' : sourceMeta[activeSource]?.label }}</small>
-</div>
-</section>
+      <TimelineStats v-if="!isScopedTimeline" class="feed-timeline-stats" :stats="{ total: totalStatsCount, today: todayStatsCount, favorites: favoriteStatsCount }" />
       <div class="section-heading">
 <div class="filters">
 <button v-if="!authorProfile" class="timeline-all-button" :class="{ selected: activeSource === 'all' }" @click="activeSource = 'all'"><span>✦</span>全部</button>
@@ -4841,9 +4817,9 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
       <div class="masonry-author" :style="authorAccent(item.post.source)">
         <button class="post-author-avatar" type="button" :aria-label="`查看 ${item.post.author} 的动态`" @click.stop="openAuthor(item.post)"><img :key="`${item.post.id}:${postAvatar(item.post)}`" :src="postAvatar(item.post)" data-fallback-index="0" :alt="item.post.author" referrerpolicy="no-referrer" @load="handlePostAvatarLoad($event, item.post)" @error="handlePostAvatarError($event, item.post)"></button>
         <button class="post-author-name" type="button" @click.stop="openAuthor(item.post)"><strong>{{ item.post.author }}</strong></button>
-        <PostTime :value="item.post.published" />
       </div>
-      <button :class="['masonry-like-button', { liked: item.post.liked }]" type="button" data-tooltip-disabled="true" :disabled="postActionBusy === `like:${item.post.id}`" :aria-label="item.post.liked ? '取消收藏' : '收藏'" @click.stop="togglePostLike(item.post)"><span class="post-action-mask post-favorite-symbol" :style="{ '--post-action-mask': `url(${favoriteNavIcon})` }" aria-hidden="true"></span></button>
+      <PostTime :value="item.post.published" />
+      <button :class="['masonry-like-button', { liked: item.post.liked }]" type="button" data-tooltip-disabled="true" :disabled="postActionBusy === `like:${item.post.id}`" :aria-label="item.post.liked ? '取消收藏' : '收藏'" :aria-pressed="item.post.liked" @click.stop="togglePostLike(item.post)"><Heart :size="17" :fill="item.post.liked ? 'currentColor' : 'none'" aria-hidden="true" /></button>
     </footer>
   </div>
 </article>
@@ -4920,7 +4896,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
           <div class="masonry-card-body">
             <p v-if="item.post.caption" class="masonry-caption">{{ item.post.caption }}</p>
             <div v-if="item.post.tags?.length" class="masonry-tags"><button v-for="tag in item.post.tags.slice(0, 2)" :key="tag" type="button" tabindex="-1">#{{ tag }}</button><span v-if="item.post.tags.length > 2">+{{ item.post.tags.length - 2 }}</span></div>
-            <footer class="masonry-meta"><span class="masonry-author"><img :src="postAvatar(item.post)" alt=""><strong>{{ item.post.author }}</strong><small class="post-time">{{ masonryDate(item.post.published) }}</small></span><span :class="['masonry-like-button', { liked: item.post.liked }]"><span class="post-action-mask post-favorite-symbol" :style="{ '--post-action-mask': `url(${favoriteNavIcon})` }"></span></span></footer>
+            <footer class="masonry-meta"><span class="masonry-author"><img :src="postAvatar(item.post)" alt=""><strong>{{ item.post.author }}</strong></span><small class="post-time">{{ masonryDate(item.post.published) }}</small><span :class="['masonry-like-button', { liked: item.post.liked }]"><Heart :size="17" :fill="item.post.liked ? 'currentColor' : 'none'" /></span></footer>
           </div>
         </article>
       </section>
@@ -4947,7 +4923,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
           <div class="masonry-card-body">
             <p v-if="item.post.caption" class="masonry-caption">{{ item.post.caption }}</p>
             <div v-if="item.post.tags?.length" class="masonry-tags"><span v-for="tag in item.post.tags.slice(0, 2)" :key="tag">#{{ tag }}</span><span v-if="item.post.tags.length > 2">+{{ item.post.tags.length - 2 }}</span></div>
-            <footer class="masonry-meta"><span class="masonry-author"><img :src="postAvatar(item.post)" alt=""><strong>{{ item.post.author }}</strong><small class="post-time">{{ masonryDate(item.post.published) }}</small></span><span :class="['masonry-like-button', { liked: item.post.liked }]"><span class="post-action-mask post-favorite-symbol" :style="{ '--post-action-mask': `url(${favoriteNavIcon})` }"></span></span></footer>
+            <footer class="masonry-meta"><span class="masonry-author"><img :src="postAvatar(item.post)" alt=""><strong>{{ item.post.author }}</strong></span><small class="post-time">{{ masonryDate(item.post.published) }}</small><span :class="['masonry-like-button', { liked: item.post.liked }]"><Heart :size="17" :fill="item.post.liked ? 'currentColor' : 'none'" /></span></footer>
           </div>
         </article>
       </section>
