@@ -2435,9 +2435,10 @@ html:has(.desktop-post-detail), body:has(.desktop-post-detail) { overflow: hidde
 .app-shell .settings-page .settings-window-grid .settings-form label { font-size: 13px; }
 .app-shell .settings-page .settings-window-grid .settings-form input { height: 42px; }
 .dark .sidebar-theme-button { position: relative; }
-.dark .sidebar-theme-button::before, .dark .sidebar-theme-button::after { content: ''; position: absolute; pointer-events: none; width: 5px; height: 5px; background: #f8e9b8; clip-path: polygon(50% 0, 62% 38%, 100% 50%, 62% 62%, 50% 100%, 38% 62%, 0 50%, 38% 38%); animation: night-star-twinkle 3.7s ease-in-out infinite; }
+.dark .sidebar-theme-button::before, .dark .sidebar-theme-button::after { content: ''; position: absolute; pointer-events: none; width: 5px; height: 5px; background: #f8e9b8; clip-path: polygon(50% 0, 62% 38%, 100% 50%, 62% 62%, 50% 100%, 38% 62%, 0 50%, 38% 38%); animation: theme-star-breathe 9s ease-in-out infinite; }
 .dark .sidebar-theme-button::before { top: 8px; right: 9px; }
-.dark .sidebar-theme-button::after { bottom: 9px; left: 8px; width: 4px; height: 4px; background: #cbc0ff; animation-duration: 5.1s; animation-delay: -2s; }
+.dark .sidebar-theme-button::after { bottom: 9px; left: 8px; width: 4px; height: 4px; background: #cbc0ff; animation-duration: 12s; animation-delay: -5s; }
+@keyframes theme-star-breathe { 0%, 100% { opacity: .35; transform: scale(.85); } 50% { opacity: .9; transform: scale(1.08); } }
 @media (max-width: 760px) {
   .app-shell .settings-page .settings-window-grid { grid-template-columns: 1fr; gap: 14px; }
   .app-shell .settings-page .settings-window-grid .settings-pane { padding: 18px; }
@@ -2502,6 +2503,51 @@ html:has(.desktop-post-detail), body:has(.desktop-post-detail) { overflow: hidde
   .detail-media-enter-active, .detail-media-leave-active { transition: none; }
 }
 
+/* Shared glass material keeps background diffusion visible beneath a dense tint. */
+html {
+  --window-frost-surface: rgba(250, 251, 255, .88);
+  --window-frost-sheen: linear-gradient(135deg, #ffffff36, #ffffff08 48%, #b9c4df12);
+  --window-frost-edge: #ffffff80;
+}
+html[data-theme="dark"] {
+  --window-frost-surface: rgba(26, 30, 42, .88);
+  --window-frost-sheen: linear-gradient(135deg, #dce6ff12, #dce6ff03 48%, #8193be0c);
+  --window-frost-edge: #dce5ff30;
+}
+.app-shell .masonry-detail-modal.desktop-post-detail,
+html[data-theme] .post-editor-backdrop .post-editor,
+.app-shell .timeline-context-menu,
+.app-shell .confirm-dialog {
+  background-color: var(--window-frost-surface);
+  background-image: var(--window-frost-sheen);
+  border-color: var(--window-frost-edge);
+  backdrop-filter: blur(240px) saturate(145%);
+  -webkit-backdrop-filter: blur(240px) saturate(145%);
+  box-shadow: 0 24px 70px #0004, inset 0 1px 0 #ffffff24;
+}
+.app-shell.dark .timeline-context-menu,
+.app-shell.dark .confirm-dialog { background-color: var(--window-frost-surface); background-image: var(--window-frost-sheen); }
+.masonry-detail-backdrop:has(.desktop-post-detail)::before { backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); }
+@media (min-width: 761px) {
+  .app-shell:not(.phone-ui) :is(.add-fab, .scroll-top-button),
+  .app-shell.dark:not(.phone-ui) :is(.add-fab, .scroll-top-button) {
+    background-color: var(--window-frost-surface);
+    background-image: var(--window-frost-sheen);
+    border-color: var(--window-frost-edge);
+    backdrop-filter: blur(240px) saturate(145%);
+    -webkit-backdrop-filter: blur(240px) saturate(145%);
+    animation-fill-mode: none;
+  }
+  .app-shell .timeline-hero {
+    display: grid; grid-template-columns: minmax(180px, 1fr) auto;
+    align-items: center; gap: 28px; padding-top: 32px; min-height: 144px;
+  }
+  .app-shell .timeline-hero .feed-timeline-stats { justify-content: flex-end; margin: 0; }
+}
+@media (max-width: 760px) {
+  .phone-ui .timeline-hero { display: flex; flex-wrap: wrap; gap: 16px; }
+  .phone-ui .timeline-hero .feed-timeline-stats { margin: 0; }
+}
 /* Scoped timelines share the same header geometry with their swipe preview. */
 body:has(.content > .scoped-timeline-header) { min-width: 0; }
 .content:has(> .scoped-timeline-header) { padding-top: 180px; }

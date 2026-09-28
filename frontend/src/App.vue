@@ -5,7 +5,8 @@ import PageSnapshot from './components/PageSnapshot.vue'
 import PostActions from './components/PostActions.vue'
 import ImageLoadRing from './components/ImageLoadRing.vue'
 import DetailImage from './components/DetailImage.vue'
-import { ListChecks, ChevronLeft, ChevronRight, Heart } from '@lucide/vue'
+import { ListChecks, ChevronLeft, ChevronRight } from '@lucide/vue'
+import FavoriteHeart from './components/FavoriteHeart.vue'
 import TimelineStats from './components/TimelineStats.vue'
 import QRCode from 'qrcode'
 import { createPostPager, postQueryKey } from './postPager'
@@ -4747,8 +4748,8 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
 <h1>{{ `${localGreeting}，拾光者` }}</h1>
 <p class="subtitle">这里有你关注的世界，和刚刚发生的一切。</p>
 </div>
+<TimelineStats class="feed-timeline-stats" :stats="{ total: totalStatsCount, today: todayStatsCount, favorites: favoriteStatsCount }" />
 </header>
-      <TimelineStats v-if="!isScopedTimeline" class="feed-timeline-stats" :stats="{ total: totalStatsCount, today: todayStatsCount, favorites: favoriteStatsCount }" />
       <div class="section-heading">
 <div class="filters">
 <button v-if="!authorProfile" class="timeline-all-button" :class="{ selected: activeSource === 'all' }" @click="activeSource = 'all'"><span>✦</span>全部</button>
@@ -4819,7 +4820,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
         <button class="post-author-name" type="button" @click.stop="openAuthor(item.post)"><strong>{{ item.post.author }}</strong></button>
       </div>
       <PostTime :value="item.post.published" />
-      <button :class="['masonry-like-button', { liked: item.post.liked }]" type="button" data-tooltip-disabled="true" :disabled="postActionBusy === `like:${item.post.id}`" :aria-label="item.post.liked ? '取消收藏' : '收藏'" :aria-pressed="item.post.liked" @click.stop="togglePostLike(item.post)"><Heart :size="17" :fill="item.post.liked ? 'currentColor' : 'none'" aria-hidden="true" /></button>
+      <button :class="['masonry-like-button', { liked: item.post.liked }]" type="button" data-tooltip-disabled="true" :disabled="postActionBusy === `like:${item.post.id}`" :aria-label="item.post.liked ? '取消收藏' : '收藏'" :aria-pressed="item.post.liked" @click.stop="togglePostLike(item.post)"><FavoriteHeart :liked="item.post.liked" /></button>
     </footer>
   </div>
 </article>
@@ -4896,7 +4897,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
           <div class="masonry-card-body">
             <p v-if="item.post.caption" class="masonry-caption">{{ item.post.caption }}</p>
             <div v-if="item.post.tags?.length" class="masonry-tags"><button v-for="tag in item.post.tags.slice(0, 2)" :key="tag" type="button" tabindex="-1">#{{ tag }}</button><span v-if="item.post.tags.length > 2">+{{ item.post.tags.length - 2 }}</span></div>
-            <footer class="masonry-meta"><span class="masonry-author"><img :src="postAvatar(item.post)" alt=""><strong>{{ item.post.author }}</strong></span><small class="post-time">{{ masonryDate(item.post.published) }}</small><span :class="['masonry-like-button', { liked: item.post.liked }]"><Heart :size="17" :fill="item.post.liked ? 'currentColor' : 'none'" /></span></footer>
+            <footer class="masonry-meta"><span class="masonry-author"><img :src="postAvatar(item.post)" alt=""><strong>{{ item.post.author }}</strong></span><small class="post-time">{{ masonryDate(item.post.published) }}</small><span :class="['masonry-like-button', { liked: item.post.liked }]"><FavoriteHeart :liked="item.post.liked" /></span></footer>
           </div>
         </article>
       </section>
@@ -4923,7 +4924,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
           <div class="masonry-card-body">
             <p v-if="item.post.caption" class="masonry-caption">{{ item.post.caption }}</p>
             <div v-if="item.post.tags?.length" class="masonry-tags"><span v-for="tag in item.post.tags.slice(0, 2)" :key="tag">#{{ tag }}</span><span v-if="item.post.tags.length > 2">+{{ item.post.tags.length - 2 }}</span></div>
-            <footer class="masonry-meta"><span class="masonry-author"><img :src="postAvatar(item.post)" alt=""><strong>{{ item.post.author }}</strong></span><small class="post-time">{{ masonryDate(item.post.published) }}</small><span :class="['masonry-like-button', { liked: item.post.liked }]"><Heart :size="17" :fill="item.post.liked ? 'currentColor' : 'none'" /></span></footer>
+            <footer class="masonry-meta"><span class="masonry-author"><img :src="postAvatar(item.post)" alt=""><strong>{{ item.post.author }}</strong></span><small class="post-time">{{ masonryDate(item.post.published) }}</small><span :class="['masonry-like-button', { liked: item.post.liked }]"><FavoriteHeart :liked="item.post.liked" /></span></footer>
           </div>
         </article>
       </section>
