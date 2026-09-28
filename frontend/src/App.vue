@@ -5,7 +5,7 @@ import PageSnapshot from './components/PageSnapshot.vue'
 import PostActions from './components/PostActions.vue'
 import ImageLoadRing from './components/ImageLoadRing.vue'
 import DetailImage from './components/DetailImage.vue'
-import { ListChecks, ChevronLeft, ChevronRight } from '@lucide/vue'
+import { ListChecks, ChevronLeft, ChevronRight, Plus } from '@lucide/vue'
 import FavoriteHeart from './components/FavoriteHeart.vue'
 import TimelineStats from './components/TimelineStats.vue'
 import QRCode from 'qrcode'
@@ -5083,7 +5083,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
     </div>
     <button v-if="isTimelinePage && isAllFeed && showScrollTop && !selectionMode && !lightbox.open" class="scroll-top-button random-refresh-button mobile-frosted-control" :class="{ 'mobile-control-hidden': phonePortrait && !mobileControlsVisible }" type="button" aria-label="刷新随机动态" @click="reshuffleTimeline"><span :style="{ '--scroll-top-mask': `url(${refreshIcon})` }" aria-hidden="true"></span></button>
     <button v-if="isTimelinePage && showScrollTop && !selectionMode && !lightbox.open" class="scroll-top-button mobile-frosted-control" :class="{ 'mobile-control-hidden': phonePortrait && !mobileControlsVisible }" type="button" aria-label="回到顶部" @click="scrollTimelineToTop"><span :style="{ '--scroll-top-mask': `url(${scrollTopIcon})` }" aria-hidden="true"></span></button>
-    <button v-if="!showSettings && activeNav === 'pulls'" class="add-fab mobile-floating-add" :class="{ 'mobile-control-hidden': phonePortrait && !mobileControlsVisible }" @click="showMobileControls(); showAdd = true">＋ <span>添加订阅</span>
+    <button v-if="!showSettings && activeNav === 'pulls'" class="add-fab mobile-floating-add" :class="{ 'mobile-control-hidden': phonePortrait && !mobileControlsVisible }" @click="showMobileControls(); showAdd = true"><Plus :size="20" aria-hidden="true" /><span>添加订阅</span>
 </button>
     <div v-if="showAdd" class="modal-backdrop" @click.self="showAdd = false">
 <div class="modal">

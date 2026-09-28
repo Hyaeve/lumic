@@ -2423,6 +2423,9 @@ html:has(.desktop-post-detail), body:has(.desktop-post-detail) { overflow: hidde
 .app-shell .masonry-tags button { font-size: 12px; padding: 4px 6px; }
 .app-shell .pull-info small { font-family: system-ui, "Microsoft YaHei", sans-serif; font-size: 13px; line-height: 1.6; color: var(--muted); }
 .app-shell .subscription-pagination span { font-family: system-ui, sans-serif; font-size: 15px; font-weight: 600; color: var(--ink); }
+.app-shell .add-fab { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 11px 18px; line-height: 20px; white-space: nowrap; }
+.app-shell .add-fab > svg { display: block; width: 20px; height: 20px; flex: none; }
+.app-shell .add-fab > span { margin: 0; line-height: 20px; }
 .app-shell :is(.pulls-page, .settings-page, .credential-settings-modal, .platform-detail-modal, .feed-settings-modal),
 .app-shell :is(.pulls-page, .settings-page, .credential-settings-modal, .platform-detail-modal, .feed-settings-modal) * { font-family: "Microsoft YaHei", "微软雅黑", sans-serif!important; }
 .app-shell .credential-config-body .pixiv-browser-form .credential-field > span { color: var(--ink); font-size: 13px; }
