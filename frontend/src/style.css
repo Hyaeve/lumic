@@ -1753,13 +1753,24 @@ svg.nav-line-symbol { fill: none; stroke: currentColor; stroke-width: 1.7; strok
   .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control > .nav-mask-symbol { color: #e9effd!important; }
   .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control > .mobile-platform-mask { color: #eef3ff; }
   .phone-ui.dark .mobile-timeline-toggle.mobile-frosted-control.active { color: #f5e4a4; }
-  .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button) { transition: opacity .36s ease, transform .46s cubic-bezier(.18,1.15,.3,1), color .22s ease, background .22s ease, box-shadow .28s ease; }
-  .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-control-hidden { opacity: 0; pointer-events: none; transform: translateY(-10px) scale(.94); }
-  .phone-ui .scroll-top-button.mobile-control-hidden { transform: translateY(14px) scale(.94); }
-  .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-control-hidden { transition-timing-function: ease, cubic-bezier(.4,0,.65,1), ease, ease, ease; }
+  .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button, .mobile-floating-add) {
+    --control-hide-y: -18px;
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+    transform-origin: center top;
+    animation: none;
+    transition: opacity .22s ease-out, transform .56s cubic-bezier(.16,1.34,.3,1), color .22s ease, background .22s ease, box-shadow .28s ease;
+  }
+  .phone-ui :is(.scroll-top-button, .mobile-floating-add) { --control-hide-y: 22px; transform-origin: center bottom; }
+  .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button, .mobile-floating-add).mobile-control-hidden {
+    opacity: 0;
+    pointer-events: none;
+    transform: translate3d(0, var(--control-hide-y), 0) scale(.88);
+    transition: opacity .28s cubic-bezier(.4,0,.6,1), transform .34s cubic-bezier(.4,0,.65,.35), color .22s ease, background .22s ease, box-shadow .28s ease;
+  }
   @media (prefers-reduced-motion: reduce) {
-    .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button) { transition: opacity .12s ease; }
-    .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button).mobile-control-hidden { transform: none; }
+    .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button, .mobile-floating-add) { transition: opacity .12s ease; transform: none; }
+    .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-toggle, .scroll-top-button, .mobile-floating-add).mobile-control-hidden { transform: none; }
   }
   .phone-ui .mobile-source-shortcuts .sidebar-source-icon {
     filter: grayscale(1) brightness(0) invert(.38) opacity(.96) drop-shadow(0 1px 2px rgba(255, 255, 255, .44))!important;
@@ -2422,7 +2433,7 @@ html:has(.desktop-post-detail), body:has(.desktop-post-detail) { overflow: hidde
 .app-shell .masonry-tags { font-size: 12px; }
 .app-shell .masonry-tags button { font-size: 12px; padding: 4px 6px; }
 .app-shell .pull-info small { font-family: system-ui, "Microsoft YaHei", sans-serif; font-size: 13px; line-height: 1.6; color: var(--muted); }
-.app-shell .subscription-pagination span { font-family: system-ui, sans-serif; font-size: 15px; font-weight: 600; color: var(--ink); }
+.app-shell .subscription-pagination span { font-family: system-ui, sans-serif; font-size: 15px; font-weight: 400; color: var(--ink); }
 .app-shell .add-fab { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 11px 18px; line-height: 20px; white-space: nowrap; }
 .app-shell .add-fab > svg { display: block; width: 20px; height: 20px; flex: none; }
 .app-shell .add-fab > span { margin: 0; line-height: 20px; }
