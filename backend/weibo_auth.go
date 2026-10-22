@@ -72,6 +72,9 @@ func weiboPayloadFailure(payload map[string]any) error {
 	case "10022", "10023", "10024":
 		return &weiboRequestError{"limited", "微博请求已达到频率限制，请稍后重试"}
 	}
+	if jsonValueString(payload["ok"]) == "-100" {
+		return &weiboRequestError{"auth", "微博接口明确要求登录（ok=-100），当前 Cookie 尚未建立有效站点会话"}
+	}
 	if ok, exists := payload["ok"]; exists && jsonValueString(ok) == "0" || code != "" && code != "0" {
 		return &weiboRequestError{"upstream", "微博接口拒绝了当前请求，请检查博主可见性或稍后重试"}
 	}

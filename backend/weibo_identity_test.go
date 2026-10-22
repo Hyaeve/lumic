@@ -119,3 +119,36 @@ func TestWeiboCredentialValidationReportsFailingStage(t *testing.T) {
 		})
 	}
 }
+
+func TestWeiboIdentityAcceptsOnlyExplicitMatchingSessionShapes(t *testing.T) {
+	for _, scenario := range []struct {
+		name string
+		body string
+		kind string
+	}{
+		{"wrapped", `{"ok":1,"data":{"uid":"42","islogin":true}}`, ""},
+		{"top-level", `{"uid":"42","islogin":true}`, ""},
+		{"top-level-numeric", `{"ok":1,"uid":42,"login":1}`, ""},
+		{"empty-wrapper", `{"data":{},"uid":"42","login":true}`, ""},
+		{"explicit-logged-out", `{"ok":1,"data":{"login":false}}`, "auth"},
+		{"missing-identity", `{"ok":1,"data":{}}`, "upstream"},
+		{"missing-login-flag", `{"ok":1,"data":{"uid":"42"}}`, "upstream"},
+		{"invalid-login-flag", `{"ok":1,"data":{"uid":"42","islogin":"unknown"}}`, "upstream"},
+		{"public-profile-is-not-a-session", `{"ok":1,"data":{"user":{"idstr":"42","screen_name":"公开作者"}}}`, "upstream"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			mockWeiboAPI(t, func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, scenario.body) })
+			credentials := WeiboCredentials{Cookie: "SUB=fixture", UserID: "42"}
+			err := validateWeiboSessionIdentity(&credentials, "")
+			if scenario.kind == "" && err != nil || scenario.kind != "" && (err == nil || weiboErrorKind(err) != scenario.kind) {
+				t.Fatalf("wrong identity result: expected=%q kind=%q err=%v", scenario.kind, weiboErrorKind(err), err)
+			}
+		})
+	}
+}
+
+func TestWeiboDesktopNegativeLoginCodeIsAuthenticationFailure(t *testing.T) {
+	if err := weiboPayloadFailure(map[string]any{"ok": -100, "url": "https://weibo.com/login.php"}); weiboErrorKind(err) != "auth" {
+		t.Fatalf("desktop login-required response was not classified: kind=%q", weiboErrorKind(err))
+	}
+}

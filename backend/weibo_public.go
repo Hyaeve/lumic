@@ -84,10 +84,12 @@ func (b *BilibiliStore) fetchPublicWeiboUser(userID string, credentials *WeiboCr
 }
 
 func validateWeiboSessionIdentity(credentials *WeiboCredentials, proxyURL string) error {
+	source := "微博桌面会话接口"
 	payload, status, err := weiboSessionRequest("https://weibo.com/ajax/config/get", credentials, proxyURL)
 	// A missing route is a compatibility issue, not proof of an expired login.
 	// Do not retry authentication, captcha, throttling or other upstream failures.
 	if err != nil && (status == http.StatusNotFound || status == http.StatusGone) {
+		source = "微博移动端会话接口"
 		payload, _, err = weiboSessionRequest("https://m.weibo.cn/api/config", credentials, proxyURL)
 		if err != nil {
 			return fmt.Errorf("微博移动端会话校验接口异常：%w", err)
@@ -97,10 +99,19 @@ func validateWeiboSessionIdentity(credentials *WeiboCredentials, proxyURL string
 		return fmt.Errorf("微博桌面会话校验接口异常：%w", err)
 	}
 	data, _ := payload["data"].(map[string]any)
+	if data == nil || data["uid"] == nil && data["islogin"] == nil && data["login"] == nil {
+		data = payload
+	}
 	userID := jsonValueString(data["uid"])
 	loggedIn := firstNonEmptyRemoteText(jsonValueString(data["islogin"]), jsonValueString(data["login"]))
-	if userID == "" || userID == "0" || loggedIn != "true" && loggedIn != "1" {
-		return &weiboRequestError{"auth", "微博 Cookie 未通过登录状态验证，请重新扫码或导入有效凭证"}
+	if loggedIn == "false" || loggedIn == "0" {
+		return &weiboRequestError{"auth", source + "明确返回未登录，当前 Cookie 未建立可验证的站点登录会话"}
+	}
+	if loggedIn != "true" && loggedIn != "1" {
+		return &weiboRequestError{"upstream", source + "缺少或无法识别登录标记，暂不能判定 Cookie 是否有效"}
+	}
+	if !validWeiboUID(userID) {
+		return &weiboRequestError{"upstream", source + "未返回有效 UID，暂不能确认登录身份"}
 	}
 	if userID != credentials.UserID {
 		return errors.New("微博 Cookie 对应账号与填写的 UID 不一致")
