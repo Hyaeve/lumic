@@ -2,6 +2,8 @@ package main
 
 import (
 	"errors"
+	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 )
@@ -82,9 +84,17 @@ func (b *BilibiliStore) fetchPublicWeiboUser(userID string, credentials *WeiboCr
 }
 
 func validateWeiboSessionIdentity(credentials *WeiboCredentials, proxyURL string) error {
-	payload, _, err := weiboSessionRequest("https://weibo.com/ajax/config/get", credentials, proxyURL)
+	payload, status, err := weiboSessionRequest("https://weibo.com/ajax/config/get", credentials, proxyURL)
+	// A missing route is a compatibility issue, not proof of an expired login.
+	// Do not retry authentication, captcha, throttling or other upstream failures.
+	if err != nil && (status == http.StatusNotFound || status == http.StatusGone) {
+		payload, _, err = weiboSessionRequest("https://m.weibo.cn/api/config", credentials, proxyURL)
+		if err != nil {
+			return fmt.Errorf("微博移动端会话校验接口异常：%w", err)
+		}
+	}
 	if err != nil {
-		return err
+		return fmt.Errorf("微博桌面会话校验接口异常：%w", err)
 	}
 	data, _ := payload["data"].(map[string]any)
 	userID := jsonValueString(data["uid"])

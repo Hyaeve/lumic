@@ -137,7 +137,7 @@ const pixivBusy = ref(false)
 const pixivError = ref('')
 const pixivArtistId = ref('')
 const pixivSubscriptionTags = ref('')
-const weiboAccount = ref({ configured: false, cookieConfigured: false, passwordConfigured: false, userId: '', userName: '', avatar: '' })
+const weiboAccount = ref({ configured: false, qrConnected: false, sessionReady: false, connectionWarning: '', cookieConfigured: false, passwordConfigured: false, userId: '', userName: '', avatar: '' })
 const weiboCredentials = ref({ cookie: '', userId: '' })
 const weiboPasswordCredentials = ref({ username: '', password: '' })
 const weiboQR = ref(null)
@@ -882,7 +882,7 @@ const mobilePagedDetailActive = computed(() => Boolean(phonePortrait.value && mo
 const isTimelinePage = computed(() => !showSettings.value && activeNav.value !== 'pulls' && !masonryDetailPost.value)
 const platformCards = computed(() => [
   { key: 'bilibili', label: '哔哩哔哩', short: '哔', ...sourceMeta.bilibili, configured: biliAccount.value.configured, account: biliAccount.value.configured ? (biliAccount.value.userName || `UID ${biliAccount.value.userId}`) : '尚未连接', avatar: biliAccount.value.avatar, path: '/flow/bilibili', description: 'UP 主动态、专栏与账号收藏', feeds: feeds.value.filter(feed => feed.source === 'bilibili') },
-  { key: 'weibo', label: '微博', short: '微', ...sourceMeta.weibo, configured: weiboAccount.value.configured, account: weiboAccount.value.configured ? (weiboAccount.value.userName || `UID ${weiboAccount.value.userId}`) : '尚未连接', avatar: weiboAccount.value.avatar, path: '/flow/weibo', description: '博主动态与图文媒体', feeds: feeds.value.filter(feed => feed.source === 'weibo') },
+  { key: 'weibo', label: '微博', short: '微', ...sourceMeta.weibo, configured: weiboAccount.value.configured, sessionReady: weiboAccount.value.sessionReady ?? weiboAccount.value.cookieConfigured, connectionWarning: weiboAccount.value.connectionWarning || '', account: weiboAccount.value.configured ? (weiboAccount.value.userName || `UID ${weiboAccount.value.userId}`) : '尚未连接', avatar: weiboAccount.value.avatar, path: '/flow/weibo', description: '博主动态与图文媒体', feeds: feeds.value.filter(feed => feed.source === 'weibo') },
   { key: 'pixiv', label: 'Pixiv', short: 'P', ...sourceMeta.pixiv, configured: pixivAccount.value.configured, account: pixivAccount.value.configured ? (pixivAccount.value.userName || `UID ${pixivAccount.value.userId}`) : '尚未连接', avatar: pixivAccount.value.avatar, path: '/flow/pixiv', description: '画师作品与插画媒体', feeds: feeds.value.filter(feed => feed.source === 'pixiv') },
   { key: 'twitter', label: '推特', short: '推', ...sourceMeta.twitter, image: sourceIconFor('twitter'), configured: twitterAccount.value.configured, account: twitterAccount.value.configured ? (`@${String(twitterAccount.value.userName || twitterAccount.value.userId).replace(/^@/, '')}`) : '尚未连接', avatar: twitterAccount.value.avatar, path: '/flow/twitter', description: '账号点赞的推文与媒体', feeds: feeds.value.filter(feed => feed.source === 'twitter') }
 ])
@@ -1491,10 +1491,10 @@ async function pollWeiboQR() {
     const result = await response.json()
     if (generation !== weiboQRGeneration || weiboQR.value?.id !== id) return
     if (result.status === 'connected') {
-      weiboAccount.value = { configured: true, cookieConfigured: true, passwordConfigured: Boolean(result.passwordConfigured), userId: result.userId, userName: result.userName, avatar: result.avatar || '' }
+      weiboAccount.value = { configured: true, qrConnected: true, sessionReady: result.sessionReady ?? Boolean(result.cookie), connectionWarning: result.connectionWarning || '', cookieConfigured: result.cookieConfigured ?? Boolean(result.cookie), passwordConfigured: Boolean(result.passwordConfigured), userId: result.userId, userName: result.userName, avatar: result.avatar || '' }
       weiboCredentials.value = { cookie: result.cookie || '', userId: result.userId || '' }
       weiboQR.value = null; weiboBusy.value = false; stopWeiboPolling()
-      notify('微博扫码连接成功，凭证已保存并填入')
+      notify(result.connectionWarning || (result.cookie ? '微博扫码连接成功，凭证已保存并填入' : '微博扫码已连接'), result.connectionWarning ? 'info' : 'success')
       return
     }
     weiboPollTimer = setTimeout(pollWeiboQR, 2000)
@@ -5286,6 +5286,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
           <aside class="credential-scan-panel"><h3><QrCode :size="18" aria-hidden="true" />扫码连接</h3><div v-if="weiboQR" class="weibo-qr"><img :src="weiboQR.image.startsWith('//') ? `https:${weiboQR.image}` : weiboQR.image" alt="微博登录二维码"><span>请在微博中扫码并确认</span></div><div v-else class="credential-scan-placeholder" aria-hidden="true"><QrCode :size="58" :stroke-width="1.1" /></div>
           <button class="secondary-button platform-login-button" type="button" @click="startWeiboQR" :disabled="weiboBusy && !weiboQR">{{ weiboQR ? '刷新二维码' : weiboBusy ? '获取中…' : weiboAccount.configured ? '切换账号' : '获取二维码' }}</button><div class="credential-recovery-state"><span>备用密码</span><strong :class="{ configured: weiboAccount.passwordConfigured }">{{ weiboAccount.passwordConfigured ? '已保存' : '未保存' }}</strong></div></aside>
           <div class="credential-fields">
+          <p v-if="weiboAccount.connectionWarning" class="credential-connection-warning" role="status">{{ weiboAccount.connectionWarning }}</p>
           <section class="credential-section"><h3>{{ weiboAccount.cookieConfigured ? '保存备用账号密码' : '账号密码登录' }}</h3><form class="settings-form credential-field-grid" @submit.prevent="loginWeiboAccount" autocomplete="off">
             <CredentialField v-model="weiboPasswordCredentials.username" label="微博账号" autocomplete="username" required placeholder="手机号、邮箱或微博账号" />
             <CredentialField v-model="weiboPasswordCredentials.password" label="微博密码" autocomplete="current-password" required />
@@ -5349,6 +5350,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
         <div class="platform-detail-title"><img :class="['source-icon', { 'twitter-night-icon': selectedPlatform.key === 'twitter' && isDark }]" :src="selectedPlatform.image" alt="平台图标"><div><p class="eyebrow">PLATFORM SOURCE</p><h2>{{ selectedPlatform.label }}</h2></div><span :class="['connection-dot', { online: selectedPlatform.configured }]">{{ selectedPlatform.configured ? '已连接' : '未连接' }}</span></div>
         <div class="platform-detail-summary"><div><span>当前账号</span><strong>{{ selectedPlatform.account }}</strong></div><div><span>内容目录</span><strong>{{ selectedPlatform.path }}</strong></div><div><span>作者来源</span><strong>{{ selectedPlatform.feeds.length }} 个</strong></div></div>
         <div class="platform-detail-actions"><button class="secondary-button" @click="managePlatformCredentials(selectedPlatform.key)">{{ selectedPlatform.configured ? '管理账号凭证' : '连接平台账号' }}</button><button v-if="selectedPlatform.key === 'weibo' && selectedPlatform.configured && !hasWeiboLikesSource" class="secondary-button" :disabled="sourceActionBusy !== ''" @click="addWeiboLikesSource">添加我的点赞</button><button v-if="selectedPlatform.key === 'pixiv' && selectedPlatform.configured && !hasPixivBookmarksSource" class="secondary-button" :disabled="sourceActionBusy !== ''" @click="addPixivBookmarksSource">添加 P站收藏</button><button v-if="selectedPlatform.key === 'twitter' && selectedPlatform.configured && !hasTwitterLikesSource" class="secondary-button" :disabled="sourceActionBusy !== ''" @click="addTwitterLikesSource">添加账号点赞</button><button v-if="selectedPlatform.key === 'bilibili' && selectedPlatform.configured && !hasBilibiliFavoriteOpusSource" class="secondary-button" :disabled="sourceActionBusy !== ''" @click="addBilibiliFavoriteOpusSource">添加收藏专栏</button><button v-if="selectedPlatform.key === 'bilibili' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openBilibili()">添加 UP 主</button><button v-if="selectedPlatform.key === 'weibo'" class="login-button" @click="selectedPlatform = null; showSettings = false; openWeibo()">添加博主</button><button v-if="selectedPlatform.key === 'pixiv' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openPixiv()">添加画师</button><button v-if="selectedPlatform.key === 'twitter' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openTwitter()">添加博主</button></div>
+        <p v-if="selectedPlatform.connectionWarning" class="credential-connection-warning" role="status">{{ selectedPlatform.connectionWarning }}</p>
         <p v-if="settingsError" class="login-error">{{ settingsError }}</p>
         <div class="configured-source-list">
           <div class="configured-source-heading"><h3>订阅列表</h3><span>{{ selectedPlatform.feeds.length }} 个</span></div>

@@ -145,6 +145,9 @@
 .credential-editor .credential-fields .login-button { width: 100%; margin: 4px 0 0; }
 .credential-editor .credential-fields .credential-note { margin: 0!important; color: var(--settings-muted); font-size: 12px; line-height: 1.7; }
 .credential-editor .credential-fields .login-error { margin: 0; line-height: 1.6; font-size: 12px; }
+.app-shell .credential-connection-warning { margin: 0 0 18px; padding: 10px 12px; border-left: 2px solid var(--settings-accent, #5869a8); border-radius: 4px; background: #8798c015; color: var(--settings-ink, #343c53); font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+.app-shell.dark .credential-connection-warning { color: #dfdbee; border-color: #b8aaef; background: #a99fdc12; }
+.credential-editor .credential-connection-warning + .credential-section { padding-top: 0; }
 
 @media (min-width: 761px) and (max-width: 1150px) {
   .app-shell .settings-workspace { padding-inline: 26px; }
