@@ -6,10 +6,10 @@ import "strings"
 // Never include saved secrets in ordinary account responses.
 func weiboAccountView(account WeiboCredentials) map[string]any {
 	return map[string]any{
-		"configured":         account.QRConnected || account.Cookie != "" || strings.TrimSpace(account.PasswordUsername) != "",
+		"configured":         account.QRConnected || hasWeiboAccount(account) || strings.TrimSpace(account.PasswordUsername) != "",
 		"qrConnected":        account.QRConnected,
 		"sessionReady":       hasWeiboAccount(account),
-		"cookieConfigured":   account.Cookie != "",
+		"cookieConfigured":   account.Cookie != "" || account.MobileCookie != "",
 		"passwordConfigured": hasWeiboPassword(account),
 		"userId":             account.UserID,
 		"userName":           account.UserName,

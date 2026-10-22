@@ -40,6 +40,7 @@ import (
 	"golang.org/x/crypto/argon2"
 	xdraw "golang.org/x/image/draw"
 	xproxy "golang.org/x/net/proxy"
+	"golang.org/x/net/publicsuffix"
 )
 
 type Source string
@@ -521,6 +522,8 @@ type PixivCredentials struct {
 
 type WeiboCredentials struct {
 	Cookie            string `json:"cookie,omitempty"`
+	MobileCookie      string `json:"mobileCookie,omitempty"`
+	CookieScoped      bool   `json:"cookieScoped,omitempty"`
 	UserID            string `json:"userId,omitempty"`
 	UserName          string `json:"userName,omitempty"`
 	Avatar            string `json:"avatar,omitempty"`
@@ -4818,7 +4821,7 @@ func (b *BilibiliStore) fetchWeiboLikedPosts(feed SourceConfig, full bool) ([]Po
 	b.RLock()
 	credentials, proxyURL := b.config.Weibo, b.config.ProxyURL
 	b.RUnlock()
-	if (credentials.Cookie == "" && strings.TrimSpace(credentials.Password) == "") || credentials.UserID == "" {
+	if !hasWeiboAccount(credentials) || credentials.UserID == "" {
 		return nil, errors.New("微博账号未连接")
 	}
 	if feed.ID != "" && feed.ID != "weibo-likes-"+credentials.UserID {
@@ -5161,7 +5164,7 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 		b.RLock()
 		credentials, proxyURL := b.config.Weibo, b.config.ProxyURL
 		b.RUnlock()
-		if userID != "" && credentials.Cookie != "" {
+		if userID != "" && hasWeiboAccount(credentials) {
 			if user, repairErr := b.fetchWeiboUser(userID, &credentials, proxyURL); repairErr == nil {
 				if strings.TrimSpace(user.Name) != "" {
 					feed.Name = user.Name
@@ -6698,7 +6701,7 @@ func weiboClient(proxyURL string) (*http.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	jar, err := cookiejar.New(nil)
+	jar, err := cookiejar.New(&cookiejar.Options{PublicSuffixList: publicsuffix.List})
 	if err != nil {
 		return nil, err
 	}
@@ -7267,7 +7270,7 @@ func (b *BilibiliStore) weiboSubscriptionsHandler(w http.ResponseWriter, r *http
 		b.RLock()
 		credentials := b.config.Weibo
 		b.RUnlock()
-		if credentials.Cookie == "" || credentials.UserID == "" {
+		if credentials.Cookie == "" && credentials.MobileCookie == "" || credentials.UserID == "" {
 			writeAPIError(w, http.StatusPreconditionFailed, "请先配置可用的微博 Cookie，再添加我的点赞")
 			return
 		}
@@ -7403,17 +7406,6 @@ func unwrapJSONP(body []byte) []byte {
 	return body
 }
 
-func weiboCrossDomainURL(rawURL string, index int) string {
-	if index != 0 {
-		return rawURL
-	}
-	separator := "&"
-	if !strings.Contains(rawURL, "?") {
-		separator = "?"
-	}
-	return rawURL + separator + "action=login"
-}
-
 func responseSummary(body []byte) string {
 	value := strings.TrimSpace(string(body))
 	if len(value) > 240 {
@@ -7423,18 +7415,23 @@ func responseSummary(body []byte) string {
 }
 
 func validateWeiboCredentials(cookie, userID, proxyURL string) (WeiboCredentials, error) {
-	cookie, userID = normalizeWeiboCookie(cookie), strings.TrimSpace(userID)
-	if cookie == "" || userID == "" {
+	return validateWeiboSiteCredentials(WeiboCredentials{Cookie: cookie, UserID: userID}, proxyURL)
+}
+
+func validateWeiboSiteCredentials(credentials WeiboCredentials, proxyURL string) (WeiboCredentials, error) {
+	credentials.Cookie = normalizeWeiboCookie(credentials.Cookie)
+	credentials.MobileCookie = normalizeWeiboCookie(credentials.MobileCookie)
+	credentials.UserID = strings.TrimSpace(credentials.UserID)
+	if credentials.Cookie == "" && credentials.MobileCookie == "" || credentials.UserID == "" {
 		return WeiboCredentials{}, errors.New("完整 Cookie 和微博 UID 均不能为空")
 	}
-	if weiboCookieValue(cookie, "SUB") == "" && weiboCookieValue(cookie, "SUBP") == "" {
+	if weiboCookieValue(credentials.Cookie, "SUB") == "" && weiboCookieValue(credentials.Cookie, "SUBP") == "" && weiboCookieValue(credentials.MobileCookie, "SUB") == "" && weiboCookieValue(credentials.MobileCookie, "SUBP") == "" {
 		return WeiboCredentials{}, errors.New("Cookie 缺少 SUB/SUBP 登录凭证，请从已登录微博的浏览器请求头中复制完整 Cookie")
 	}
-	credentials := WeiboCredentials{Cookie: cookie, UserID: userID}
 	if err := validateWeiboSessionIdentity(&credentials, proxyURL); err != nil {
 		return WeiboCredentials{}, fmt.Errorf("微博登录身份验证失败：%w", err)
 	}
-	user, err := fetchWeiboAccountProfile(userID, credentials, proxyURL)
+	user, err := fetchWeiboAccountProfile(credentials.UserID, credentials, proxyURL)
 	if err != nil {
 		return WeiboCredentials{}, fmt.Errorf("微博账号资料读取失败：%w", err)
 	}
@@ -7450,10 +7447,10 @@ func (b *BilibiliStore) weiboAccountHandler(w http.ResponseWriter, r *http.Reque
 	b.RUnlock()
 	if r.Method == http.MethodGet {
 		current.Avatar = normalizeRemoteImage(current.Avatar)
-		if (current.Cookie != "" || strings.TrimSpace(current.Password) != "") && current.UserID != "" && (strings.TrimSpace(current.UserName) == "" || strings.TrimSpace(current.Avatar) == "") {
+		if hasWeiboAccount(current) && current.UserID != "" && (strings.TrimSpace(current.UserName) == "" || strings.TrimSpace(current.Avatar) == "") {
 			var user WeiboUser
 			var profileErr error
-			if current.Cookie != "" {
+			if current.Cookie != "" || current.MobileCookie != "" {
 				user, profileErr = fetchWeiboAccountProfile(current.UserID, current, proxyURL)
 				if profileErr != nil && strings.TrimSpace(current.PasswordUsername) != "" && isWeiboSessionFailure(profileErr) {
 					user, profileErr = b.fetchWeiboUser(current.UserID, &current, proxyURL)
@@ -7469,7 +7466,7 @@ func (b *BilibiliStore) weiboAccountHandler(w http.ResponseWriter, r *http.Reque
 					current.Avatar = user.Avatar
 				}
 				b.Lock()
-				if b.config.Weibo.Cookie == current.Cookie && b.config.Weibo.UserID == current.UserID {
+				if sameWeiboSession(b.config.Weibo, current) {
 					b.config.Weibo = current
 				}
 				b.Unlock()
@@ -7481,7 +7478,7 @@ func (b *BilibiliStore) weiboAccountHandler(w http.ResponseWriter, r *http.Reque
 			if cachedAvatar != current.Avatar {
 				current.Avatar = cachedAvatar
 				b.Lock()
-				if b.config.Weibo.Cookie == current.Cookie && b.config.Weibo.UserID == current.UserID {
+				if sameWeiboSession(b.config.Weibo, current) {
 					b.config.Weibo.Avatar = cachedAvatar
 				}
 				b.Unlock()
@@ -7512,7 +7509,7 @@ func (b *BilibiliStore) weiboAccountHandler(w http.ResponseWriter, r *http.Reque
 		passwordCredentials, loginErr := loginWeiboWithPassword(input.Username, input.Password, proxyURL)
 		err = loginErr
 		if err == nil {
-			if input.SavePasswordOnly && current.Cookie != "" {
+			if input.SavePasswordOnly && (current.Cookie != "" || current.MobileCookie != "") {
 				if current.UserID != "" && passwordCredentials.UserID != "" && current.UserID != passwordCredentials.UserID {
 					err = errors.New("备用账号密码与当前扫码账号不是同一微博账号")
 				} else {
@@ -7612,7 +7609,7 @@ func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 			} `json:"data"`
 		}
 		if json.Unmarshal(unwrapJSONP(checkBody), &payload) != nil {
-			writeAPIError(w, http.StatusBadGateway, "微博扫码状态响应异常："+responseSummary(checkBody))
+			writeAPIError(w, http.StatusBadGateway, "微博扫码状态响应无法解析，请重新获取二维码")
 			return
 		}
 		if payload.RetCode != 20000000 {
@@ -7654,7 +7651,7 @@ func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 		loginRequest.Header.Set("Referer", "https://mail.sina.com.cn/")
 		loginResponse, loginErr := client.Do(loginRequest)
 		if loginErr != nil {
-			writeAPIError(w, http.StatusBadGateway, "微博登录票据交换失败："+loginErr.Error())
+			writeAPIError(w, http.StatusBadGateway, "微博登录票据交换未完成，请检查网络后重新扫码")
 			return
 		}
 		defer loginResponse.Body.Close()
@@ -7667,76 +7664,51 @@ func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 			RetCode     json.RawMessage `json:"retcode"`
 			UID         json.RawMessage `json:"uid"`
 			Nick        string          `json:"nick"`
-			Reason      string          `json:"reason"`
+			Ticket      string          `json:"ticket"`
 			CrossDomain []string        `json:"crossDomainUrlList"`
 		}
 		if err := json.Unmarshal(unwrapJSONP(loginBody), &loginPayload); err != nil {
-			writeAPIError(w, http.StatusBadGateway, fmt.Sprintf("微博登录响应无法解析（HTTP %d）：%s", loginResponse.StatusCode, responseSummary(loginBody)))
+			writeAPIError(w, http.StatusBadGateway, fmt.Sprintf("微博登录响应无法解析（HTTP %d），请重新扫码", loginResponse.StatusCode))
 			return
 		}
 		loginUID, loginRetCode := jsonScalarString(loginPayload.UID), jsonScalarString(loginPayload.RetCode)
 		if loginResponse.StatusCode != http.StatusOK || (loginRetCode != "" && loginRetCode != "0") || !validWeiboUID(loginUID) {
-			detail := loginPayload.Reason
-			if detail == "" {
-				detail = responseSummary(loginBody)
-			}
-			writeAPIError(w, http.StatusBadGateway, fmt.Sprintf("微博登录响应异常（HTTP %d，retcode %s）：%s", loginResponse.StatusCode, loginRetCode, detail))
+			writeAPIError(w, http.StatusBadGateway, fmt.Sprintf("微博未确认扫码登录账号（HTTP %d），请重新扫码或在官方页面完成安全验证", loginResponse.StatusCode))
 			return
 		}
-		for index, crossURL := range loginPayload.CrossDomain {
-			crossURL = weiboCrossDomainURL(crossURL, index)
-			crossRequest, e := http.NewRequest(http.MethodGet, crossURL, nil)
-			if e == nil {
-				crossRequest.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36")
-				crossRequest.Header.Set("Referer", "https://mail.sina.com.cn/")
-				if crossResponse, e := client.Do(crossRequest); e == nil {
-					_, _ = io.Copy(io.Discard, io.LimitReader(crossResponse.Body, 1<<20))
-					crossResponse.Body.Close()
-				}
-			}
-		}
-		homeRequest, _ := http.NewRequest(http.MethodGet, "https://weibo.com/", nil)
-		homeRequest.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36")
-		if homeResponse, homeErr := client.Do(homeRequest); homeErr == nil {
-			_, _ = io.Copy(io.Discard, io.LimitReader(homeResponse.Body, 1<<20))
-			homeResponse.Body.Close()
-		}
-		cookieParts, cookieNames := []string{}, map[string]bool{}
-		for _, rawURL := range []string{"https://weibo.com/", "https://www.weibo.com/", "https://m.weibo.cn/", "https://login.sina.com.cn/", "https://passport.weibo.com/"} {
-			cookieURL, _ := url.Parse(rawURL)
-			for _, cookie := range client.Jar.Cookies(cookieURL) {
-				if !cookieNames[cookie.Name] {
-					cookieNames[cookie.Name] = true
-					cookieParts = append(cookieParts, cookie.Name+"="+cookie.Value)
-				}
-			}
+		validateErr := completeWeiboSSO(r.Context(), client, loginPayload.CrossDomain)
+		if validateErr == nil && loginPayload.Ticket != "" {
+			appQuery := url.Values{"ticket": {loginPayload.Ticket}, "ssosavestate": {strconv.FormatInt(time.Now().Add(30*24*time.Hour).Unix(), 10)}}
+			validateErr = completeWeiboSSO(r.Context(), client, []string{"https://passport.weibo.com/sso/wblogin?" + appQuery.Encode()})
 		}
 		b.RLock()
 		previousAccount := b.config.Weibo
 		b.RUnlock()
-		credentials := WeiboCredentials{Cookie: strings.Join(cookieParts, "; "), UserID: loginUID, UserName: loginPayload.Nick}
-		validated, validateErr := validateWeiboCredentials(credentials.Cookie, credentials.UserID, proxyURL)
-		capturedCookie := credentials.Cookie
+		credentials := WeiboCredentials{Cookie: weiboSiteCookie(client, "https://weibo.com/"), MobileCookie: weiboSiteCookie(client, "https://m.weibo.cn/"), CookieScoped: true, UserID: loginUID, UserName: loginPayload.Nick}
+		var validated WeiboCredentials
+		if validateErr == nil {
+			validated, validateErr = validateWeiboSiteCredentials(credentials, proxyURL)
+		}
+		capturedCookie := firstNonEmptyRemoteText(credentials.Cookie, credentials.MobileCookie)
 		if validateErr != nil {
 			// The SSO exchange confirmed the account even if API validation is unavailable.
 			// Keep new unverified cookies out of the active fetch credentials.
 			credentials.Cookie = ""
+			credentials.MobileCookie = ""
+			credentials.CookieScoped = false
 			if previousAccount.UserID == loginUID {
 				credentials = previousAccount
 				if loginPayload.Nick != "" {
 					credentials.UserName = loginPayload.Nick
 				}
 			}
-			credentials.ConnectionWarning = "扫码已连接，尚未取得可用 Cookie，请重新扫码或手动配置。"
-			if capturedCookie != "" {
-				credentials.ConnectionWarning = "扫码已连接，但新 Cookie 尚未通过验证：" + validateErr.Error()
-			}
+			credentials.ConnectionWarning = "扫码已连接，但新会话尚不可用：" + validateErr.Error()
 		} else {
 			if validated.UserName == "" {
 				validated.UserName = credentials.UserName
 			}
 			credentials = validated
-			capturedCookie = validated.Cookie
+			capturedCookie = firstNonEmptyRemoteText(validated.Cookie, validated.MobileCookie)
 			retainWeiboPassword(previousAccount, &credentials)
 		}
 		credentials.QRConnected = true
@@ -7803,11 +7775,7 @@ func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(unwrapJSONP(body), &payload); err != nil || response.StatusCode != http.StatusOK || payload.RetCode != 20000000 || payload.Data.QRID == "" || payload.Data.Image == "" {
-		summary := strings.TrimSpace(string(body))
-		if len(summary) > 180 {
-			summary = summary[:180]
-		}
-		writeAPIError(w, http.StatusBadGateway, fmt.Sprintf("微博扫码接口响应异常（HTTP %d）：%s", response.StatusCode, summary))
+		writeAPIError(w, http.StatusBadGateway, fmt.Sprintf("微博扫码接口响应异常（HTTP %d），请稍后重新获取二维码", response.StatusCode))
 		return
 	}
 	now := time.Now()

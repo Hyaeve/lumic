@@ -40,11 +40,11 @@ func hasWeiboPassword(credentials WeiboCredentials) bool {
 }
 
 func hasWeiboAccount(credentials WeiboCredentials) bool {
-	return credentials.Cookie != "" || hasWeiboPassword(credentials)
+	return credentials.Cookie != "" || credentials.MobileCookie != "" || hasWeiboPassword(credentials)
 }
 
 func sameWeiboSession(a, b WeiboCredentials) bool {
-	return a.UserID == b.UserID && a.Cookie == b.Cookie && a.PasswordUsername == b.PasswordUsername && a.Password == b.Password
+	return a.UserID == b.UserID && a.Cookie == b.Cookie && a.MobileCookie == b.MobileCookie && a.CookieScoped == b.CookieScoped && a.PasswordUsername == b.PasswordUsername && a.Password == b.Password
 }
 
 func retainWeiboPassword(previous WeiboCredentials, next *WeiboCredentials) {
@@ -110,7 +110,11 @@ func weiboSessionRequest(endpoint string, credentials *WeiboCredentials, proxyUR
 	if err != nil {
 		return nil, 0, err
 	}
-	weiboRequestHeaders(request, credentials.Cookie)
+	cookie := &credentials.Cookie
+	if request.URL.Hostname() == "m.weibo.cn" && (credentials.CookieScoped || credentials.MobileCookie != "") {
+		cookie = &credentials.MobileCookie
+	}
+	weiboRequestHeaders(request, *cookie)
 	client, err := weiboHTTPClient(proxyURL)
 	if err != nil {
 		return nil, 0, err
@@ -160,8 +164,8 @@ func weiboSessionRequest(endpoint string, credentials *WeiboCredentials, proxyUR
 	if err := weiboPayloadFailure(payload); err != nil {
 		return nil, status, err
 	}
-	if credentials.Cookie != "" {
-		credentials.Cookie = mergeWeiboResponseCookies(credentials.Cookie, response)
+	if *cookie != "" {
+		*cookie = mergeWeiboResponseCookies(*cookie, response)
 	}
 	return payload, status, nil
 }
@@ -180,6 +184,8 @@ func (b *BilibiliStore) persistWeiboSession(previous WeiboCredentials, next *Wei
 	}
 	stored := b.config.Weibo
 	b.config.Weibo.Cookie = next.Cookie
+	b.config.Weibo.MobileCookie = next.MobileCookie
+	b.config.Weibo.CookieScoped = next.CookieScoped
 	b.config.Weibo.UserID = next.UserID
 	if next.UserName != "" {
 		b.config.Weibo.UserName = next.UserName

@@ -13,6 +13,7 @@ import (
 	"image/png"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1442,14 +1443,11 @@ func TestWeiboJSONPAndCrossDomainURL(t *testing.T) {
 	if payload.RetCode != 20000000 || payload.Data.Alt != "ticket" {
 		t.Fatalf("unexpected JSONP payload: %#v", payload)
 	}
-	if got := weiboCrossDomainURL("https://example.com/cross?a=1", 0); got != "https://example.com/cross?a=1&action=login" {
-		t.Fatalf("unexpected first cross-domain URL: %s", got)
-	}
-	if got := weiboCrossDomainURL("https://example.com/cross", 0); got != "https://example.com/cross?action=login" {
-		t.Fatalf("unexpected URL without query: %s", got)
-	}
-	if got := weiboCrossDomainURL("https://example.com/other?a=1", 1); got != "https://example.com/other?a=1" {
-		t.Fatalf("non-first URL changed: %s", got)
+	for index, rawURL := range []string{"https://passport.weibo.com/wbsso/login?ticket=fixture&action=login", "https://passport.weibo.cn/sso/crossdomain?ticket=fixture"} {
+		target, err := url.Parse(weiboCrossDomainURL(rawURL, index))
+		if err != nil || target.Query().Get("action") != "login" || len(target.Query()["action"]) != 1 || target.Query().Get("callback") == "" || target.Query().Get("scriptId") != fmt.Sprintf("ssoscript%d", index) {
+			t.Fatal("cross-domain callback parameters were not set exactly once")
+		}
 	}
 }
 

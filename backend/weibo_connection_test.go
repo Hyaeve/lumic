@@ -21,6 +21,8 @@ func prepareWeiboConnectionQR(t *testing.T, store *BilibiliStore, loginBody stri
 			fmt.Fprint(w, `{"retcode":20000000,"data":{"alt":"fixture-ticket"}}`)
 		case "/sso/login.php":
 			fmt.Fprint(w, loginBody)
+		case "/sso/crossdomain.php":
+			fmt.Fprint(w, `cb({"retcode":0,"arrURL":[]})`)
 		}
 	}))
 	t.Cleanup(server.Close)
@@ -46,7 +48,7 @@ func TestWeiboConfirmedQRConnectsWithoutUsableCredentials(t *testing.T) {
 		{"unverified-cookie", WeiboCredentials{}, true, false},
 		{"same-account-keeps-active-session", WeiboCredentials{UserID: "42", Cookie: "SUB=old", PasswordUsername: "fixture", Password: "old-password"}, false, true},
 		{"switch-account-with-no-cookie", WeiboCredentials{UserID: "99", Cookie: "SUB=other", PasswordUsername: "other", Password: "other-password"}, false, false},
-		{"switch-account-with-unverified-cookie", WeiboCredentials{UserID: "99", Cookie: "SUB=other", PasswordUsername: "other", Password: "other-password"}, true, false},
+		{"switch-account-with-unverified-cookie", WeiboCredentials{UserID: "99", Cookie: "SUB=other", MobileCookie: "SUB=other-mobile", CookieScoped: true, PasswordUsername: "other", Password: "other-password"}, true, false},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			store := newWeiboAuthTestStore(t, scenario.previous)
@@ -68,7 +70,7 @@ func TestWeiboConfirmedQRConnectsWithoutUsableCredentials(t *testing.T) {
 				if store.config.Weibo.Cookie != scenario.previous.Cookie || store.config.Weibo.Password != scenario.previous.Password {
 					t.Fatal("same-account pending QR discarded active credentials")
 				}
-			} else if store.config.Weibo.Cookie != "" || hasWeiboPassword(store.config.Weibo) {
+			} else if store.config.Weibo.Cookie != "" || store.config.Weibo.MobileCookie != "" || hasWeiboPassword(store.config.Weibo) {
 				t.Fatal("pending account switch inherited another account's credentials")
 			}
 			data, err := os.ReadFile(bilibiliFile)

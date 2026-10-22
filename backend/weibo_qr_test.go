@@ -67,6 +67,8 @@ func TestWeiboQRReturnsOnlyNewValidatedCookieOnce(t *testing.T) {
 					fmt.Fprint(w, `{"retcode":20000000,"data":{"alt":"fixture-ticket"}}`)
 				case "/sso/login.php":
 					fmt.Fprint(w, `{"retcode":0,"uid":"42","nick":"示例账号"}`)
+				case "/sso/crossdomain.php":
+					fmt.Fprint(w, `cb({"retcode":0,"arrURL":[]})`)
 				}
 			}))
 			defer upstream.Close()
@@ -74,6 +76,8 @@ func TestWeiboQRReturnsOnlyNewValidatedCookieOnce(t *testing.T) {
 			jar, _ := cookiejar.New(nil)
 			cookieURL, _ := url.Parse("https://weibo.com/")
 			jar.SetCookies(cookieURL, []*http.Cookie{{Name: "SUB", Value: "new-qr-fixture"}, {Name: "SUBP", Value: "new-qr-profile"}})
+			mobileURL, _ := url.Parse("https://m.weibo.cn/")
+			jar.SetCookies(mobileURL, []*http.Cookie{{Name: "SUB", Value: "new-qr-fixture"}})
 			client := &http.Client{Jar: jar, Transport: weiboTestTransport{target, upstream.Client().Transport}}
 			store.weiboQR = map[string]WeiboQRSession{"fixture": {ID: "fixture", QRID: "ticket", ExpiresAt: time.Now().Add(time.Minute)}}
 			store.weiboClients = map[string]*http.Client{"fixture": client}
