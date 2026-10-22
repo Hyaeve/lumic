@@ -5,6 +5,9 @@ import PageSnapshot from './components/PageSnapshot.vue'
 import PostActions from './components/PostActions.vue'
 import ImageLoadRing from './components/ImageLoadRing.vue'
 import DetailImage from './components/DetailImage.vue'
+import CredentialField from './components/CredentialField.vue'
+import NotificationToasts from './components/NotificationToasts.vue'
+import { notifications, notify } from './notifications'
 import { ListChecks, ChevronLeft, ChevronRight, Plus, KeyRound, Network, SlidersHorizontal, Archive, UserRound, QrCode, X, Download, Upload, Monitor, Smartphone } from '@lucide/vue'
 import FavoriteHeart from './components/FavoriteHeart.vue'
 import TimelineStats from './components/TimelineStats.vue'
@@ -65,6 +68,12 @@ const credentialPlatform = ref(null)
 const credentialDialog = ref(null)
 let credentialReturnFocus = null
 watch(() => Boolean(credentialPlatform.value), async open => {
+  if (!open) {
+    stopWeiboPolling()
+    weiboQR.value = null
+    weiboBusy.value = false
+    weiboCredentials.value = { cookie: '', userId: '' }
+  }
   await nextTick()
   if (open) credentialDialog.value?.querySelector('button')?.focus({ preventScroll: true })
   else if (credentialReturnFocus?.isConnected) credentialReturnFocus.focus({ preventScroll: true })
@@ -135,6 +144,7 @@ const weiboQR = ref(null)
 const weiboBusy = ref(false)
 const weiboError = ref('')
 let weiboPollTimer = null
+let weiboQRGeneration = 0
 const twitterAccount = ref({ configured: false, userId: '', userName: '', avatar: '' })
 const twitterCredentials = ref({ apiKey: '', username: '' })
 const twitterArtistUsername = ref('')
@@ -148,6 +158,19 @@ const feeds = ref([])
 const resolvedAuthorAvatars = ref({})
 const postActionBusy = ref('')
 const timelineMessage = ref('')
+// Keep form errors in place as well as announcing the result above any open dialog.
+for (const error of [settingsError, biliError, weiboError, pixivError, twitterError]) {
+  watch(error, message => { if (message) notify(message, 'error') })
+}
+watch(proxyMessage, message => { if (message) notify(message) })
+function reportTimeline(message, tone = 'success') {
+  timelineMessage.value = message
+  notify(message, tone)
+}
+function reportSource(message, tone = 'success') {
+  sourceActionMessage.value = message
+  notify(message, tone)
+}
 const selectionMode = ref(false)
 const selectionAction = ref('delete')
 const selectedPostIds = ref([])
@@ -703,7 +726,7 @@ async function openGalleryPost(source) {
     if (!postById.value.has(String(id))) await postPager.next({ id: String(id), order: 'newest', source: 'all' }, true)
     if (originKey !== feedQueryKey.value || !galleryPresenting.value) return
     const post = postById.value.get(String(id))
-    if (!post) { timelineMessage.value = '暂时无法打开这张图片所属的动态，请稍后重试。'; return }
+    if (!post) { reportTimeline('暂时无法打开这张图片所属的动态，请稍后重试。', 'error'); return }
     if (selectionMode.value) stopSelection()
     // Replace the gallery's overlay entry with the detail, preserving one return.
     const replaceRoute = phonePortrait.value && phoneOverlayHistoryActive === 'gallery'
@@ -1055,8 +1078,10 @@ async function logout() {
     selectedPlatform.value = null
     credentialPlatform.value = null
     stopSelection()
+    notifications.clear()
+    notify('已退出登录')
   } catch {
-    window.alert('退出登录失败，请检查连接后重试')
+    notify('退出登录失败，请检查连接后重试', 'error')
   }
 }
 function loadRememberedLogin() {
@@ -1336,6 +1361,7 @@ async function savePreviewQuality() {
       mobile: normalizePreviewQualityLevel(project.previewMobileLevel, next.mobile)
     }
     previewQualitySaved.value = { ...previewQuality.value }
+    notify('画质设置已保存')
   } catch (error) {
     previewQuality.value = { ...previewQualitySaved.value }
     settingsError.value = error.message
@@ -1369,6 +1395,7 @@ async function saveSettings() {
     const response = await fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(settingsForm.value) })
     if (!response.ok) throw new Error('保存失败，请检查输入')
     settingsForm.value = { username: settingsForm.value.username, newPassword: '' }
+    notify('账号设置已保存')
   } catch (error) { settingsError.value = error.message }
   finally { settingsBusy.value = false }
 }
@@ -1396,7 +1423,7 @@ async function pollBilibiliQR() {
     const response = await fetch(`/api/bilibili/qr?id=${encodeURIComponent(biliQR.value.id)}`)
     if (!response.ok) throw new Error(await responseError(response, 'B 站扫码状态查询失败'))
     const result = await response.json(); biliQRStatus.value = result.message || '等待扫码'
-    if (result.status === 'connected') { biliAccount.value = { configured: true, userId: result.userId, userName: result.userName || '', avatar: result.avatar || '' }; biliQR.value = null; biliQRImage.value = ''; biliBusy.value = false; stopBilibiliPolling(); return }
+    if (result.status === 'connected') { biliAccount.value = { configured: true, userId: result.userId, userName: result.userName || '', avatar: result.avatar || '' }; biliQR.value = null; biliQRImage.value = ''; biliBusy.value = false; stopBilibiliPolling(); notify('哔哩哔哩扫码连接成功'); return }
     biliPollTimer = setTimeout(pollBilibiliQR, 3000)
   } catch (error) { biliError.value = error.message; biliBusy.value = false; stopBilibiliPolling() }
 }
@@ -1415,6 +1442,7 @@ async function saveBilibiliAccount() {
     if (!response.ok) throw new Error(await responseError(response, '凭证验证失败'))
     biliAccount.value = await response.json()
     biliCredentials.value = { cookie: '', SESSDATA: '', bili_jct: '', buvid3: '', DedeUserID: '', ac_time_value: '', buvid4: '', DedeUserID__ckMd5: '' }
+    notify('哔哩哔哩凭证已验证并保存')
   } catch (error) { biliError.value = error.message } finally { biliBusy.value = false }
 }
 async function savePixivAccount() {
@@ -1423,6 +1451,7 @@ async function savePixivAccount() {
     const response = await fetch('/api/pixiv/account', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.fromEntries(Object.entries(pixivCredentials.value).map(([key, value]) => [key, value.trim()]))) })
     if (!response.ok) throw new Error(await responseError(response, 'Pixiv 凭证验证失败'))
     pixivAccount.value = await response.json(); pixivCredentials.value = emptyPixivCredentials()
+    notify('Pixiv 凭证已验证并保存')
   } catch (error) { pixivError.value = error.message } finally { pixivBusy.value = false }
 }
 async function openPixiv() {
@@ -1451,24 +1480,37 @@ async function openTwitter() {
     selectedPlatform.value = null; showTwitter.value = true
   } catch { twitterError.value = '无法读取推特配置' }
 }
-function stopWeiboPolling() { if (weiboPollTimer) clearTimeout(weiboPollTimer); weiboPollTimer = null }
+function stopWeiboPolling() { weiboQRGeneration++; if (weiboPollTimer) clearTimeout(weiboPollTimer); weiboPollTimer = null }
 async function pollWeiboQR() {
-  if (!weiboQR.value?.id) return
+  const id = weiboQR.value?.id
+  const generation = weiboQRGeneration
+  if (!id) return
   try {
-    const response = await fetch(`/api/weibo/qr?id=${encodeURIComponent(weiboQR.value.id)}`)
+    const response = await fetch(`/api/weibo/qr?id=${encodeURIComponent(id)}`, { cache: 'no-store' })
     if (!response.ok) throw new Error(await responseError(response, '微博扫码状态查询失败'))
     const result = await response.json()
-    if (result.status === 'connected') { weiboAccount.value = { ...weiboAccount.value, configured: true, cookieConfigured: true, userId: result.userId, userName: result.userName, avatar: result.avatar || '' }; weiboQR.value = null; weiboBusy.value = false; return }
+    if (generation !== weiboQRGeneration || weiboQR.value?.id !== id) return
+    if (result.status === 'connected') {
+      weiboAccount.value = { configured: true, cookieConfigured: true, passwordConfigured: Boolean(result.passwordConfigured), userId: result.userId, userName: result.userName, avatar: result.avatar || '' }
+      weiboCredentials.value = { cookie: result.cookie || '', userId: result.userId || '' }
+      weiboQR.value = null; weiboBusy.value = false; stopWeiboPolling()
+      notify('微博扫码连接成功，凭证已保存并填入')
+      return
+    }
     weiboPollTimer = setTimeout(pollWeiboQR, 2000)
-  } catch (error) { weiboError.value = error.message; weiboBusy.value = false; stopWeiboPolling() }
+  } catch (error) { if (generation !== weiboQRGeneration) return; weiboError.value = error.message; weiboBusy.value = false; stopWeiboPolling() }
 }
 async function startWeiboQR() {
   stopWeiboPolling(); weiboBusy.value = true; weiboError.value = ''; weiboQR.value = null
+  const generation = weiboQRGeneration
+  weiboCredentials.value = { cookie: '', userId: '' }
   try {
     const response = await fetch('/api/weibo/qr', { method: 'POST' })
     if (!response.ok) throw new Error(await responseError(response, '无法获取微博二维码'))
-    weiboQR.value = await response.json(); weiboPollTimer = setTimeout(pollWeiboQR, 1500)
-  } catch (error) { weiboError.value = error.message; weiboBusy.value = false }
+    const result = await response.json()
+    if (generation !== weiboQRGeneration) return
+    weiboQR.value = result; weiboPollTimer = setTimeout(pollWeiboQR, 1500)
+  } catch (error) { if (generation !== weiboQRGeneration) return; weiboError.value = error.message; weiboBusy.value = false }
 }
 async function saveWeiboAccount() {
   weiboBusy.value = true; weiboError.value = ''
@@ -1477,6 +1519,7 @@ async function saveWeiboAccount() {
     if (!response.ok) throw new Error(await responseError(response, '微博 Cookie 验证失败'))
     weiboAccount.value = await response.json()
     weiboCredentials.value = { cookie: '', userId: '' }
+    notify('微博凭证已验证并保存')
   } catch (error) { weiboError.value = error.message } finally { weiboBusy.value = false }
 }
 async function saveTwitterAccount() {
@@ -1486,6 +1529,7 @@ async function saveTwitterAccount() {
 	if (!response.ok) throw new Error(await responseError(response, 'twitterapi.io 凭证验证失败'))
     twitterAccount.value = await response.json()
     twitterCredentials.value = { apiKey: '', username: '' }
+    notify('推特凭证已验证并保存')
     await loadFeeds()
   } catch (error) { twitterError.value = error.message } finally { twitterBusy.value = false }
 }
@@ -1564,6 +1608,7 @@ async function loginWeiboAccount() {
     if (!response.ok) throw new Error(await responseError(response, '微博账号登录失败'))
     weiboAccount.value = await response.json()
     weiboPasswordCredentials.value = { username: '', password: '' }
+    notify('微博账号凭证已保存')
   } catch (error) { weiboError.value = error.message } finally { weiboBusy.value = false }
 }
 async function searchBilibili() {
@@ -1594,10 +1639,10 @@ async function runFullSync() {
     const payload = await response.text()
     let result = {}
     try { result = payload ? JSON.parse(payload) : {} } catch {}
-    if (!response.ok && !result.message) throw new Error(result.error || '同步失败')
-    timelineMessage.value = result.message || '拉取任务已完成'
+    if (!response.ok) throw new Error(result.error || result.message || '同步失败')
+    reportTimeline(result.message || '拉取任务已完成', result.status === 'failed' ? 'error' : 'success')
     void loadData()
-  } catch (error) { timelineMessage.value = error?.name === 'AbortError' ? '同步请求超时，后台任务仍可能继续执行。' : error.message } finally { window.clearTimeout(timeout); syncing.value = false }
+  } catch (error) { reportTimeline(error?.name === 'AbortError' ? '同步请求超时，后台任务仍可能继续执行。' : error.message, 'error') } finally { window.clearTimeout(timeout); syncing.value = false }
 }
 function refreshTimeline(event) {
   if (syncing.value) return
@@ -1615,6 +1660,7 @@ async function subscribeWeibo(user) {
     const saved = await response.json()
     await loadFeeds(saved)
     weiboSubscriptionTags.value = ''; showWeibo.value = false
+    notify('微博作者订阅已添加')
     navigateTo('pulls')
   } catch (error) { weiboError.value = error.message } finally { weiboBusy.value = false }
 }
@@ -1626,6 +1672,7 @@ async function subscribeBilibili(user) {
     const saved = await response.json()
     await loadFeeds(saved)
     biliSubscriptionTags.value = ''; showBilibili.value = false
+    notify('哔哩哔哩作者订阅已添加')
     navigateTo('pulls')
   } catch (error) { biliError.value = error.message } finally { biliBusy.value = false }
 }
@@ -1642,6 +1689,7 @@ async function subscribePixiv() {
     const saved = await response.json()
     await loadFeeds(saved)
     pixivArtistId.value = ''; pixivSubscriptionTags.value = ''; showPixiv.value = false
+    notify('Pixiv 作者订阅已添加')
     navigateTo('pulls')
   } catch (error) { pixivError.value = error.message } finally { pixivBusy.value = false }
 }
@@ -1655,6 +1703,7 @@ async function subscribeTwitter() {
     const saved = await response.json()
     await loadFeeds(saved)
     twitterArtistUsername.value = ''; twitterSubscriptionTags.value = ''; showTwitter.value = false
+    notify('推特作者订阅已添加')
     navigateTo('pulls')
   } catch (error) { twitterError.value = error.message } finally { twitterBusy.value = false }
 }
@@ -1704,6 +1753,7 @@ async function saveFeedSettings() {
     showFeedSettings.value = false
     showStartDatePicker.value = false
     cronEditing.value = false
+    notify('订阅设置已保存')
   } catch (error) { settingsError.value = error.message } finally { settingsBusy.value = false }
 }
 function sourceOperationEndpoint(feed) {
@@ -1730,7 +1780,7 @@ async function toggleFeedEnabled(feed) {
       if (platformIndex >= 0) selectedPlatform.value.feeds[platformIndex] = saved
     }
     if (selectedFeed.value?.id === saved.id) selectedFeed.value = { ...selectedFeed.value, ...saved }
-    sourceActionMessage.value = saved.enabled ? `已启用“${saved.name}”自动同步` : `已停用“${saved.name}”自动同步`
+    reportSource(saved.enabled ? `已启用“${saved.name}”自动同步` : `已停用“${saved.name}”自动同步`)
   } catch (error) {
     settingsError.value = error.message
   } finally {
@@ -1745,7 +1795,7 @@ async function syncSource(feed, full = false) {
     const response = await fetch(`${endpoint}?action=${action}&id=${encodeURIComponent(feed.id)}`, { method: 'POST' })
     const result = await response.json()
     if (!response.ok && result.status !== 'failed') throw new Error(result.error || '无法启动来源拉取')
-    sourceActionMessage.value = result.message || '拉取任务已完成'
+    reportSource(result.message || '拉取任务已完成', !response.ok || result.status === 'failed' ? 'error' : 'success')
     const updated = result.source; const index = feeds.value.findIndex(item => item.id === feed.id)
     if (updated && index >= 0) feeds.value[index] = updated
     if (updated && selectedPlatform.value) {
@@ -2071,7 +2121,10 @@ async function downloadLightboxImage() {
   const fallbackName = `${lightbox.value.author || 'Lumic'}-${lightbox.value.index + 1}.jpg`
   if (window.Lumir?.saveFile) {
     const downloadUrl = new URL(source, window.location.href).href
-    window.Lumir.saveFile(downloadUrl, decodeURIComponent(source.split('/').pop()?.split('?')[0] || fallbackName))
+    try {
+      window.Lumir.saveFile(downloadUrl, decodeURIComponent(source.split('/').pop()?.split('?')[0] || fallbackName))
+      notify('已交给客户端下载图片', 'info')
+    } catch { notify('无法启动图片下载，请重试', 'error') }
     return
   }
   try {
@@ -2083,6 +2136,7 @@ async function downloadLightboxImage() {
     link.download = decodeURIComponent(source.split('/').pop()?.split('?')[0] || fallbackName)
     link.click()
     URL.revokeObjectURL(blobURL)
+    notify('已发起图片下载', 'info')
   } catch {
     const link = document.createElement('a')
     link.href = source
@@ -2090,6 +2144,7 @@ async function downloadLightboxImage() {
     link.target = '_blank'
     link.rel = 'noopener'
     link.click()
+    notify('图片下载失败，已打开原图，请重试保存', 'error')
   }
 }
 function clearLightboxDockTimer() {
@@ -2663,7 +2718,7 @@ async function deleteSource(feed) {
     if (!response.ok) throw new Error(await responseError(response, '删除订阅失败'))
     feeds.value = feeds.value.filter(item => item.id !== feed.id)
     if (selectedPlatform.value) selectedPlatform.value.feeds = selectedPlatform.value.feeds.filter(item => item.id !== feed.id)
-    sourceActionMessage.value = '订阅已删除，已采集文件予以保留'
+    reportSource('订阅已删除，已采集文件予以保留')
   } catch (error) { settingsError.value = error.message } finally { sourceActionBusy.value = '' }
 }
 async function deletePost(post) {
@@ -2692,9 +2747,8 @@ async function deletePost(post) {
     }
     posts.value = posts.value.filter(item => item.id !== post.id)
     void refreshFeedMetadata()
-    timelineMessage.value = '动态已从时间线删除'
-    scheduleTransient(() => { if (timelineMessage.value === '动态已从时间线删除') timelineMessage.value = '' }, 2500)
-  } catch (error) { timelineMessage.value = error.message } finally { postActionBusy.value = '' }
+    reportTimeline('动态已从时间线删除')
+  } catch (error) { reportTimeline(error.message, 'error') } finally { postActionBusy.value = '' }
 }
 function clearPhoneOverlayHistoryForNavigation() {
   if (!phonePortrait.value || !phoneOverlayHistoryActive) return
@@ -2812,6 +2866,7 @@ function clearMasonryPress() {
   masonryPress = null
 }
 onUnmounted(clearMasonryPress)
+onUnmounted(notifications.clear)
 function applyEditedPost(updated) {
   const previous = posts.value.find(post => post.id === updated.id) || masonryDetailPost.value
   for (const source of [...(previous?.media || []), ...(updated.media || [])]) renderedPreviews.delete(source)
@@ -2863,9 +2918,9 @@ async function deleteSelectedPosts() {
     const removed = new Set(selectedPostIds.value)
     posts.value = posts.value.filter(post => !removed.has(post.id))
     void refreshFeedMetadata()
-    timelineMessage.value = `已删除 ${removed.size} 条动态`
+    reportTimeline(`已删除 ${removed.size} 条动态`)
     stopSelection()
-  } catch (error) { timelineMessage.value = error.message } finally { postActionBusy.value = '' }
+  } catch (error) { reportTimeline(error.message, 'error') } finally { postActionBusy.value = '' }
 }
 async function unfavoriteSelectedPosts() {
   if (!selectedPostCount.value) return
@@ -2878,9 +2933,9 @@ async function unfavoriteSelectedPosts() {
     posts.value = posts.value.map(post => selected.has(post.id) ? { ...post, liked: false, favoriteExplicit: true } : post)
     invalidateOtherFavorites()
     void refreshFeedMetadata()
-    timelineMessage.value = `已取消收藏 ${selected.size} 条动态`
+    reportTimeline(`已取消收藏 ${selected.size} 条动态`)
     stopSelection()
-  } catch (error) { timelineMessage.value = error.message } finally { postActionBusy.value = '' }
+  } catch (error) { reportTimeline(error.message, 'error') } finally { postActionBusy.value = '' }
 }
 async function deleteAuthorPosts(source, author) {
   const count = posts.value.filter(post => post.source === source && post.author === author).length
@@ -2894,8 +2949,8 @@ async function deleteAuthorPosts(source, author) {
     const result = await response.json()
     posts.value = posts.value.filter(post => post.source !== source || post.author !== author)
     await loadPostsIncrementally()
-    timelineMessage.value = `已删除 ${author} 的 ${result.count ?? count} 条动态及相关文件`
-  } catch (error) { timelineMessage.value = error.message } finally { postActionBusy.value = '' }
+    reportTimeline(`已删除 ${author} 的 ${result.count ?? count} 条动态及相关文件`)
+  } catch (error) { reportTimeline(error.message, 'error') } finally { postActionBusy.value = '' }
 }
 async function syncWeiboLikes() {
   if (!weiboAccount.value.configured) { await openSettings('platforms'); return }
@@ -2905,8 +2960,8 @@ async function syncWeiboLikes() {
     if (!response.ok) throw new Error(await responseError(response, '微博点赞同步失败'))
     const result = await response.json()
     await loadData()
-    timelineMessage.value = result.message
-  } catch (error) { timelineMessage.value = error.message } finally { syncing.value = false }
+    reportTimeline(result.message || '微博点赞同步已完成', result.status === 'failed' ? 'error' : 'success')
+  } catch (error) { reportTimeline(error.message, 'error') } finally { syncing.value = false }
 }
 async function addWeiboLikesSource() {
   sourceActionBusy.value = 'add:weibo-likes'; sourceActionMessage.value = ''; settingsError.value = ''
@@ -2915,7 +2970,7 @@ async function addWeiboLikesSource() {
     if (!response.ok) throw new Error(await responseError(response, response.status === 409 ? '微博我的点赞来源已添加' : '添加微博点赞来源失败'))
     const feed = await response.json(); feeds.value.push(feed)
     if (selectedPlatform.value?.key === 'weibo') selectedPlatform.value.feeds.push(feed)
-    sourceActionMessage.value = '已添加“我的点赞”，可设置启停、Cron 和过滤规则'
+    reportSource('已添加“我的点赞”，可设置启停、Cron 和过滤规则')
   } catch (error) { settingsError.value = error.message } finally { sourceActionBusy.value = '' }
 }
 async function addPixivBookmarksSource() {
@@ -2925,7 +2980,7 @@ async function addPixivBookmarksSource() {
     if (!response.ok) throw new Error(await responseError(response, response.status === 409 ? 'P站收藏来源已添加' : '添加 P站收藏来源失败'))
     const feed = await response.json(); await loadFeeds(feed)
     if (selectedPlatform.value?.key === 'pixiv') selectedPlatform.value.feeds = feeds.value.filter(item => item.source === 'pixiv')
-    sourceActionMessage.value = '已添加“P站收藏”，默认标签为 #P站收藏'
+    reportSource('已添加“P站收藏”，默认标签为 #P站收藏')
   } catch (error) { settingsError.value = error.message } finally { sourceActionBusy.value = '' }
 }
 async function addTwitterLikesSource() {
@@ -2935,7 +2990,7 @@ async function addTwitterLikesSource() {
     if (!response.ok) throw new Error(await responseError(response, response.status === 409 ? '推特账号点赞来源已添加' : '添加推特账号点赞来源失败'))
     const feed = await response.json(); await loadFeeds(feed)
     if (selectedPlatform.value?.key === 'twitter') selectedPlatform.value.feeds = feeds.value.filter(item => item.source === 'twitter')
-    sourceActionMessage.value = '已添加“推特点赞”，可设置启停、Cron 和过滤规则'
+    reportSource('已添加“推特点赞”，可设置启停、Cron 和过滤规则')
   } catch (error) { settingsError.value = error.message } finally { sourceActionBusy.value = '' }
 }
 async function addBilibiliFavoriteOpusSource() {
@@ -2945,7 +3000,7 @@ async function addBilibiliFavoriteOpusSource() {
     if (!response.ok) throw new Error(await responseError(response, response.status === 409 ? 'B站收藏专栏来源已添加' : '添加 B站收藏专栏来源失败'))
     const feed = await response.json(); await loadFeeds(feed)
     if (selectedPlatform.value?.key === 'bilibili') selectedPlatform.value.feeds = feeds.value.filter(item => item.source === 'bilibili')
-    sourceActionMessage.value = '已添加“收藏专栏”，可手动获取尚未归档的历史收藏'
+    reportSource('已添加“收藏专栏”，可手动获取尚未归档的历史收藏')
   } catch (error) { settingsError.value = error.message } finally { sourceActionBusy.value = '' }
 }
 function setMediaShape(post, mediaIndex, event) {
@@ -4050,9 +4105,10 @@ async function updatePostFavorite(post, liked) {
     if (cachedPost) cachedPost.liked = post.liked
     invalidateOtherFavorites()
     void refreshFeedMetadata()
+    notify(post.liked ? '已收藏' : '已取消收藏')
   } catch (error) {
     post.liked = previous
-    timelineMessage.value = error.message
+    reportTimeline(error.message, 'error')
   } finally {
     postActionBusy.value = ''
 	}
@@ -4587,6 +4643,10 @@ async function checkSession(refreshData = true) {
     if (!session.authenticated) {
       authenticated.value = false
       showBrandMenu.value = false
+      credentialPlatform.value = null
+      stopWeiboPolling()
+      weiboQR.value = null
+      weiboCredentials.value = { cookie: '', userId: '' }
       return
     }
     authenticated.value = true
@@ -4666,6 +4726,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
 </script>
 
 <template>
+  <NotificationToasts />
   <div v-if="!sessionChecked" class="session-loading" aria-label="正在恢复登录状态">
     <span></span>
   </div>
@@ -4781,7 +4842,6 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
   <label class="timeline-search" @pointerdown.stop="closeMobileNavigationOnInputFocus" @click.stop><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><input v-model="timelineSearch" type="search" :placeholder="phonePortrait ? '搜索' : '搜索内容、作者或标签'" aria-label="搜索动态内容、作者或标签" @focus="closeMobileNavigationOnInputFocus" @input="closeMobileNavigationOnInputFocus" @blur="releaseTimelineSearchFocus"></label>
 </div>
 </div>
-      <p v-if="timelineMessage" class="timeline-message">{{ timelineMessage }}</p>
       <section ref="feedListElement" :class="['feed-list', { 'masonry-feed': isMasonryView }]" :style="masonryFeedStyle">
 <template v-if="!isMasonryView">
 <div v-if="timelineTopSpace" class="timeline-spacer" :style="{ height: `${timelineTopSpace}px` }" aria-hidden="true"></div>
@@ -4844,7 +4904,6 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
 <div class="feed-page-status" role="status"><span v-if="activePostPage.loading">正在加载</span><button v-else-if="activePostPage.error" type="button" @click="postPager.next(feedQuery, true)">加载失败，重试</button></div>
     </main>
     <main v-if="!showSettings && activeNav === 'pulls'" class="content pulls-page">
-      <p v-if="timelineMessage" class="timeline-message">{{ timelineMessage }}</p>
       <section class="subscription-platforms">
         <div class="section-heading"><div><h2>平台来源</h2><p>查看账号连接状态与订阅数量。</p></div>
           <div class="platform-connection-stat" role="status" :aria-label="`已连接 ${platformCards.filter(platform => platform.configured).length} / ${platformCards.length} 个平台`">
@@ -5178,7 +5237,6 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
           <section class="settings-pane compact-settings-pane proxy-settings-pane">
             <div class="pane-heading"><div class="settings-section-title"><Network aria-hidden="true" /><h3>网络代理</h3></div><span>{{ proxyStatus.proxyEnabled ? '已启用' : '未启用' }}</span></div>
             <form class="settings-form" @submit.prevent="saveProxy" autocomplete="off"><label for="settings-proxy-url">代理地址</label><input id="settings-proxy-url" v-model="proxyForm.proxyUrl" placeholder="socks5://host.docker.internal:7890"><div class="form-actions"><button type="button" class="secondary-button" @click="testProxy" :disabled="settingsBusy">测试</button><button class="login-button" :disabled="settingsBusy">保存</button></div></form>
-            <p v-if="proxyMessage" class="success-message">{{ proxyMessage }}</p>
           </section>
           <section class="settings-pane quality-settings-pane">
             <div class="pane-heading"><div class="settings-section-title"><SlidersHorizontal aria-hidden="true" /><h3>画质调节</h3></div></div>
@@ -5213,11 +5271,11 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
           <button class="secondary-button platform-login-button" type="button" @click="startBilibiliQR" :disabled="biliBusy && !biliQR">{{ biliQR ? '刷新二维码' : biliBusy ? '获取中…' : biliAccount.configured ? '切换账号' : '获取二维码' }}</button></aside>
           <div class="credential-fields">
           <section class="credential-section"><h3>手动导入 Cookie</h3><form class="settings-form credential-field-grid" @submit.prevent="saveBilibiliAccount" autocomplete="off">
-            <label class="credential-field credential-wide"><span>完整 Cookie</span><textarea v-model="biliCredentials.cookie" rows="3" placeholder="仅在扫码不可用时使用"></textarea></label>
-            <label class="credential-field"><span>SESSDATA</span><input v-model="biliCredentials.SESSDATA" type="password"></label>
-            <label class="credential-field"><span>bili_jct</span><input v-model="biliCredentials.bili_jct" type="password"></label>
-            <label class="credential-field"><span>buvid3</span><input v-model="biliCredentials.buvid3" type="password"></label>
-            <label class="credential-field"><span>DedeUserID</span><input v-model="biliCredentials.DedeUserID" inputmode="numeric"></label>
+            <CredentialField v-model="biliCredentials.cookie" label="完整 Cookie" multiline wide placeholder="仅在扫码不可用时使用" />
+            <CredentialField v-model="biliCredentials.SESSDATA" label="SESSDATA" />
+            <CredentialField v-model="biliCredentials.bili_jct" label="bili_jct" />
+            <CredentialField v-model="biliCredentials.buvid3" label="buvid3" />
+            <CredentialField v-model="biliCredentials.DedeUserID" label="DedeUserID" inputmode="numeric" />
             <button class="login-button credential-wide" :disabled="biliBusy">验证并保存手动凭证</button>
           </form></section>
           <p v-if="biliError" class="login-error bili-error">{{ biliError }}</p>
@@ -5229,15 +5287,15 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
           <button class="secondary-button platform-login-button" type="button" @click="startWeiboQR" :disabled="weiboBusy && !weiboQR">{{ weiboQR ? '刷新二维码' : weiboBusy ? '获取中…' : weiboAccount.configured ? '切换账号' : '获取二维码' }}</button><div class="credential-recovery-state"><span>备用密码</span><strong :class="{ configured: weiboAccount.passwordConfigured }">{{ weiboAccount.passwordConfigured ? '已保存' : '未保存' }}</strong></div></aside>
           <div class="credential-fields">
           <section class="credential-section"><h3>{{ weiboAccount.cookieConfigured ? '保存备用账号密码' : '账号密码登录' }}</h3><form class="settings-form credential-field-grid" @submit.prevent="loginWeiboAccount" autocomplete="off">
-            <label class="credential-field"><span>微博账号</span><input v-model="weiboPasswordCredentials.username" type="text" autocomplete="username" required placeholder="手机号、邮箱或微博账号"></label>
-            <label class="credential-field"><span>微博密码</span><input v-model="weiboPasswordCredentials.password" type="password" autocomplete="current-password" required></label>
+            <CredentialField v-model="weiboPasswordCredentials.username" label="微博账号" autocomplete="username" required placeholder="手机号、邮箱或微博账号" />
+            <CredentialField v-model="weiboPasswordCredentials.password" label="微博密码" autocomplete="current-password" required />
             <p class="credential-note credential-wide">{{ weiboAccount.cookieConfigured ? '当前扫码会话会继续使用，账号密码将加密保存，用于会话失效后自动重新登录。' : '账号密码会加密保存，后续可用于自动恢复微博会话。' }}</p>
             <button class="login-button credential-wide" :disabled="weiboBusy">{{ weiboBusy ? '验证中…' : weiboAccount.cookieConfigured ? '验证并保存备用密码' : '账号密码登录并保存' }}</button>
           </form></section>
           <section class="credential-section"><h3>手动导入 Cookie</h3><form class="settings-form" @submit.prevent="saveWeiboAccount" autocomplete="off">
-            <label class="credential-field"><span>微博 UID</span><input v-model="weiboCredentials.userId" inputmode="numeric" required placeholder="个人主页地址中的数字 UID"></label>
-            <label class="credential-field"><span>完整 Cookie</span><textarea v-model="weiboCredentials.cookie" rows="3" required placeholder="可粘贴浏览器请求头中的 Cookie: 完整内容"></textarea></label>
-            <p class="credential-note credential-wide">保存前会验证账号资料，不会回显原始 Cookie。</p><button class="login-button" :disabled="weiboBusy">{{ weiboBusy ? '验证中…' : '验证并保存 Cookie' }}</button>
+            <CredentialField v-model="weiboCredentials.userId" label="微博 UID" inputmode="numeric" required placeholder="个人主页地址中的数字 UID" />
+            <CredentialField v-model="weiboCredentials.cookie" label="完整 Cookie" multiline required placeholder="可粘贴浏览器请求头中的 Cookie: 完整内容" />
+            <button class="login-button" :disabled="weiboBusy">{{ weiboBusy ? '验证中…' : '验证并保存 Cookie' }}</button>
           </form></section>
           <p v-if="weiboError" class="login-error">{{ weiboError }}</p>
           </div>
@@ -5246,12 +5304,12 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
         <div v-else-if="credentialPlatform.key === 'pixiv'" class="credential-config-body credential-single-layout"><div class="credential-fields">
           <h3 class="credential-fields-title">浏览器凭证</h3>
           <form class="settings-form platform-auth-form pixiv-browser-form" @submit.prevent="savePixivAccount">
-            <label class="credential-field credential-wide"><span>浏览器 UA</span><input v-model="pixivCredentials.userAgent" required autocomplete="off" placeholder="Mozilla/5.0 ..."></label>
-            <label class="credential-field"><span>用户 ID</span><input v-model="pixivCredentials.userId" required inputmode="numeric" autocomplete="off"></label>
-            <label class="credential-field"><span>浏览器 Baggage</span><textarea v-model="pixivCredentials.baggage" rows="2" autocomplete="off"></textarea></label>
-            <label class="credential-field credential-wide"><span>浏览器 Cookie</span><textarea v-model="pixivCredentials.cookie" rows="3" required autocomplete="off"></textarea></label>
-            <label class="credential-field"><span>浏览器 Sentry-Trace</span><input v-model="pixivCredentials.sentryTrace" autocomplete="off"></label>
-            <label class="credential-field"><span>浏览器 X-CSRF-TOKEN</span><input v-model="pixivCredentials.csrfToken" autocomplete="off"></label>
+            <CredentialField v-model="pixivCredentials.userAgent" label="浏览器 UA" wide required autocomplete="off" placeholder="Mozilla/5.0 ..." />
+            <CredentialField v-model="pixivCredentials.userId" label="用户 ID" required inputmode="numeric" autocomplete="off" />
+            <CredentialField v-model="pixivCredentials.baggage" label="浏览器 Baggage" multiline :rows="2" autocomplete="off" />
+            <CredentialField v-model="pixivCredentials.cookie" label="浏览器 Cookie" multiline wide required autocomplete="off" />
+            <CredentialField v-model="pixivCredentials.sentryTrace" label="浏览器 Sentry-Trace" autocomplete="off" />
+            <CredentialField v-model="pixivCredentials.csrfToken" label="浏览器 X-CSRF-TOKEN" autocomplete="off" />
             <button class="login-button" :disabled="pixivBusy">{{ pixivBusy ? '验证中…' : '验证并保存 Pixiv' }}</button>
           </form>
           <p v-if="pixivError" class="login-error">{{ pixivError }}</p>
@@ -5261,8 +5319,8 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
         <div v-else-if="credentialPlatform.key === 'twitter'" class="credential-config-body credential-single-layout"><div class="credential-fields">
           <h3 class="credential-fields-title">API 凭证</h3>
           <form class="settings-form platform-auth-form" @submit.prevent="saveTwitterAccount" autocomplete="off">
-            <label class="credential-field"><span>twitterapi.io API Key</span><input v-model="twitterCredentials.apiKey" type="password" required autocomplete="off" placeholder="在 twitterapi.io 控制台创建的 API Key"></label>
-            <label class="credential-field"><span>推特用户名</span><input v-model="twitterCredentials.username" required autocomplete="off" placeholder="例如 elonmusk，不含 @"></label>
+            <CredentialField v-model="twitterCredentials.apiKey" label="twitterapi.io API Key" required autocomplete="off" placeholder="在 twitterapi.io 控制台创建的 API Key" />
+            <CredentialField v-model="twitterCredentials.username" label="推特用户名" required autocomplete="off" placeholder="例如 elonmusk，不含 @" />
             <p class="credential-note">API Key 仅加密保存于服务端，不会再次显示；用户名用于读取该账号的点赞来源。</p>
             <button class="login-button" :disabled="twitterBusy">{{ twitterBusy ? '验证中…' : twitterAccount.configured ? '验证并切换推特账号' : '验证并连接推特' }}</button>
           </form>
@@ -5291,7 +5349,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
         <div class="platform-detail-title"><img :class="['source-icon', { 'twitter-night-icon': selectedPlatform.key === 'twitter' && isDark }]" :src="selectedPlatform.image" alt="平台图标"><div><p class="eyebrow">PLATFORM SOURCE</p><h2>{{ selectedPlatform.label }}</h2></div><span :class="['connection-dot', { online: selectedPlatform.configured }]">{{ selectedPlatform.configured ? '已连接' : '未连接' }}</span></div>
         <div class="platform-detail-summary"><div><span>当前账号</span><strong>{{ selectedPlatform.account }}</strong></div><div><span>内容目录</span><strong>{{ selectedPlatform.path }}</strong></div><div><span>作者来源</span><strong>{{ selectedPlatform.feeds.length }} 个</strong></div></div>
         <div class="platform-detail-actions"><button class="secondary-button" @click="managePlatformCredentials(selectedPlatform.key)">{{ selectedPlatform.configured ? '管理账号凭证' : '连接平台账号' }}</button><button v-if="selectedPlatform.key === 'weibo' && selectedPlatform.configured && !hasWeiboLikesSource" class="secondary-button" :disabled="sourceActionBusy !== ''" @click="addWeiboLikesSource">添加我的点赞</button><button v-if="selectedPlatform.key === 'pixiv' && selectedPlatform.configured && !hasPixivBookmarksSource" class="secondary-button" :disabled="sourceActionBusy !== ''" @click="addPixivBookmarksSource">添加 P站收藏</button><button v-if="selectedPlatform.key === 'twitter' && selectedPlatform.configured && !hasTwitterLikesSource" class="secondary-button" :disabled="sourceActionBusy !== ''" @click="addTwitterLikesSource">添加账号点赞</button><button v-if="selectedPlatform.key === 'bilibili' && selectedPlatform.configured && !hasBilibiliFavoriteOpusSource" class="secondary-button" :disabled="sourceActionBusy !== ''" @click="addBilibiliFavoriteOpusSource">添加收藏专栏</button><button v-if="selectedPlatform.key === 'bilibili' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openBilibili()">添加 UP 主</button><button v-if="selectedPlatform.key === 'weibo'" class="login-button" @click="selectedPlatform = null; showSettings = false; openWeibo()">添加博主</button><button v-if="selectedPlatform.key === 'pixiv' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openPixiv()">添加画师</button><button v-if="selectedPlatform.key === 'twitter' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openTwitter()">添加博主</button></div>
-        <p v-if="sourceActionMessage" class="success-message source-action-message">{{ sourceActionMessage }}</p><p v-if="settingsError" class="login-error">{{ settingsError }}</p>
+        <p v-if="settingsError" class="login-error">{{ settingsError }}</p>
         <div class="configured-source-list">
           <div class="configured-source-heading"><h3>订阅列表</h3><span>{{ selectedPlatform.feeds.length }} 个</span></div>
           <article v-for="feed in selectedPlatform.feeds" :key="feed.id">

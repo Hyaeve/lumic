@@ -132,6 +132,16 @@
 .credential-editor .credential-fields .credential-field input { height: 42px; }
 .credential-editor .credential-fields .credential-field textarea { min-height: 84px; resize: vertical; scrollbar-width: none; }
 .credential-editor .credential-fields .credential-field :is(input, textarea):focus-visible { outline: 2px solid var(--settings-accent); outline-offset: 1px; }
+.credential-editor .credential-field > label { color: var(--settings-muted); font-size: 12px; font-weight: 400; }
+.credential-value-control { position: relative; min-width: 0; height: 42px; }
+.credential-editor .credential-fields .credential-value-control :is(input, textarea) { height: 100%; padding-right: 48px; }
+.credential-value-control.credential-value-multiline { height: 84px; }
+.credential-editor .credential-fields .credential-value-multiline :is(input, textarea) { min-height: 0; resize: none; }
+.credential-editor .credential-visibility-toggle { position: absolute; top: 0; right: 0; display: grid; place-items: center; width: 44px; height: 42px; padding: 0; border: 0; border-radius: 0 7px 7px 0; color: var(--settings-muted); background: transparent; }
+.credential-editor .credential-value-multiline .credential-visibility-toggle { height: 44px; }
+.credential-editor .credential-visibility-toggle:hover { color: var(--settings-accent); background: color-mix(in srgb, var(--settings-accent) 8%, transparent); }
+.credential-editor .credential-visibility-toggle:disabled { opacity: .5; cursor: default; }
+.credential-value-control input::-ms-reveal { display: none; }
 .credential-editor .credential-fields .login-button { width: 100%; margin: 4px 0 0; }
 .credential-editor .credential-fields .credential-note { margin: 0!important; color: var(--settings-muted); font-size: 12px; line-height: 1.7; }
 .credential-editor .credential-fields .login-error { margin: 0; line-height: 1.6; font-size: 12px; }
@@ -158,6 +168,8 @@
   .app-shell .credential-editor :is(.login-button, .secondary-button) { height: 44px; min-height: 44px; }
   .app-shell .settings-workspace .settings-form input,
   .app-shell .credential-editor .credential-fields .credential-field :is(input, textarea) { font-size: 16px; }
+  .credential-value-control:not(.credential-value-multiline) { height: 44px; }
+  .credential-editor .credential-visibility-toggle { height: 44px; }
   .app-shell .credential-modal-backdrop .credential-editor { width: calc(100vw - 24px); height: min(780px, calc(100dvh - max(12px, env(safe-area-inset-top)) - max(12px, env(safe-area-inset-bottom)))); }
   .credential-editor .credential-modal-head { min-height: 105px; padding: 19px 48px 19px 18px; gap: 10px; }
   .credential-editor .credential-modal-head > .source-icon { width: 32px; height: 32px; }

@@ -7547,6 +7547,7 @@ func (b *BilibiliStore) weiboAccountHandler(w http.ResponseWriter, r *http.Reque
 }
 
 func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	b.RLock()
 	proxyURL := b.config.ProxyURL
 	b.RUnlock()
@@ -7733,7 +7734,8 @@ func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusInternalServerError, "无法保存微博登录状态")
 			return
 		}
-		writeJSON(w, map[string]any{"status": "connected", "userId": credentials.UserID, "userName": credentials.UserName, "avatar": credentials.Avatar})
+		// Only this completed QR exchange returns its new Cookie, never account queries.
+		writeJSON(w, map[string]any{"status": "connected", "cookie": credentials.Cookie, "userId": credentials.UserID, "userName": credentials.UserName, "avatar": credentials.Avatar, "passwordConfigured": hasWeiboPassword(credentials)})
 		return
 	}
 	if r.Method != http.MethodPost {

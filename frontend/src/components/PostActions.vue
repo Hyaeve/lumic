@@ -2,6 +2,7 @@
 import { computed, ref, watch, nextTick, onUnmounted } from 'vue'
 import { Pencil, ArrowLeft, ArrowRight, X, Plus } from '@lucide/vue'
 import deleteIcon from '../../icon/删除.png'
+import { notify } from '../notifications'
 const props = defineProps({ post: Object, icon: String, preview: { type: Function, default: value => value } })
 const emit = defineEmits(['saved', 'delete', 'overlay'])
 const trigger = ref(null)
@@ -114,9 +115,10 @@ async function save() {
       throw new Error(typeof result.error === 'string' ? result.error : result.error?.message || '保存失败，请重试')
     }
     emit('saved', await response.json())
+    notify('动态已保存')
     busy.value = false
     cancel()
-  } catch (e) { error.value = e.message } finally { busy.value = false }
+  } catch (e) { error.value = e.message; notify(e.message, 'error') } finally { busy.value = false }
 }
 onUnmounted(() => { cleanup(); if (menu.value || editing.value) emit('overlay', null) })
 </script>
