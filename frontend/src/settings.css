@@ -1,0 +1,183 @@
+/* Settings and credential styles are isolated from feed and viewer surfaces. */
+.app-shell .settings-workspace,
+.app-shell .credential-editor {
+  --settings-accent: #5869a8;
+  --settings-muted: #707887;
+  --settings-line: #dfe3ec;
+  --settings-surface: #fff;
+  --settings-input: #f7f8fb;
+  --settings-ink: #292f3d;
+  color: var(--settings-ink);
+}
+.app-shell.dark .settings-workspace,
+.app-shell.dark .credential-editor {
+  --settings-accent: #b8aaef;
+  --settings-muted: #a4aabb;
+  --settings-line: #303440;
+  --settings-surface: #171a22;
+  --settings-input: #11141c;
+  --settings-ink: #e9ebf5;
+}
+.app-shell .settings-workspace { padding: 38px 44px 60px; background: #f4f6fa; }
+.app-shell.dark .settings-workspace { background: #0c0f15; }
+.settings-workspace .settings-page-inner { max-width: 1180px; margin-inline: auto; }
+.settings-workspace-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 28px; }
+.settings-workspace-heading h1 { margin: 0; color: var(--settings-ink); font-size: 26px; font-weight: 600; line-height: 1.3; }
+.settings-connection-count { display: inline-flex; align-items: center; gap: 7px; color: var(--settings-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.settings-connection-count i { width: 6px; height: 6px; border-radius: 50%; background: #7f99b3; }
+.app-shell .settings-workspace .platform-credentials-pane { margin: 0; padding: 0 0 24px; }
+.app-shell .settings-workspace .pane-heading { min-height: 24px; margin: 0 0 17px; padding: 0; border: 0; }
+.settings-section-title { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.settings-section-title > svg { width: 18px; height: 18px; flex: none; color: var(--settings-accent); stroke-width: 1.7; }
+.app-shell .settings-workspace .pane-heading h3 { font-size: 15px; font-weight: 600; color: var(--settings-ink); }
+.app-shell .settings-workspace .pane-heading > span { padding: 4px 7px; color: var(--settings-muted); background: var(--settings-input); border: 1px solid var(--settings-line); border-radius: 5px; font-size: 11px; }
+.app-shell .settings-page.settings-workspace .platform-auth-grid { display: grid; grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: calc((100% - 36px) / 4); gap: 12px; overflow-x: auto; overflow-y: hidden; padding: 2px 0 8px; scroll-snap-type: x mandatory; scrollbar-width: none; }
+.app-shell .settings-workspace .platform-auth-card {
+  min-height: 154px; padding: 18px 16px 15px;
+  background: var(--settings-surface); border: 1px solid var(--settings-line);
+  border-radius: 8px; box-shadow: none; cursor: pointer;
+  transition: border-color .18s ease, background .18s ease;
+}
+.app-shell .settings-workspace .platform-auth-card::before { display: none; }
+.app-shell .settings-workspace .platform-auth-card:hover { transform: none; border-color: var(--settings-accent); background: color-mix(in srgb, var(--settings-surface) 97%, var(--settings-accent)); }
+.app-shell .settings-workspace .platform-auth-card:focus-visible { outline: 2px solid var(--settings-accent); outline-offset: 2px; transform: none; }
+.app-shell .settings-workspace .platform-auth-head { flex-wrap: nowrap; min-height: 39px; margin: 0 0 16px; gap: 10px; }
+.app-shell .settings-workspace .platform-auth-head .source-icon { width: 32px; height: 32px; border-radius: 0; }
+.app-shell .settings-workspace .platform-auth-head h3 { margin: 0 0 5px; font-size: 14px; line-height: 1.3; }
+.app-shell .settings-workspace .platform-auth-head .connection-dot { font-size: 11px; font-style: normal; }
+.app-shell .settings-workspace .credential-card-arrow { width: 16px; height: 16px; flex: none; color: var(--settings-muted); }
+.app-shell .settings-workspace .platform-account-summary { gap: 9px; padding-top: 12px; border-color: var(--settings-line); }
+.app-shell .settings-workspace .platform-account-summary > img { width: 29px; height: 29px; }
+.app-shell .settings-workspace .platform-account-summary span { color: var(--settings-muted); font-size: 12px; }
+.app-shell .settings-workspace .platform-account-summary strong { color: var(--settings-ink); font-size: 12px; font-weight: 500; }
+.app-shell .settings-workspace .settings-window-grid { gap: 18px; margin: 0; }
+.app-shell .settings-workspace .settings-window-grid > .settings-pane { display: flex; flex-direction: column; min-height: 280px; padding: 22px 24px; border: 1px solid var(--settings-line); border-radius: 8px; background: var(--settings-surface); box-shadow: none; }
+.app-shell .settings-workspace .settings-window-grid .pane-heading { margin-bottom: 22px; }
+.app-shell .settings-workspace .settings-form { gap: 7px; max-width: none; margin: 0; }
+.app-shell .settings-workspace .settings-form label { color: var(--settings-muted); font-size: 12px; }
+.app-shell .settings-workspace .settings-form input { height: 42px; margin-bottom: 4px; padding-inline: 12px; color: var(--settings-ink); background: var(--settings-input); border: 1px solid var(--settings-line); border-radius: 7px; font-size: 13px; }
+.app-shell .settings-workspace .settings-form input:focus-visible { outline: 2px solid var(--settings-accent); outline-offset: 1px; }
+.app-shell .settings-workspace :is(.login-button, .secondary-button, .restore-file-button),
+.app-shell .credential-editor :is(.login-button, .secondary-button) {
+  display: inline-flex; justify-content: center; align-items: center; gap: 8px;
+  min-height: 42px; height: 42px; margin: 0; padding: 0 16px;
+  border: 1px solid transparent; border-radius: 7px;
+  background: var(--settings-accent); color: #fff;
+  font-size: 13px; font-weight: 500; box-shadow: none;
+  transition: background .18s ease, border-color .18s ease;
+}
+.app-shell.dark .settings-workspace :is(.login-button, .restore-file-button),
+.app-shell.dark .credential-editor .login-button { color: #1a1729; }
+.app-shell .settings-workspace .secondary-button,
+.app-shell .credential-editor .secondary-button { color: var(--settings-ink); background: var(--settings-input); border-color: var(--settings-line); }
+.app-shell .settings-workspace :is(.login-button, .restore-file-button):hover:not(:disabled),
+.app-shell .credential-editor .login-button:hover:not(:disabled) { background: color-mix(in srgb, var(--settings-accent) 85%, #000); }
+.app-shell .settings-workspace .secondary-button:hover:not(:disabled),
+.app-shell .credential-editor .secondary-button:hover:not(:disabled) { background: color-mix(in srgb, var(--settings-input) 87%, var(--settings-accent)); border-color: var(--settings-accent); }
+.app-shell .settings-workspace button:focus-visible,
+.app-shell .credential-editor button:focus-visible { outline: 2px solid var(--settings-accent); outline-offset: 3px; }
+.app-shell .settings-workspace .form-actions { gap: 8px; margin-top: 7px; }
+.app-shell .settings-workspace .quality-slider-list { gap: 27px; padding: 2px 0 10px; }
+.app-shell .settings-workspace .quality-slider-list b { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; color: var(--settings-ink); }
+.settings-workspace .quality-slider-list b svg { width: 17px; height: 17px; color: var(--settings-muted); }
+.app-shell .settings-workspace .quality-slider-list em { padding: 4px 7px; border-radius: 5px; color: var(--settings-accent); background: color-mix(in srgb, var(--settings-accent) 9%, transparent); font-size: 11px; }
+.app-shell .settings-workspace .quality-slider-list small { font-size: 12px; color: var(--settings-muted); }
+.app-shell .settings-workspace .backup-settings-note { max-width: 330px; margin: 12px 0 0!important; color: var(--settings-muted); font-size: 12px; line-height: 1.7; }
+.app-shell .settings-workspace .backup-action-grid { gap: 9px; margin-top: auto; }
+.settings-workspace .backup-action-grid svg { width: 17px; height: 17px; }
+.settings-workspace .restore-file-button:focus-within { outline: 2px solid var(--settings-accent); outline-offset: 3px; }
+.app-shell .settings-workspace .account-settings-form .login-button { margin-top: 7px; }
+.app-shell .settings-workspace :is(.login-error, .success-message) { margin-bottom: 0; font-size: 12px; line-height: 1.6; }
+
+/* Independent scrim and panel let the window sample the actual page backdrop. */
+.app-shell .credential-modal-backdrop { background: #17203338; }
+.app-shell.dark .credential-modal-backdrop { background: #01030a70; }
+.app-shell .credential-modal-backdrop .credential-editor {
+  width: min(860px, calc(100vw - 48px)); height: min(720px, calc(100dvh - 48px));
+  padding: 0; border: 1px solid #ffffff80; border-radius: 14px;
+  background: linear-gradient(135deg, #ffffff19, transparent 45%), #f7f9fdeb;
+  backdrop-filter: blur(64px) saturate(135%);
+  box-shadow: 0 28px 90px #0b132a40, inset 0 1px 0 #ffffff70;
+}
+.app-shell.dark .credential-modal-backdrop .credential-editor { background: linear-gradient(135deg, #bacfff0c, transparent 45%), #191d29eb; border-color: #d3dfff28; box-shadow: 0 28px 90px #0008, inset 0 1px 0 #ffffff0a; }
+.credential-editor .credential-modal-head { min-height: 116px; margin: 0; padding: 24px 64px 23px 26px; gap: 14px; border-color: var(--settings-line); }
+.credential-editor .credential-modal-head > .source-icon { width: 40px; height: 40px; border-radius: 0; object-fit: contain; }
+.credential-editor .credential-modal-head .eyebrow { color: var(--settings-muted); font-size: 11px; margin-bottom: 5px; letter-spacing: 0; }
+.credential-editor .credential-modal-head h2 { font-size: 20px; color: var(--settings-ink); margin: 0 0 5px; }
+.credential-editor .credential-modal-head span { color: var(--settings-muted); font-size: 12px; }
+.credential-editor .modal-close { top: 22px; right: 19px; display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border-radius: 7px; background: transparent; color: var(--settings-muted); }
+.credential-editor .modal-close:hover { background: #9198b720; color: var(--settings-ink); }
+.credential-editor .credential-config-body { padding: 0; overflow: hidden; }
+.credential-editor .credential-split-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); }
+.credential-editor .credential-fields { min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; padding: 25px 26px; }
+.credential-editor .credential-fields::-webkit-scrollbar { display: none; }
+.credential-editor .credential-scan-panel { min-width: 0; padding: 26px 20px; border-right: 1px solid var(--settings-line); background: #8797ba06; overflow-y: auto; scrollbar-width: none; }
+.credential-editor .credential-scan-panel > h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 24px; color: var(--settings-ink); font-size: 14px; font-weight: 500; }
+.credential-editor .credential-scan-panel .weibo-qr { display: grid; justify-items: center; width: 100%; padding: 0; margin: 0 0 16px; background: transparent; border: 0; border-radius: 0; }
+.credential-editor .weibo-qr img { display: block; width: 164px; height: 164px; max-width: 100%; object-fit: contain; background: #fff; padding: 5px; border-radius: 7px; }
+.credential-editor .weibo-qr span { width: 100%; margin-top: 12px; text-align: center; line-height: 1.6; font-size: 11px; color: var(--settings-muted); }
+.credential-scan-placeholder { display: grid; place-items: center; aspect-ratio: 1; width: 164px; max-width: 100%; margin: 0 auto 16px; border: 1px dashed var(--settings-line); border-radius: 7px; color: var(--settings-muted); background: var(--settings-input); }
+.app-shell .credential-editor .platform-login-button { width: 100%; }
+.credential-recovery-state { display: flex; justify-content: space-between; gap: 8px; margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--settings-line); font-size: 11px; color: var(--settings-muted); }
+.credential-recovery-state strong { font-weight: 500; }
+.credential-recovery-state .configured { color: var(--settings-accent); }
+.credential-editor .credential-fields .credential-section { margin: 0 0 24px; padding-top: 22px; border-color: var(--settings-line); }
+.credential-editor .credential-fields .credential-section:first-child { padding-top: 0; }
+.credential-editor .credential-fields-title,
+.credential-editor .credential-section h3 { margin: 0 0 17px; font-size: 14px; font-weight: 600; color: var(--settings-ink); }
+.credential-editor .credential-fields .settings-form { margin: 0; gap: 14px; }
+.credential-editor .credential-fields .credential-field { gap: 7px; color: var(--settings-muted); font-size: 12px; font-weight: 400; }
+.app-shell .credential-editor .credential-field > span { color: var(--settings-muted); font-size: 12px; font-weight: 400; }
+.credential-editor .credential-fields .credential-field :is(input, textarea) { background: var(--settings-input); color: var(--settings-ink); border-color: var(--settings-line); font-size: 13px; border-radius: 7px; }
+.credential-editor .credential-fields .credential-field input { height: 42px; }
+.credential-editor .credential-fields .credential-field textarea { min-height: 84px; resize: vertical; scrollbar-width: none; }
+.credential-editor .credential-fields .credential-field :is(input, textarea):focus-visible { outline: 2px solid var(--settings-accent); outline-offset: 1px; }
+.credential-editor .credential-fields .login-button { width: 100%; margin: 4px 0 0; }
+.credential-editor .credential-fields .credential-note { margin: 0!important; color: var(--settings-muted); font-size: 12px; line-height: 1.7; }
+.credential-editor .credential-fields .login-error { margin: 0; line-height: 1.6; font-size: 12px; }
+
+@media (min-width: 761px) and (max-width: 1150px) {
+  .app-shell .settings-workspace { padding-inline: 26px; }
+  .app-shell .settings-workspace .platform-auth-card { padding-inline: 12px; }
+  .app-shell .settings-workspace .platform-auth-head { gap: 7px; }
+  .app-shell .settings-workspace .platform-auth-head .source-icon { width: 26px; height: 26px; }
+  .app-shell .settings-workspace .platform-auth-head h3 { font-size: 12px; }
+  .app-shell .settings-workspace .settings-window-grid > .settings-pane { padding: 20px; }
+}
+@media (max-width: 760px) {
+  .app-shell .settings-workspace { width: 100%; margin: 0; padding: calc(env(safe-area-inset-top, 0px) + 82px) 16px 40px; }
+  .settings-workspace-heading { margin-bottom: 25px; }
+  .settings-workspace-heading h1 { font-size: 23px; }
+  .app-shell .settings-page.settings-workspace .platform-auth-grid { grid-auto-columns: 100%; }
+  .app-shell .settings-workspace .platform-auth-card { min-height: 145px; }
+  .app-shell .settings-workspace .settings-window-grid { gap: 14px; }
+  .app-shell .settings-workspace .settings-window-grid > .settings-pane { min-height: 0; padding: 20px; }
+  .app-shell .settings-workspace .settings-window-grid .pane-heading { margin-bottom: 19px; }
+  .app-shell .settings-workspace .backup-action-grid { margin-top: 0; }
+  .app-shell .settings-workspace :is(.login-button, .secondary-button, .restore-file-button),
+  .app-shell .credential-editor :is(.login-button, .secondary-button) { height: 44px; min-height: 44px; }
+  .app-shell .settings-workspace .settings-form input,
+  .app-shell .credential-editor .credential-fields .credential-field :is(input, textarea) { font-size: 16px; }
+  .app-shell .credential-modal-backdrop .credential-editor { width: calc(100vw - 24px); height: min(780px, calc(100dvh - max(12px, env(safe-area-inset-top)) - max(12px, env(safe-area-inset-bottom)))); }
+  .credential-editor .credential-modal-head { min-height: 105px; padding: 19px 48px 19px 18px; gap: 10px; }
+  .credential-editor .credential-modal-head > .source-icon { width: 32px; height: 32px; }
+  .credential-editor .credential-modal-head h2 { font-size: 18px; }
+  .credential-editor .credential-modal-head > .connection-dot { position: absolute; right: 20px; top: 74px; font-size: 10px; }
+  .credential-editor .modal-close { top: 11px; right: 7px; width: 44px; height: 44px; }
+  .credential-editor .credential-config-body { overflow-y: auto; }
+  .credential-editor .credential-split-layout { display: flex; flex-direction: column; }
+  .credential-editor .credential-scan-panel { flex: none; padding: 20px 18px; border-right: 0; border-bottom: 1px solid var(--settings-line); display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: 14px; overflow: visible; }
+  .credential-editor .credential-scan-panel > h3 { margin: 0; grid-column: 1 / -1; }
+  .credential-editor .credential-scan-panel :is(.credential-scan-placeholder, .weibo-qr) { width: min(136px, 100%); margin: 0; grid-column: 1; grid-row: 2 / 4; }
+  .credential-editor .weibo-qr img { width: 136px; height: 136px; }
+  .credential-editor .credential-scan-panel .platform-login-button { grid-column: 2; font-size: 12px; padding-inline: 7px; }
+  .credential-editor .credential-recovery-state { grid-column: 2; margin: 0; padding-top: 8px; }
+  .credential-editor .credential-fields { flex: none; padding: 22px 18px; overflow: visible; }
+  .credential-editor .credential-single-layout .credential-fields { min-height: 100%; }
+  .credential-editor .credential-fields .credential-field-grid,
+  .credential-editor .credential-fields .pixiv-browser-form { grid-template-columns: 1fr; }
+  .credential-editor .credential-fields .credential-wide { grid-column: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .settings-workspace *, .credential-editor * { transition: none!important; }
+}

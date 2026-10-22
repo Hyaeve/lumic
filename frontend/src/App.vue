@@ -5,7 +5,7 @@ import PageSnapshot from './components/PageSnapshot.vue'
 import PostActions from './components/PostActions.vue'
 import ImageLoadRing from './components/ImageLoadRing.vue'
 import DetailImage from './components/DetailImage.vue'
-import { ListChecks, ChevronLeft, ChevronRight, Plus } from '@lucide/vue'
+import { ListChecks, ChevronLeft, ChevronRight, Plus, KeyRound, Network, SlidersHorizontal, Archive, UserRound, QrCode, X, Download, Upload, Monitor, Smartphone } from '@lucide/vue'
 import FavoriteHeart from './components/FavoriteHeart.vue'
 import TimelineStats from './components/TimelineStats.vue'
 import QRCode from 'qrcode'
@@ -62,6 +62,20 @@ const showStartDatePicker = ref(false)
 const startDatePickerView = ref({ year: new Date().getFullYear(), month: new Date().getMonth() })
 const selectedPlatform = ref(null)
 const credentialPlatform = ref(null)
+const credentialDialog = ref(null)
+let credentialReturnFocus = null
+watch(() => Boolean(credentialPlatform.value), async open => {
+  await nextTick()
+  if (open) credentialDialog.value?.querySelector('button')?.focus({ preventScroll: true })
+  else if (credentialReturnFocus?.isConnected) credentialReturnFocus.focus({ preventScroll: true })
+})
+function trapCredentialFocus(event) {
+  if (event.key !== 'Tab') return
+  const controls = [...event.currentTarget.querySelectorAll('button:not(:disabled), input:not(:disabled), textarea:not(:disabled)')].filter(element => element.getClientRects().length)
+  const first = controls[0], last = controls.at(-1)
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
+}
 const credentialRail = ref(null)
 function pageCredentials(direction) {
   const rail = credentialRail.value
@@ -1369,11 +1383,10 @@ async function openBilibili() {
 }
 async function openWeibo() {
   showAdd.value = false; weiboError.value = ''
+  selectedPlatform.value = null; showWeibo.value = true
   try {
     const response = await fetch('/api/weibo/account')
     if (response.ok) weiboAccount.value = await response.json()
-    if (!weiboAccount.value.configured) { await openSettings('platforms'); return }
-    selectedPlatform.value = null; showWeibo.value = true
   } catch { weiboError.value = '无法读取微博配置' }
 }
 function stopBilibiliPolling() { if (biliPollTimer) clearTimeout(biliPollTimer); biliPollTimer = null }
@@ -1646,6 +1659,7 @@ async function subscribeTwitter() {
   } catch (error) { twitterError.value = error.message } finally { twitterBusy.value = false }
 }
 function openCredentialSettings(platformKey) {
+  credentialReturnFocus = document.activeElement
   credentialPlatform.value = platformCards.value.find(platform => platform.key === platformKey) || null
   biliError.value = ''
   weiboError.value = ''
@@ -1653,7 +1667,7 @@ function openCredentialSettings(platformKey) {
   twitterError.value = ''
 }
 function handleCredentialCardClick(platformKey) {
-  if (phonePortrait.value) openCredentialSettings(platformKey)
+  openCredentialSettings(platformKey)
 }
 function managePlatformCredentials(platformKey) {
   selectedPlatform.value = null
@@ -4851,7 +4865,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
       <section class="pull-list">
         <article v-for="feed in pagedFeeds" :key="feed.id" class="pull-card">
           <button class="pull-avatar-button" type="button" :title="`查看 ${feed.name} 的动态`" :aria-label="`查看 ${feed.name} 的动态`" @click="openFeedAuthor(feed)"><img :key="`${feed.id}:${sourceAvatar(feed, platformCardForSource(feed.source))}`" class="pull-avatar" :src="sourceAvatar(feed, platformCardForSource(feed.source))" data-fallback-index="0" :alt="feed.name" referrerpolicy="no-referrer" @error="handleSourceAvatarError($event, feed, platformCardForSource(feed.source))"></button>
-          <div class="pull-info"><div class="pull-title"><strong>{{ feed.name }}</strong><span :class="['source-pill', sourceMeta[feed.source].color]"><img :class="['source-icon', { 'twitter-night-icon': feed.source === 'twitter' && isDark }]" :src="sourceIconFor(feed.source)" :alt="sourceMeta[feed.source].label">{{ sourceMeta[feed.source].label }}</span></div><span class="pull-handle">{{ feed.handle }}</span><small v-if="feed.lastSyncStatus !== 'success'">{{ feedLastSyncText(feed) }}</small></div>
+          <div class="pull-info"><div class="pull-title"><strong>{{ feed.name }}</strong><span :class="['source-pill', sourceMeta[feed.source].color]"><img :class="['source-icon', { 'twitter-night-icon': feed.source === 'twitter' && isDark }]" :src="sourceIconFor(feed.source)" :alt="sourceMeta[feed.source].label">{{ sourceMeta[feed.source].label }}</span></div><span class="pull-handle">{{ feed.handle }}</span><small v-if="feed.lastSyncStatus !== 'success' || feed.lastSyncWarning" :class="{ 'sync-scope-warning': feed.lastSyncWarning }">{{ feed.lastSyncStatus === 'success' ? feed.lastSyncWarning : feedLastSyncText(feed) }}</small></div>
           <div class="pull-status"><i :class="['pull-dot', feed.lastSyncStatus]"></i><span>{{ feed.lastSyncStatus === 'success' ? `新增 ${feed.lastSyncCount || 0} 条` : feed.lastSyncStatus === 'failed' ? '拉取失败' : '待拉取' }}</span></div>
           <div class="pull-actions"><button class="pull-action" :aria-label="`同步 ${feed.name}`" :disabled="sourceActionBusy !== ''" @click="syncSource(feed)"><svg :class="{ spin: sourceActionBusy === `sync:${feed.id}` }" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 9a7 7 0 0 1 11.4-2.5L20 9M4 15l2.5 2.5A7 7 0 0 0 17.9 15"/></svg><span>{{ sourceActionBusy === `sync:${feed.id}` ? '同步中' : '同步' }}</span></button></div>
         </article>
@@ -5090,7 +5104,6 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
 <button class="modal-close" @click="showAdd = false">×</button>
 <p class="eyebrow">NEW SOURCE</p>
 <h2>添加订阅</h2>
-<p>连接账号后，Lumic 会帮你把喜欢的内容收进同一条时间线。</p>
 <div class="connect-options">
 <button @click="openBilibili">
 <img class="source-icon" :src="sourceMeta.bilibili.image" alt="哔哩哔哩图标">连接哔哩哔哩</button>
@@ -5125,12 +5138,12 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
         <p class="eyebrow">WEIBO SOURCE</p>
         <h2>添加微博博主</h2>
         <p>搜索并添加微博博主，不会立即拉取动态。历史内容可在订阅平台页面手动获取。</p>
-        <div class="bili-account"><span>已连接微博账号 · {{ weiboAccount.userName || `UID ${weiboAccount.userId}` }}</span><button @click="showWeibo = false; openSettings('platforms')">管理凭证</button></div>
-        <form class="bili-search" @submit.prevent="searchWeibo"><input v-model="weiboKeyword" placeholder="搜索微博博主昵称" maxlength="40" required><button :disabled="weiboBusy">⌕ 搜索</button></form>
+        <div class="bili-account"><span>{{ weiboAccount.configured ? `已连接微博账号 · ${weiboAccount.userName || `UID ${weiboAccount.userId}`}` : '公开访问' }}</span><button @click="showWeibo = false; openSettings('platforms')">{{ weiboAccount.configured ? '管理凭证' : '连接账号' }}</button></div>
+        <form class="bili-search" @submit.prevent="searchWeibo"><input v-model="weiboKeyword" aria-label="微博博主" placeholder="昵称、UID 或主页链接" maxlength="300" required><button :disabled="weiboBusy">⌕ 搜索</button></form>
         <label class="subscription-tag-field"><span>作者标签</span><input v-model="weiboSubscriptionTags" placeholder="#标签1 #标签2" maxlength="120"><small>订阅搜索结果中的作者时，会同时保存这些标签。</small></label>
         <div class="bili-results">
-          <article v-for="user in weiboResults" :key="user.userId"><img :src="user.avatar" :alt="user.name"><div><strong>{{ user.name }}</strong><span>UID {{ user.userId }} · 粉丝 {{ formatFans(user.fans) }}</span><p>{{ user.description || '这位博主还没有填写简介' }}</p></div><button @click="subscribeWeibo(user)" :disabled="weiboBusy">订阅</button></article>
-          <div v-if="!weiboResults.length" class="bili-placeholder">输入昵称搜索微博博主，然后选择订阅</div>
+          <article v-for="user in weiboResults" :key="user.userId"><img :src="user.avatar || weiboIcon" :alt="user.name" @error="$event.target.src = weiboIcon"><div><strong>{{ user.name }}</strong><span>UID {{ user.userId }} · 粉丝 {{ formatFans(user.fans) }}</span><p>{{ user.description || '这位博主还没有填写简介' }}</p></div><button @click="subscribeWeibo(user)" :disabled="weiboBusy">订阅</button></article>
+          <div v-if="!weiboResults.length" class="bili-placeholder">暂无搜索结果</div>
         </div>
         <p v-if="weiboError" class="login-error bili-error">{{ weiboError }}</p>
       </div>
@@ -5149,54 +5162,56 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
         <p v-if="twitterError" class="login-error">{{ twitterError }}</p>
       </div>
     </div>
-    <main v-if="showSettings" class="settings-page">
+    <main v-if="showSettings" class="settings-page settings-workspace">
       <div class="settings-page-inner">
+        <header class="settings-workspace-heading"><h1>设置</h1><span class="settings-connection-count"><i></i>{{ platformCards.filter(platform => platform.configured).length }} / {{ platformCards.length }} 已连接</span></header>
         <section class="settings-pane platform-credentials-pane">
-          <div class="pane-heading"><div><h3>平台凭证</h3></div><div class="credential-pagination"><span>{{ platformCards.length }} 个平台</span><template v-if="platformCards.length > 4 || phonePortrait"><button type="button" aria-label="上一页平台" @click="pageCredentials(-1)"><ChevronLeft /></button><button type="button" aria-label="下一页平台" @click="pageCredentials(1)"><ChevronRight /></button></template></div></div>
+          <div class="pane-heading"><div class="settings-section-title"><KeyRound aria-hidden="true" /><h3>平台凭证</h3></div><div class="credential-pagination"><span>{{ platformCards.length }} 个平台</span><template v-if="platformCards.length > 4 || phonePortrait"><button type="button" aria-label="上一页平台" @click="pageCredentials(-1)"><ChevronLeft /></button><button type="button" aria-label="下一页平台" @click="pageCredentials(1)"><ChevronRight /></button></template></div></div>
           <div ref="credentialRail" class="platform-auth-grid" tabindex="0" aria-label="平台凭证" @keydown.left.prevent="pageCredentials(-1)" @keydown.right.prevent="pageCredentials(1)">
-            <article v-for="platform in platformCards" :key="platform.key" :class="['platform-auth-card', platform.key]" tabindex="0" @contextmenu.prevent="openCredentialSettings(platform.key)" @click="handleCredentialCardClick(platform.key)" @keydown.enter="openCredentialSettings(platform.key)">
-              <header class="platform-auth-head"><img :class="['source-icon', { 'twitter-night-icon': platform.key === 'twitter' && isDark }]" :src="platform.image" :alt="`${platform.label}图标`"><div><h3>{{ platform.label }}</h3><span>平台账号凭证</span></div><em :class="['connection-dot', { online: platform.configured }]">{{ platform.configured ? '已连接' : '未连接' }}</em></header>
+            <article v-for="platform in platformCards" :key="platform.key" :class="['platform-auth-card', platform.key]" role="button" :aria-label="`配置${platform.label}凭证`" tabindex="0" @contextmenu.prevent="openCredentialSettings(platform.key)" @click="handleCredentialCardClick(platform.key)" @keydown.enter.prevent="openCredentialSettings(platform.key)" @keydown.space.prevent="openCredentialSettings(platform.key)">
+              <header class="platform-auth-head"><img :class="['source-icon', { 'twitter-night-icon': platform.key === 'twitter' && isDark }]" :src="platform.image" :alt="`${platform.label}图标`"><div><h3>{{ platform.label }}</h3><em :class="['connection-dot', { online: platform.configured }]">{{ platform.configured ? '已连接' : '未连接' }}</em></div><ChevronRight class="credential-card-arrow" aria-hidden="true" /></header>
               <div class="platform-account-summary"><img :src="platform.avatar || platform.image" :alt="`${platform.account}头像`" @error="$event.target.src = platform.image"><div><span>接入账号</span><strong>{{ platform.account }}</strong></div></div>
             </article>
           </div>
         </section>
         <div class="settings-window-grid">
           <section class="settings-pane compact-settings-pane proxy-settings-pane">
-            <div class="pane-heading"><div><h3>网络代理</h3></div><span>{{ proxyStatus.proxyEnabled ? '已启用' : '未启用' }}</span></div>
-            <form class="settings-form" @submit.prevent="saveProxy" autocomplete="off"><label>代理地址</label><input v-model="proxyForm.proxyUrl" placeholder="socks5://host.docker.internal:7890"><div class="form-actions"><button type="button" class="secondary-button" @click="testProxy" :disabled="settingsBusy">测试</button><button class="login-button" :disabled="settingsBusy">保存</button></div></form>
+            <div class="pane-heading"><div class="settings-section-title"><Network aria-hidden="true" /><h3>网络代理</h3></div><span>{{ proxyStatus.proxyEnabled ? '已启用' : '未启用' }}</span></div>
+            <form class="settings-form" @submit.prevent="saveProxy" autocomplete="off"><label for="settings-proxy-url">代理地址</label><input id="settings-proxy-url" v-model="proxyForm.proxyUrl" placeholder="socks5://host.docker.internal:7890"><div class="form-actions"><button type="button" class="secondary-button" @click="testProxy" :disabled="settingsBusy">测试</button><button class="login-button" :disabled="settingsBusy">保存</button></div></form>
             <p v-if="proxyMessage" class="success-message">{{ proxyMessage }}</p>
           </section>
           <section class="settings-pane quality-settings-pane">
-            <div class="pane-heading"><div><h3>画质调节</h3></div></div>
+            <div class="pane-heading"><div class="settings-section-title"><SlidersHorizontal aria-hidden="true" /><h3>画质调节</h3></div></div>
             <div class="quality-slider-list">
-              <label><span><b>桌面端</b><em>{{ previewQuality.desktop }} · {{ previewQualityLabel(previewQuality.desktop) }}</em></span><input v-model.number="previewQuality.desktop" :style="{ '--quality-progress': `${previewQuality.desktop * 20}%` }" aria-label="桌面端压缩率" type="range" min="0" max="5" step="1" :disabled="settingsBusy" @change="savePreviewQuality"><i><small v-for="level in 6" :key="level">{{ level - 1 }}</small></i></label>
-              <label><span><b>移动端</b><em>{{ previewQuality.mobile }} · {{ previewQualityLabel(previewQuality.mobile) }}</em></span><input v-model.number="previewQuality.mobile" :style="{ '--quality-progress': `${previewQuality.mobile * 20}%` }" aria-label="移动端压缩率" type="range" min="0" max="5" step="1" :disabled="settingsBusy" @change="savePreviewQuality"><i><small v-for="level in 6" :key="level">{{ level - 1 }}</small></i></label>
+              <label><span><b><Monitor aria-hidden="true" />桌面端</b><em>{{ previewQuality.desktop }} · {{ previewQualityLabel(previewQuality.desktop) }}</em></span><input v-model.number="previewQuality.desktop" :style="{ '--quality-progress': `${previewQuality.desktop * 20}%` }" aria-label="桌面端压缩率" type="range" min="0" max="5" step="1" :disabled="settingsBusy" @change="savePreviewQuality"><i><small v-for="level in 6" :key="level">{{ level - 1 }}</small></i></label>
+              <label><span><b><Smartphone aria-hidden="true" />移动端</b><em>{{ previewQuality.mobile }} · {{ previewQualityLabel(previewQuality.mobile) }}</em></span><input v-model.number="previewQuality.mobile" :style="{ '--quality-progress': `${previewQuality.mobile * 20}%` }" aria-label="移动端压缩率" type="range" min="0" max="5" step="1" :disabled="settingsBusy" @change="savePreviewQuality"><i><small v-for="level in 6" :key="level">{{ level - 1 }}</small></i></label>
             </div>
           </section>
           <section class="settings-pane backup-settings-pane">
-            <div class="pane-heading"><div><h3>备份配置</h3><p class="backup-settings-note">备份或还原账号、订阅、过滤与显示配置，不包含已拉取的动态文件。</p></div></div>
+            <div class="pane-heading"><div><div class="settings-section-title"><Archive aria-hidden="true" /><h3>备份配置</h3></div><p class="backup-settings-note">备份或还原账号、订阅、过滤与显示配置，不包含已拉取的动态文件。</p></div></div>
             <div class="backup-action-grid">
-              <button class="secondary-button" type="button" :disabled="settingsBusy" @click="downloadConfigurationBackup">备份</button>
-              <label class="restore-file-button" :class="{ disabled: settingsBusy }"><input type="file" accept="application/json,.json" :disabled="settingsBusy" @change="restoreConfiguration"><span>还原</span></label>
+              <button class="secondary-button" type="button" :disabled="settingsBusy" @click="downloadConfigurationBackup"><Download aria-hidden="true" />备份</button>
+              <label class="restore-file-button" :class="{ disabled: settingsBusy }"><input type="file" accept="application/json,.json" :disabled="settingsBusy" @change="restoreConfiguration"><Upload aria-hidden="true" /><span>还原</span></label>
             </div>
           </section>
-          <section class="settings-pane compact-settings-pane"><div class="pane-heading"><div><h3>账号管理</h3></div></div><form class="settings-form account-settings-form" @submit.prevent="saveSettings" autocomplete="off"><label>账号</label><input v-model="settingsForm.username" required minlength="3" autocomplete="username"><label>密码</label><input v-model="settingsForm.newPassword" type="password" required minlength="8" autocomplete="new-password"><button class="login-button" type="submit" :disabled="settingsBusy">{{ settingsBusy ? '保存中…' : '保存' }}</button></form></section>
+          <section class="settings-pane compact-settings-pane"><div class="pane-heading"><div class="settings-section-title"><UserRound aria-hidden="true" /><h3>账号管理</h3></div></div><form class="settings-form account-settings-form" @submit.prevent="saveSettings" autocomplete="off"><label for="settings-username">账号</label><input id="settings-username" v-model="settingsForm.username" required minlength="3" autocomplete="username"><label for="settings-password">密码</label><input id="settings-password" v-model="settingsForm.newPassword" type="password" required minlength="8" autocomplete="new-password"><button class="login-button" type="submit" :disabled="settingsBusy">{{ settingsBusy ? '保存中…' : '保存' }}</button></form></section>
         </div>
         <p v-if="settingsError" class="login-error settings-page-error">{{ settingsError }}</p>
       </div>
     </main>
     <div v-if="credentialPlatform" class="modal-backdrop credential-modal-backdrop" @click.self="credentialPlatform = null">
-      <div class="modal credential-settings-modal" role="dialog" aria-modal="true" :aria-label="`${credentialPlatform.label}平台凭证`">
-        <button class="modal-close" type="button" aria-label="关闭平台配置" @click="credentialPlatform = null">×</button>
+      <div ref="credentialDialog" class="modal credential-settings-modal credential-editor" role="dialog" aria-modal="true" :aria-label="`${credentialPlatform.label}平台凭证`" @keydown="trapCredentialFocus">
+        <button class="modal-close" type="button" aria-label="关闭平台配置" @click="credentialPlatform = null"><X :size="20" aria-hidden="true" /></button>
         <div class="credential-modal-head">
           <img :class="['source-icon', { 'twitter-night-icon': credentialPlatform.key === 'twitter' && isDark }]" :src="credentialPlatform.image" :alt="`${credentialPlatform.label}图标`">
-          <div><p class="eyebrow">PLATFORM CREDENTIAL</p><h2>{{ credentialPlatform.label }}</h2><span>{{ credentialPlatform.account }}</span></div>
+          <div><p class="eyebrow">平台凭证</p><h2>{{ credentialPlatform.label }}</h2><span>{{ credentialPlatform.account }}</span></div>
           <em :class="['connection-dot', { online: credentialPlatform.configured }]">{{ credentialPlatform.configured ? '已连接' : '未连接' }}</em>
         </div>
 
-        <div v-if="credentialPlatform.key === 'bilibili'" class="credential-config-body">
-          <div v-if="biliQRImage" class="weibo-qr"><img :src="biliQRImage" alt="哔哩哔哩登录二维码"><span>{{ biliQRStatus }}</span></div>
-          <button class="login-button platform-login-button" type="button" @click="startBilibiliQR" :disabled="biliBusy && !biliQR">{{ biliQR ? '刷新二维码' : biliBusy ? '获取中…' : biliAccount.configured ? '扫码切换 B 站账号' : '扫码连接 B 站' }}</button>
+        <div v-if="credentialPlatform.key === 'bilibili'" class="credential-config-body credential-split-layout">
+          <aside class="credential-scan-panel"><h3><QrCode :size="18" aria-hidden="true" />扫码连接</h3><div v-if="biliQRImage" class="weibo-qr"><img :src="biliQRImage" alt="哔哩哔哩登录二维码"><span role="status">{{ biliQRStatus }}</span></div><div v-else class="credential-scan-placeholder" aria-hidden="true"><QrCode :size="58" :stroke-width="1.1" /></div>
+          <button class="secondary-button platform-login-button" type="button" @click="startBilibiliQR" :disabled="biliBusy && !biliQR">{{ biliQR ? '刷新二维码' : biliBusy ? '获取中…' : biliAccount.configured ? '切换账号' : '获取二维码' }}</button></aside>
+          <div class="credential-fields">
           <section class="credential-section"><h3>手动导入 Cookie</h3><form class="settings-form credential-field-grid" @submit.prevent="saveBilibiliAccount" autocomplete="off">
             <label class="credential-field credential-wide"><span>完整 Cookie</span><textarea v-model="biliCredentials.cookie" rows="3" placeholder="仅在扫码不可用时使用"></textarea></label>
             <label class="credential-field"><span>SESSDATA</span><input v-model="biliCredentials.SESSDATA" type="password"></label>
@@ -5206,39 +5221,45 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
             <button class="login-button credential-wide" :disabled="biliBusy">验证并保存手动凭证</button>
           </form></section>
           <p v-if="biliError" class="login-error bili-error">{{ biliError }}</p>
+          </div>
         </div>
 
-        <div v-else-if="credentialPlatform.key === 'weibo'" class="credential-config-body">
+        <div v-else-if="credentialPlatform.key === 'weibo'" class="credential-config-body credential-split-layout">
+          <aside class="credential-scan-panel"><h3><QrCode :size="18" aria-hidden="true" />扫码连接</h3><div v-if="weiboQR" class="weibo-qr"><img :src="weiboQR.image.startsWith('//') ? `https:${weiboQR.image}` : weiboQR.image" alt="微博登录二维码"><span>请在微博中扫码并确认</span></div><div v-else class="credential-scan-placeholder" aria-hidden="true"><QrCode :size="58" :stroke-width="1.1" /></div>
+          <button class="secondary-button platform-login-button" type="button" @click="startWeiboQR" :disabled="weiboBusy && !weiboQR">{{ weiboQR ? '刷新二维码' : weiboBusy ? '获取中…' : weiboAccount.configured ? '切换账号' : '获取二维码' }}</button><div class="credential-recovery-state"><span>备用密码</span><strong :class="{ configured: weiboAccount.passwordConfigured }">{{ weiboAccount.passwordConfigured ? '已保存' : '未保存' }}</strong></div></aside>
+          <div class="credential-fields">
           <section class="credential-section"><h3>{{ weiboAccount.cookieConfigured ? '保存备用账号密码' : '账号密码登录' }}</h3><form class="settings-form credential-field-grid" @submit.prevent="loginWeiboAccount" autocomplete="off">
             <label class="credential-field"><span>微博账号</span><input v-model="weiboPasswordCredentials.username" type="text" autocomplete="username" required placeholder="手机号、邮箱或微博账号"></label>
             <label class="credential-field"><span>微博密码</span><input v-model="weiboPasswordCredentials.password" type="password" autocomplete="current-password" required></label>
             <p class="credential-note credential-wide">{{ weiboAccount.cookieConfigured ? '当前扫码会话会继续使用，账号密码将加密保存，用于会话失效后自动重新登录。' : '账号密码会加密保存，后续可用于自动恢复微博会话。' }}</p>
             <button class="login-button credential-wide" :disabled="weiboBusy">{{ weiboBusy ? '验证中…' : weiboAccount.cookieConfigured ? '验证并保存备用密码' : '账号密码登录并保存' }}</button>
           </form></section>
-          <div v-if="weiboQR" class="weibo-qr"><img :src="weiboQR.image.startsWith('//') ? `https:${weiboQR.image}` : weiboQR.image" alt="微博登录二维码"><span>请在二维码过期前扫码并确认</span></div>
-          <button class="login-button platform-login-button" type="button" @click="startWeiboQR" :disabled="weiboBusy && !weiboQR">{{ weiboQR ? '刷新二维码' : weiboBusy ? '获取中…' : weiboAccount.configured ? '扫码切换微博账号' : '扫码连接微博' }}</button>
           <section class="credential-section"><h3>手动导入 Cookie</h3><form class="settings-form" @submit.prevent="saveWeiboAccount" autocomplete="off">
             <label class="credential-field"><span>微博 UID</span><input v-model="weiboCredentials.userId" inputmode="numeric" required placeholder="个人主页地址中的数字 UID"></label>
             <label class="credential-field"><span>完整 Cookie</span><textarea v-model="weiboCredentials.cookie" rows="3" required placeholder="可粘贴浏览器请求头中的 Cookie: 完整内容"></textarea></label>
             <p class="credential-note credential-wide">保存前会验证账号资料，不会回显原始 Cookie。</p><button class="login-button" :disabled="weiboBusy">{{ weiboBusy ? '验证中…' : '验证并保存 Cookie' }}</button>
           </form></section>
           <p v-if="weiboError" class="login-error">{{ weiboError }}</p>
+          </div>
         </div>
 
-        <div v-else-if="credentialPlatform.key === 'pixiv'" class="credential-config-body">
+        <div v-else-if="credentialPlatform.key === 'pixiv'" class="credential-config-body credential-single-layout"><div class="credential-fields">
+          <h3 class="credential-fields-title">浏览器凭证</h3>
           <form class="settings-form platform-auth-form pixiv-browser-form" @submit.prevent="savePixivAccount">
-            <label class="credential-field"><span>浏览器 UA</span><input v-model="pixivCredentials.userAgent" required autocomplete="off" placeholder="Mozilla/5.0 ..."></label>
+            <label class="credential-field credential-wide"><span>浏览器 UA</span><input v-model="pixivCredentials.userAgent" required autocomplete="off" placeholder="Mozilla/5.0 ..."></label>
             <label class="credential-field"><span>用户 ID</span><input v-model="pixivCredentials.userId" required inputmode="numeric" autocomplete="off"></label>
             <label class="credential-field"><span>浏览器 Baggage</span><textarea v-model="pixivCredentials.baggage" rows="2" autocomplete="off"></textarea></label>
-            <label class="credential-field"><span>浏览器 Cookie</span><textarea v-model="pixivCredentials.cookie" rows="2" required autocomplete="off"></textarea></label>
+            <label class="credential-field credential-wide"><span>浏览器 Cookie</span><textarea v-model="pixivCredentials.cookie" rows="3" required autocomplete="off"></textarea></label>
             <label class="credential-field"><span>浏览器 Sentry-Trace</span><input v-model="pixivCredentials.sentryTrace" autocomplete="off"></label>
             <label class="credential-field"><span>浏览器 X-CSRF-TOKEN</span><input v-model="pixivCredentials.csrfToken" autocomplete="off"></label>
             <button class="login-button" :disabled="pixivBusy">{{ pixivBusy ? '验证中…' : '验证并保存 Pixiv' }}</button>
           </form>
           <p v-if="pixivError" class="login-error">{{ pixivError }}</p>
+          </div>
         </div>
 
-        <div v-else-if="credentialPlatform.key === 'twitter'" class="credential-config-body">
+        <div v-else-if="credentialPlatform.key === 'twitter'" class="credential-config-body credential-single-layout"><div class="credential-fields">
+          <h3 class="credential-fields-title">API 凭证</h3>
           <form class="settings-form platform-auth-form" @submit.prevent="saveTwitterAccount" autocomplete="off">
             <label class="credential-field"><span>twitterapi.io API Key</span><input v-model="twitterCredentials.apiKey" type="password" required autocomplete="off" placeholder="在 twitterapi.io 控制台创建的 API Key"></label>
             <label class="credential-field"><span>推特用户名</span><input v-model="twitterCredentials.username" required autocomplete="off" placeholder="例如 elonmusk，不含 @"></label>
@@ -5246,6 +5267,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
             <button class="login-button" :disabled="twitterBusy">{{ twitterBusy ? '验证中…' : twitterAccount.configured ? '验证并切换推特账号' : '验证并连接推特' }}</button>
           </form>
           <p v-if="twitterError" class="login-error">{{ twitterError }}</p>
+          </div>
         </div>
       </div>
     </div>
@@ -5268,7 +5290,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
         <button class="modal-close" @click="selectedPlatform = null">×</button>
         <div class="platform-detail-title"><img :class="['source-icon', { 'twitter-night-icon': selectedPlatform.key === 'twitter' && isDark }]" :src="selectedPlatform.image" alt="平台图标"><div><p class="eyebrow">PLATFORM SOURCE</p><h2>{{ selectedPlatform.label }}</h2></div><span :class="['connection-dot', { online: selectedPlatform.configured }]">{{ selectedPlatform.configured ? '已连接' : '未连接' }}</span></div>
         <div class="platform-detail-summary"><div><span>当前账号</span><strong>{{ selectedPlatform.account }}</strong></div><div><span>内容目录</span><strong>{{ selectedPlatform.path }}</strong></div><div><span>作者来源</span><strong>{{ selectedPlatform.feeds.length }} 个</strong></div></div>
-        <div class="platform-detail-actions"><button class="secondary-button" @click="managePlatformCredentials(selectedPlatform.key)">{{ selectedPlatform.configured ? '管理账号凭证' : '连接平台账号' }}</button><button v-if="selectedPlatform.key === 'weibo' && selectedPlatform.configured && !hasWeiboLikesSource" class="secondary-button" :disabled="sourceActionBusy !== ''" @click="addWeiboLikesSource">添加我的点赞</button><button v-if="selectedPlatform.key === 'pixiv' && selectedPlatform.configured && !hasPixivBookmarksSource" class="secondary-button" :disabled="sourceActionBusy !== ''" @click="addPixivBookmarksSource">添加 P站收藏</button><button v-if="selectedPlatform.key === 'twitter' && selectedPlatform.configured && !hasTwitterLikesSource" class="secondary-button" :disabled="sourceActionBusy !== ''" @click="addTwitterLikesSource">添加账号点赞</button><button v-if="selectedPlatform.key === 'bilibili' && selectedPlatform.configured && !hasBilibiliFavoriteOpusSource" class="secondary-button" :disabled="sourceActionBusy !== ''" @click="addBilibiliFavoriteOpusSource">添加收藏专栏</button><button v-if="selectedPlatform.key === 'bilibili' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openBilibili()">添加 UP 主</button><button v-if="selectedPlatform.key === 'weibo' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openWeibo()">添加博主</button><button v-if="selectedPlatform.key === 'pixiv' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openPixiv()">添加画师</button><button v-if="selectedPlatform.key === 'twitter' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openTwitter()">添加博主</button></div>
+        <div class="platform-detail-actions"><button class="secondary-button" @click="managePlatformCredentials(selectedPlatform.key)">{{ selectedPlatform.configured ? '管理账号凭证' : '连接平台账号' }}</button><button v-if="selectedPlatform.key === 'weibo' && selectedPlatform.configured && !hasWeiboLikesSource" class="secondary-button" :disabled="sourceActionBusy !== ''" @click="addWeiboLikesSource">添加我的点赞</button><button v-if="selectedPlatform.key === 'pixiv' && selectedPlatform.configured && !hasPixivBookmarksSource" class="secondary-button" :disabled="sourceActionBusy !== ''" @click="addPixivBookmarksSource">添加 P站收藏</button><button v-if="selectedPlatform.key === 'twitter' && selectedPlatform.configured && !hasTwitterLikesSource" class="secondary-button" :disabled="sourceActionBusy !== ''" @click="addTwitterLikesSource">添加账号点赞</button><button v-if="selectedPlatform.key === 'bilibili' && selectedPlatform.configured && !hasBilibiliFavoriteOpusSource" class="secondary-button" :disabled="sourceActionBusy !== ''" @click="addBilibiliFavoriteOpusSource">添加收藏专栏</button><button v-if="selectedPlatform.key === 'bilibili' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openBilibili()">添加 UP 主</button><button v-if="selectedPlatform.key === 'weibo'" class="login-button" @click="selectedPlatform = null; showSettings = false; openWeibo()">添加博主</button><button v-if="selectedPlatform.key === 'pixiv' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openPixiv()">添加画师</button><button v-if="selectedPlatform.key === 'twitter' && selectedPlatform.configured" class="login-button" @click="selectedPlatform = null; showSettings = false; openTwitter()">添加博主</button></div>
         <p v-if="sourceActionMessage" class="success-message source-action-message">{{ sourceActionMessage }}</p><p v-if="settingsError" class="login-error">{{ settingsError }}</p>
         <div class="configured-source-list">
           <div class="configured-source-heading"><h3>订阅列表</h3><span>{{ selectedPlatform.feeds.length }} 个</span></div>

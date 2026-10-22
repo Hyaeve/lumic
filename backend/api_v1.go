@@ -55,6 +55,7 @@ type apiV1Feed struct {
 	LastSyncedAt    time.Time `json:"lastSyncedAt"`
 	LastSyncStatus  string    `json:"lastSyncStatus,omitempty"`
 	LastSyncMessage string    `json:"lastSyncMessage,omitempty"`
+	LastSyncWarning string    `json:"lastSyncWarning,omitempty"`
 	LastSyncCount   int       `json:"lastSyncCount,omitempty"`
 }
 
@@ -797,6 +798,7 @@ func toAPIV1Feed(feed SourceConfig) apiV1Feed {
 		LastSyncedAt:    feed.LastSyncedAt,
 		LastSyncStatus:  feed.LastSyncStatus,
 		LastSyncMessage: feed.LastSyncMessage,
+		LastSyncWarning: feed.LastSyncWarning,
 		LastSyncCount:   feed.LastSyncCount,
 	}
 }

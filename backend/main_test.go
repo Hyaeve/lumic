@@ -1211,7 +1211,7 @@ func TestWeiboAccountHandlerReturnsValidatedAvatar(t *testing.T) {
 		bilibiliFile = oldFile
 		validateWeiboLoginSession = oldValidator
 	})
-	store := &BilibiliStore{config: BilibiliConfig{Weibo: WeiboCredentials{PasswordUsername: "account", Password: "secret"}}, key: make([]byte, 32)}
+	store := &BilibiliStore{config: BilibiliConfig{Weibo: WeiboCredentials{UserID: "42", PasswordUsername: "account", Password: "secret"}}, key: make([]byte, 32)}
 	request := httptest.NewRequest(http.MethodPut, "/api/weibo/account", strings.NewReader(`{"cookie":"SUB=session","userId":"42"}`))
 	response := httptest.NewRecorder()
 	store.weiboAccountHandler(response, request)
