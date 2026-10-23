@@ -29,6 +29,29 @@ func allowedWeiboSSOTarget(target *url.URL) bool {
 		allowedWeiboSSOHost(strings.ToLower(strings.TrimSuffix(target.Hostname(), ".")))
 }
 
+func isWeiboSSOAncillaryURL(rawURL string) bool {
+	target, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || target.User != nil || strings.ToLower(strings.TrimSuffix(target.Hostname(), ".")) != "passport.krcom.cn" {
+		return false
+	}
+	scheme, port := strings.ToLower(target.Scheme), target.Port()
+	if scheme != "" && scheme != "https" && scheme != "http" ||
+		(scheme == "http" && port != "" && port != "80") ||
+		(scheme != "http" && port != "" && port != "443") {
+		return false
+	}
+	query, err := url.ParseQuery(target.RawQuery)
+	if err != nil {
+		return false
+	}
+	for _, action := range query["action"] {
+		if action != "" && action != "login" {
+			return false
+		}
+	}
+	return true
+}
+
 func weiboCrossDomainURL(rawURL string, index int) (string, error) {
 	target, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil {
@@ -106,6 +129,11 @@ func completeWeiboSSO(ctx context.Context, client *http.Client, urls []string) e
 	for index := 0; index < len(queue); index++ {
 		if len(queue) > limit {
 			return errors.New("微博跨域会话步骤超过限制，请重新扫码")
+		}
+		// The reported companion is not a source of weibo.com/.cn cookies. Do not
+		// send it a ticket or allow redirects to it; verify the Weibo session below.
+		if isWeiboSSOAncillaryURL(queue[index]) {
+			continue
 		}
 		rawURL, err := weiboCrossDomainURL(queue[index], index)
 		if err != nil {

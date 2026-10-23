@@ -38,19 +38,40 @@ func TestWeiboQRBuildsDomainSessionsFromCrossDomainReplies(t *testing.T) {
 		nested    bool
 		discover  bool
 		appTicket bool
+		companion int
 	}{
-		{"different-site-cookies", false, false, false, false},
-		{"callback-handshake", true, false, false, false},
-		{"nested-site-handshake", true, true, false, false},
-		{"discover-site-handshakes", true, false, true, false},
-		{"application-ticket", true, false, false, true},
+		{"different-site-cookies", false, false, false, false, 0},
+		{"callback-handshake", true, false, false, false, 0},
+		{"nested-site-handshake", true, true, false, false, 0},
+		{"discover-site-handshakes", true, false, true, false, 0},
+		{"application-ticket", true, false, false, true, 0},
+		{"companion-before-weibo", true, false, false, false, 1},
+		{"nested-companion-before-mobile", true, true, false, false, 2},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			store := newWeiboAuthTestStore(t, WeiboCredentials{})
+			if scenario.companion != 0 {
+				store.config.Weibo = WeiboCredentials{UserID: "42", Cookie: "SUB=expired-fixture"}
+			}
 			mobileChecks, mobileHandshakes, appLogins := 0, 0, 0
+			likesCalls, rejectLikes := 0, false
 			mockWeiboAPI(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/ajax/statuses/likelist" {
+					likesCalls++
+					if r.Header.Get("Cookie") != "SUB=desktop-fixture" || rejectLikes {
+						fmt.Fprint(w, `{"ok":-100}`)
+						return
+					}
+					fmt.Fprint(w, `{"ok":1,"statuses":[{"id":"12345","user":{"idstr":"99","screen_name":"示例作者"},"text_raw":"模拟点赞动态"}]}`)
+					return
+				}
 				if r.URL.Path == "/ajax/config/get" {
 					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+				if r.URL.Path != "/api/config" {
+					t.Error("unexpected API request or anonymous likes fallback")
+					w.WriteHeader(http.StatusInternalServerError)
 					return
 				}
 				mobileChecks++
@@ -66,6 +87,11 @@ func TestWeiboQRBuildsDomainSessionsFromCrossDomainReplies(t *testing.T) {
 			}
 			t.Cleanup(func() { fetchWeiboAccountProfile = previousProfile })
 			result := runWeiboSSOQR(t, store, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Query().Get("ticket") == "companion-fixture" {
+					t.Error("ancillary site must not receive a login ticket")
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
 				switch r.URL.Path {
 				case "/sso/qrcode/check":
 					fmt.Fprint(w, `{"retcode":20000000,"data":{"alt":"fixture-ticket"}}`)
@@ -74,6 +100,9 @@ func TestWeiboQRBuildsDomainSessionsFromCrossDomainReplies(t *testing.T) {
 					urls := []string{"https://passport.weibo.com/wbsso/login?ticket=desktop-fixture"}
 					if !scenario.nested {
 						urls = append(urls, "https://passport.weibo.cn/sso/crossdomain?ticket=mobile-fixture")
+					}
+					if scenario.companion == 1 {
+						urls = append([]string{"https://passport.krcom.cn/wbsso/login?ticket=companion-fixture"}, urls...)
 					}
 					if scenario.discover {
 						urls = nil
@@ -107,7 +136,11 @@ func TestWeiboQRBuildsDomainSessionsFromCrossDomainReplies(t *testing.T) {
 					}
 					http.SetCookie(w, &http.Cookie{Name: "SUB", Value: "desktop-fixture", Domain: ".weibo.com", Path: "/", Secure: true})
 					if scenario.nested {
-						fmt.Fprint(w, `cb({"retcode":0,"arrURL":["https://passport.weibo.cn/sso/crossdomain?ticket=mobile-fixture"]})`)
+						urls := []string{"https://passport.weibo.cn/sso/crossdomain?ticket=mobile-fixture"}
+						if scenario.companion == 2 {
+							urls = append([]string{"https://passport.krcom.cn/wbsso/login?ticket=companion-fixture"}, urls...)
+						}
+						writeJSON(w, map[string]any{"retcode": 0, "arrURL": urls})
 					} else {
 						fmt.Fprint(w, `cb({"retcode":0})`)
 					}
@@ -137,6 +170,17 @@ func TestWeiboQRBuildsDomainSessionsFromCrossDomainReplies(t *testing.T) {
 			store.weiboAccountHandler(view, httptest.NewRequest(http.MethodGet, "/api/weibo/account", nil))
 			if strings.Contains(view.Body.String(), "mobileCookie") || strings.Contains(view.Body.String(), "desktop-fixture") || strings.Contains(view.Body.String(), "mobile-fixture") {
 				t.Fatal("account response exposed stored site credentials")
+			}
+			if scenario.companion != 0 {
+				feed := SourceConfig{ID: "weibo-likes-42", Source: SourceWeibo, Name: weiboLikesName}
+				posts, err := store.fetchWeiboLikedPosts(feed, false)
+				if err != nil || len(posts) != 1 || posts[0].ID != "weibo-status-12345" || likesCalls != 1 {
+					t.Fatal("newly validated QR session was not used for account likes")
+				}
+				rejectLikes = true
+				if _, err := store.fetchWeiboLikedPosts(feed, false); weiboErrorKind(err) != "auth" || likesCalls != 2 {
+					t.Fatal("explicit logged-out likes response was bypassed or retried anonymously")
+				}
 			}
 		})
 	}
@@ -263,6 +307,68 @@ func TestWeiboSSOAddressRejectionsAreSpecificAndRedacted(t *testing.T) {
 	}
 }
 
+func TestWeiboSSOAncillaryListDoesNotCreateLoginOrEnableLikes(t *testing.T) {
+	store := newWeiboAuthTestStore(t, WeiboCredentials{})
+	mockWeiboAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Error("missing site credentials must not reach identity or likes APIs")
+	})
+	result := runWeiboSSOQR(t, store, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/sso/qrcode/check":
+			fmt.Fprint(w, `{"retcode":20000000,"data":{"alt":"fixture-ticket"}}`)
+		case "/sso/login.php":
+			fmt.Fprint(w, `{"retcode":0,"uid":"42","crossDomainUrlList":["https://passport.krcom.cn/wbsso/login?ticket=companion-fixture"]}`)
+		default:
+			t.Error("ancillary target was contacted")
+		}
+	})
+	if result["credentialVerified"] != false || result["qrConnected"] != true || result["sessionReady"] != false || result["connectionWarning"] == "" || hasWeiboAccount(store.config.Weibo) {
+		t.Fatal("ancillary list entry was treated as a valid Weibo login")
+	}
+	if _, err := store.fetchWeiboLikedPosts(SourceConfig{ID: "weibo-likes-42"}, false); err == nil {
+		t.Fatal("QR connection metadata unlocked account likes without credentials")
+	}
+}
+
+func TestWeiboSSOAncillaryDoesNotExpandRequestOrRedirectTrust(t *testing.T) {
+	for _, rawURL := range []string{
+		"https://passport.krcom.cn/wbsso/login?ticket=companion-fixture",
+		"//PASSPORT.KRCOM.CN:443/wbsso/login?ticket=companion-fixture",
+		"http://passport.krcom.cn:80/wbsso/login?ticket=companion-fixture",
+	} {
+		if !isWeiboSSOAncillaryURL(rawURL) {
+			t.Fatal("reported ancillary site was not excluded from the callback fan-out")
+		}
+		if value, err := weiboCrossDomainURL(rawURL, 0); err == nil || value != "" {
+			t.Fatal("ancillary site was added to the request allowlist")
+		}
+	}
+	for _, rawURL := range []string{
+		"https://passport.krcom.cn.evil.invalid/wbsso/login",
+		"https://user@passport.krcom.cn/wbsso/login",
+		"https://passport.krcom.cn:8443/wbsso/login",
+		"ftp://passport.krcom.cn/wbsso/login",
+		"https://passport.krcom.cn/wbsso/login?action=logout",
+		"https://passport.krcom.cn/wbsso/login?ticket=%ZZ",
+	} {
+		if isWeiboSSOAncillaryURL(rawURL) {
+			t.Fatal("unrelated or malformed address was silently ignored")
+		}
+	}
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		http.Redirect(w, r, "https://passport.krcom.cn/wbsso/login?ticket=companion-fixture", http.StatusFound)
+	}))
+	defer server.Close()
+	target, _ := url.Parse(server.URL)
+	client := &http.Client{Transport: weiboTestTransport{target, server.Client().Transport}}
+	err := completeWeiboSSO(context.Background(), client, []string{"https://passport.weibo.com/wbsso/login?ticket=desktop-fixture"})
+	if err == nil || calls != 1 || strings.Contains(err.Error(), "companion-fixture") {
+		t.Fatal("redirect to ancillary site was followed or exposed a ticket")
+	}
+}
+
 func TestWeiboSSOBoundsAndRedactedNetworkFailures(t *testing.T) {
 	for _, scenario := range []struct {
 		name     string
@@ -332,7 +438,7 @@ func TestWeiboSSOStopsOnFailureWithoutReplacingActiveCredentials(t *testing.T) {
 				case "/sso/qrcode/check":
 					fmt.Fprint(w, `{"retcode":20000000,"data":{"alt":"private-fixture"}}`)
 				case "/sso/login.php":
-					fmt.Fprint(w, `{"retcode":0,"uid":"42","crossDomainUrlList":["https://passport.weibo.com/wbsso/login?ticket=private-fixture","https://passport.weibo.cn/sso/crossdomain?ticket=private-fixture"]}`)
+					fmt.Fprint(w, `{"retcode":0,"uid":"42","crossDomainUrlList":["https://passport.krcom.cn/wbsso/login?ticket=companion-fixture","https://passport.weibo.com/wbsso/login?ticket=private-fixture","https://passport.weibo.cn/sso/crossdomain?ticket=private-fixture"]}`)
 				case "/wbsso/login", "/sso/crossdomain":
 					calls++
 					w.WriteHeader(scenario.status)
