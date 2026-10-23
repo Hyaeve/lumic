@@ -1444,7 +1444,11 @@ func TestWeiboJSONPAndCrossDomainURL(t *testing.T) {
 		t.Fatalf("unexpected JSONP payload: %#v", payload)
 	}
 	for index, rawURL := range []string{"https://passport.weibo.com/wbsso/login?ticket=fixture&action=login", "https://passport.weibo.cn/sso/crossdomain?ticket=fixture"} {
-		target, err := url.Parse(weiboCrossDomainURL(rawURL, index))
+		normalized, err := weiboCrossDomainURL(rawURL, index)
+		if err != nil {
+			t.Fatal(err)
+		}
+		target, err := url.Parse(normalized)
 		if err != nil || target.Query().Get("action") != "login" || len(target.Query()["action"]) != 1 || target.Query().Get("callback") == "" || target.Query().Get("scriptId") != fmt.Sprintf("ssoscript%d", index) {
 			t.Fatal("cross-domain callback parameters were not set exactly once")
 		}

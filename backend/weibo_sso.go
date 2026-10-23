@@ -15,31 +15,61 @@ import (
 
 const weiboSSODiscoveryURL = "https://login.sina.com.cn/sso/crossdomain.php?action=login&domain=weibo.com"
 
-func allowedWeiboSSOTarget(target *url.URL) bool {
-	if target.Scheme != "https" || target.User != nil || target.Port() != "" {
-		return false
-	}
-	switch target.Host {
+func allowedWeiboSSOHost(host string) bool {
+	switch host {
 	case "login.sina.com.cn", "passport.weibo.com", "weibo.com", "www.weibo.com", "passport.weibo.cn", "m.weibo.cn", "passport.sina.cn":
 		return true
 	}
 	return false
 }
 
-func weiboCrossDomainURL(rawURL string, index int) string {
-	target, err := url.Parse(rawURL)
+func allowedWeiboSSOTarget(target *url.URL) bool {
+	return strings.EqualFold(target.Scheme, "https") && target.User == nil &&
+		(target.Port() == "" || target.Port() == "443") &&
+		allowedWeiboSSOHost(strings.ToLower(strings.TrimSuffix(target.Hostname(), ".")))
+}
+
+func weiboCrossDomainURL(rawURL string, index int) (string, error) {
+	target, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil {
-		return ""
+		return "", errors.New("微博跨域会话地址无法解析，已停止交换（地址参数未显示）")
 	}
-	if target.Scheme == "http" && target.Port() == "" {
+	if target.User != nil {
+		return "", errors.New("微博跨域会话地址含有不允许的账号信息，已停止交换")
+	}
+	host := strings.ToLower(strings.TrimSuffix(target.Hostname(), "."))
+	if !allowedWeiboSSOHost(host) {
+		// Do not echo the full URL: its path, query or fragment may contain tickets.
+		label := "无法识别"
+		if host != "" && len(host) <= 253 && strings.Trim(host, "abcdefghijklmnopqrstuvwxyz0123456789.-") == "" {
+			label = host
+		}
+		return "", fmt.Errorf("微博跨域会话地址的域名不受支持（域名：%s），已停止交换", label)
+	}
+	target.Scheme = strings.ToLower(target.Scheme)
+	if target.Scheme == "" {
 		target.Scheme = "https"
 	}
-	if !allowedWeiboSSOTarget(target) {
-		return ""
+	port := target.Port()
+	if target.Scheme == "http" && (port == "" || port == "80") {
+		target.Scheme = "https"
+		port = ""
 	}
-	query := target.Query()
-	if action := query.Get("action"); action != "" && action != "login" {
-		return ""
+	if target.Scheme != "https" {
+		return "", errors.New("微博跨域会话地址的协议不受支持，已停止交换")
+	}
+	if port != "" && port != "443" {
+		return "", errors.New("微博跨域会话地址使用非标准端口，已停止交换")
+	}
+	target.Host = host
+	query, err := url.ParseQuery(target.RawQuery)
+	if err != nil {
+		return "", errors.New("微博跨域会话地址参数无法解析，已停止交换（参数内容未显示）")
+	}
+	for _, action := range query["action"] {
+		if action != "" && action != "login" {
+			return "", errors.New("微博跨域会话地址请求的不是登录操作，已停止交换（操作参数未显示）")
+		}
 	}
 	query.Set("action", "login")
 	query.Set("callback", "sinaSSOController.doCrossDomainCallBack")
@@ -49,7 +79,7 @@ func weiboCrossDomainURL(rawURL string, index int) string {
 		query.Set("scriptId", "ssoCrossDomainScriptId")
 	}
 	target.RawQuery, target.Fragment = query.Encode(), ""
-	return target.String()
+	return target.String(), nil
 }
 
 // Complete only the URLs supplied by the confirmed SSO exchange. Never execute
@@ -77,9 +107,9 @@ func completeWeiboSSO(ctx context.Context, client *http.Client, urls []string) e
 		if len(queue) > limit {
 			return errors.New("微博跨域会话步骤超过限制，请重新扫码")
 		}
-		rawURL := weiboCrossDomainURL(queue[index], index)
-		if rawURL == "" {
-			return errors.New("微博跨域会话返回了不支持的地址，已停止交换")
+		rawURL, err := weiboCrossDomainURL(queue[index], index)
+		if err != nil {
+			return err
 		}
 		target, _ := url.Parse(rawURL)
 		key := *target

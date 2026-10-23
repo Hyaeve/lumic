@@ -152,12 +152,12 @@ func TestWeiboSSORejectsUntrustedURLsAndRedirects(t *testing.T) {
 		"https://127.0.0.1/login?ticket=private-fixture",
 		"https://passport.weibo.com/login?action=logout&ticket=private-fixture",
 	} {
-		if weiboCrossDomainURL(target, 0) != "" {
+		if normalized, err := weiboCrossDomainURL(target, 0); err == nil || normalized != "" {
 			t.Fatal("untrusted cross-domain target accepted")
 		}
 	}
-	upgraded := weiboCrossDomainURL("http://passport.weibo.com/wbsso/login?ticket=private-fixture", 0)
-	if !strings.HasPrefix(upgraded, "https://passport.weibo.com/") {
+	upgraded, upgradeErr := weiboCrossDomainURL("http://passport.weibo.com/wbsso/login?ticket=private-fixture", 0)
+	if upgradeErr != nil || !strings.HasPrefix(upgraded, "https://passport.weibo.com/") {
 		t.Fatal("legacy official URL must use HTTPS before transmitting its ticket")
 	}
 	calls := 0
@@ -171,6 +171,95 @@ func TestWeiboSSORejectsUntrustedURLsAndRedirects(t *testing.T) {
 	err := completeWeiboSSO(context.Background(), client, []string{"https://passport.weibo.com/wbsso/login?ticket=private-fixture"})
 	if err == nil || calls != 1 || strings.Contains(err.Error(), "private-fixture") {
 		t.Fatal("external redirect followed or login ticket exposed")
+	}
+}
+
+func TestWeiboSSOAcceptsEquivalentOfficialURLForms(t *testing.T) {
+	for index, rawURL := range []string{
+		"https://PASSPORT.WEIBO.COM/wbsso/login?ticket=private-fixture",
+		"HTTPS://PASSPORT.WEIBO.COM/wbsso/login?ticket=private-fixture",
+		"https://passport.weibo.com:443/wbsso/login?ticket=private-fixture",
+		"//passport.weibo.com/wbsso/login?ticket=private-fixture",
+		"http://passport.weibo.com:80/wbsso/login?ticket=private-fixture",
+		"  https://passport.weibo.com/wbsso/login?ticket=private-fixture  ",
+		"https://passport.weibo.com./wbsso/login?ticket=private-fixture",
+	} {
+		t.Run(fmt.Sprint(index), func(t *testing.T) {
+			normalized, err := weiboCrossDomainURL(rawURL, 0)
+			if err != nil {
+				t.Fatal("equivalent official URL was rejected")
+			}
+			target, err := url.Parse(normalized)
+			if err != nil || target.Scheme != "https" || target.Host != "passport.weibo.com" || target.Query().Get("ticket") != "private-fixture" {
+				t.Fatal("equivalent official URL was rejected or its ticket changed")
+			}
+		})
+	}
+}
+
+func TestWeiboSSOUnsupportedAddressReportsOnlySafeHost(t *testing.T) {
+	err := completeWeiboSSO(context.Background(), &http.Client{}, []string{"https://unsupported.invalid/private-path?ticket=private-fixture#private-fragment"})
+	if err == nil || !strings.Contains(err.Error(), "unsupported.invalid") || strings.Contains(err.Error(), "private-") {
+		t.Fatal("unsupported target must report its host without exposing ticket, path or fragment")
+	}
+}
+
+func TestWeiboSSOEquivalentURLsAreNormalizedBeforeRequestAndDedup(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.URL.Query().Get("ticket") != "private-fixture" || r.URL.Query().Get("callback") == "" {
+			t.Error("normalization changed the login ticket or omitted its callback")
+		}
+		fmt.Fprint(w, `cb({"retcode":0})`)
+	}))
+	defer server.Close()
+	target, _ := url.Parse(server.URL)
+	client := &http.Client{Transport: weiboTestTransport{target, server.Client().Transport}}
+	err := completeWeiboSSO(context.Background(), client, []string{
+		"//PASSPORT.WEIBO.COM:443/wbsso/login?ticket=private-fixture",
+		"https://passport.weibo.com/wbsso/login?ticket=private-fixture",
+		"http://passport.weibo.com:80/wbsso/login?ticket=private-fixture",
+	})
+	if err != nil || calls != 1 {
+		t.Fatalf("equivalent callbacks were rejected or sent multiple times: calls=%d failure=%v", calls, err != nil)
+	}
+}
+
+func TestWeiboSSOAddressRejectionsAreSpecificAndRedacted(t *testing.T) {
+	for _, scenario := range []struct {
+		name, target, reason string
+	}{
+		{"userinfo", "https://private-fixture@passport.weibo.com/login", "账号信息"},
+		{"port", "https://passport.weibo.com:8443/login?ticket=private-fixture", "端口"},
+		{"scheme", "ftp://passport.weibo.com/login?ticket=private-fixture", "协议"},
+		{"query", "https://passport.weibo.com/login?ticket=private-fixture%ZZ", "参数无法解析"},
+		{"action", "https://passport.weibo.com/login?action=private-fixture", "不是登录操作"},
+		{"conflicting-actions", "https://passport.weibo.com/login?action=login&action=logout&ticket=private-fixture", "不是登录操作"},
+		{"malformed", "https://passport.weibo.com:private-fixture/login", "无法解析"},
+		{"suffix-host", "https://passport.weibo.com.evil.invalid/login?ticket=private-fixture", "域名不受支持"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			err := completeWeiboSSO(context.Background(), &http.Client{}, []string{scenario.target})
+			if err == nil || !strings.Contains(err.Error(), scenario.reason) || strings.Contains(err.Error(), "private-fixture") {
+				t.Fatal("rejection reason was absent, incorrect, or exposed a login ticket")
+			}
+		})
+	}
+	for index, scenario := range []struct {
+		target  string
+		allowed bool
+	}{
+		{"https://PASSPORT.WEIBO.COM:443/next", true},
+		{"https://passport.weibo.com./next", true},
+		{"http://passport.weibo.com/next", false},
+		{"https://passport.weibo.com:8443/next", false},
+		{"https://passport.weibo.com.evil.invalid/next", false},
+	} {
+		target, _ := url.Parse(scenario.target)
+		if allowedWeiboSSOTarget(target) != scenario.allowed {
+			t.Fatalf("incorrect redirect allowlist result for scenario %d", index)
+		}
 	}
 }
 
