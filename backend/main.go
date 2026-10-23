@@ -7591,9 +7591,7 @@ func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		checkURL := "https://login.sina.com.cn/sso/qrcode/check?" + checkQuery.Encode()
 		request, _ := http.NewRequest(http.MethodGet, checkURL, nil)
-		request.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36")
-		request.Header.Set("Accept", "*/*")
-		request.Header.Set("Referer", "https://mail.sina.com.cn/")
+		weiboQRRequestHeaders(request)
 		response, requestErr := client.Do(request)
 		if requestErr != nil {
 			writeAPIError(w, http.StatusBadGateway, "无法查询微博扫码状态")
@@ -7650,9 +7648,7 @@ func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		loginURL := "https://login.sina.com.cn/sso/login.php?" + loginQuery.Encode()
 		loginRequest, _ := http.NewRequest(http.MethodGet, loginURL, nil)
-		loginRequest.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36")
-		loginRequest.Header.Set("Accept", "*/*")
-		loginRequest.Header.Set("Referer", "https://mail.sina.com.cn/")
+		weiboQRRequestHeaders(loginRequest)
 		loginResponse, loginErr := client.Do(loginRequest)
 		if loginErr != nil {
 			writeAPIError(w, http.StatusBadGateway, "微博登录票据交换未完成，请检查网络后重新扫码")
@@ -7755,9 +7751,7 @@ func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 		"callback": {strconv.FormatInt(time.Now().UnixMilli(), 10)},
 	}
 	request, _ := http.NewRequest(http.MethodGet, "https://login.sina.com.cn/sso/qrcode/image?"+imageQuery.Encode(), nil)
-	request.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36")
-	request.Header.Set("Accept", "*/*")
-	request.Header.Set("Referer", "https://mail.sina.com.cn/")
+	weiboQRRequestHeaders(request)
 	response, err := client.Do(request)
 	if err != nil {
 		writeAPIError(w, http.StatusBadGateway, "无法连接微博扫码服务")

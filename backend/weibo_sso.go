@@ -15,6 +15,41 @@ import (
 
 const weiboSSODiscoveryURL = "https://login.sina.com.cn/sso/crossdomain.php?action=login&domain=weibo.com"
 
+func weiboQRRequestHeaders(request *http.Request) {
+	request.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36")
+	request.Header.Set("Accept", "*/*")
+	request.Header.Set("Referer", "https://mail.sina.com.cn/")
+}
+
+func weiboSSOCallbackDiagnostic(target *url.URL, payload map[string]any) string {
+	host := strings.ToLower(strings.TrimSuffix(target.Hostname(), "."))
+	if !allowedWeiboSSOHost(host) {
+		host = "未知站点"
+	}
+	stage := "站点回调"
+	if host == "login.sina.com.cn" && target.Path == "/sso/crossdomain.php" {
+		stage = "地址发现"
+	} else if host == "passport.weibo.com" && target.Path == "/sso/wblogin" {
+		stage = "应用回调"
+	}
+	// Only bounded status values are safe to display; never echo reasons or URLs.
+	code := jsonValueString(payload["retcode"])
+	if code == "" {
+		code = "缺失"
+	} else if len(code) > 8 || strings.Trim(code, "0123456789") != "" {
+		code = "已隐藏"
+	}
+	result := jsonValueString(payload["result"])
+	switch result {
+	case "":
+		result = "缺失"
+	case "true", "false":
+	default:
+		result = "已隐藏"
+	}
+	return fmt.Sprintf("%s，%s，retcode=%s，result=%s", host, stage, code, result)
+}
+
 func allowedWeiboSSOHost(host string) bool {
 	switch host {
 	case "login.sina.com.cn", "passport.weibo.com", "weibo.com", "www.weibo.com", "passport.weibo.cn", "m.weibo.cn", "passport.sina.cn":
@@ -152,7 +187,7 @@ func completeWeiboSSO(ctx context.Context, client *http.Client, urls []string) e
 		if err != nil {
 			return errors.New("无法创建微博跨域会话请求")
 		}
-		weiboRequestHeaders(request, "")
+		weiboQRRequestHeaders(request)
 		response, err := ssoClient.Do(request)
 		if err != nil {
 			// net/http errors contain the URL, including its one-time ticket.
@@ -160,7 +195,11 @@ func completeWeiboSSO(ctx context.Context, client *http.Client, urls []string) e
 		}
 		body, readErr := io.ReadAll(io.LimitReader(response.Body, (1<<20)+1))
 		response.Body.Close()
-		source := target.Hostname()
+		callbackTarget := target
+		if response.Request != nil && allowedWeiboSSOTarget(response.Request.URL) {
+			callbackTarget = response.Request.URL
+		}
+		source := callbackTarget.Hostname()
 		switch response.StatusCode {
 		case http.StatusOK:
 		case http.StatusUnauthorized:
@@ -181,18 +220,19 @@ func completeWeiboSSO(ctx context.Context, client *http.Client, urls []string) e
 		if decoder.Decode(&payload) != nil || payload == nil {
 			return &weiboRequestError{"restricted", "微博跨域会话未返回可识别的回调，请在官方页面检查安全验证"}
 		}
+		diagnostic := weiboSSOCallbackDiagnostic(callbackTarget, payload)
 		if payload["msg"] == nil {
 			payload["msg"] = payload["reason"]
 		}
 		if err := weiboPayloadFailure(payload); err != nil {
-			return fmt.Errorf("微博跨域会话失败：%w", err)
+			return fmt.Errorf("微博跨域会话失败（%s）：%w", diagnostic, err)
 		}
 		code, result := jsonValueString(payload["retcode"]), jsonValueString(payload["result"])
 		if result == "false" || code != "" && code != "0" && code != "20000000" {
-			return errors.New("微博跨域会话回调未确认成功，请在官方页面检查后重新扫码")
+			return fmt.Errorf("微博跨域会话回调未确认成功（%s），请在官方页面检查后重新扫码", diagnostic)
 		}
 		if code == "" && result != "true" && jsonValueString(payload["ok"]) != "1" {
-			return errors.New("微博跨域会话回调缺少成功标记，请重新扫码")
+			return fmt.Errorf("微博跨域会话回调缺少成功标记（%s），请重新扫码", diagnostic)
 		}
 		containers := []map[string]any{payload}
 		if data, ok := payload["data"].(map[string]any); ok {
