@@ -84,11 +84,53 @@ func (b *BilibiliStore) fetchPublicWeiboUser(userID string, credentials *WeiboCr
 }
 
 func validateWeiboSessionIdentity(credentials *WeiboCredentials, proxyURL string) error {
+	return validateWeiboIdentityWithQRProof(credentials, proxyURL, false)
+}
+
+func validateWeiboQRSessionIdentity(credentials *WeiboCredentials, proxyURL string) error {
+	return validateWeiboIdentityWithQRProof(credentials, proxyURL, true)
+}
+
+func validateWeiboIdentityWithQRProof(credentials *WeiboCredentials, proxyURL string, confirmedQR bool) error {
 	source := "微博桌面会话接口"
 	payload, status, err := weiboSessionRequest("https://weibo.com/ajax/config/get", credentials, proxyURL)
 	// A missing route is a compatibility issue, not proof of an expired login.
 	// Do not retry authentication, captcha, throttling or other upstream failures.
 	if err != nil && (status == http.StatusNotFound || status == http.StatusGone) {
+		// QR exchange already bound this cookie jar to a confirmed UID. A missing
+		// desktop identity route must not make an independent mobile login mandatory.
+		if confirmedQR && credentials.CookieScoped && validWeiboUID(credentials.UserID) && weiboCookieValue(credentials.Cookie, "SUB") != "" {
+			endpoint := "https://weibo.com/ajax/statuses/likelist?" + url.Values{"uid": {credentials.UserID}, "page": {"1"}, "relate": {"fans"}}.Encode()
+			var probe map[string]any
+			probe, status, err = weiboSessionRequest(endpoint, credentials, proxyURL)
+			if err == nil {
+				if jsonValueString(probe["ok"]) != "1" {
+					return &weiboRequestError{"upstream", "微博桌面账号接口未明确确认成功，暂不能激活扫码会话"}
+				}
+				containers := []map[string]any{probe}
+				if data, ok := probe["data"].(map[string]any); ok {
+					containers = append(containers, data)
+				}
+				validList := false
+				for _, container := range containers {
+					if uid := jsonValueString(container["uid"]); uid != "" && uid != credentials.UserID {
+						return errors.New("微博桌面账号接口返回的 UID 与扫码确认账号不一致")
+					}
+					for _, field := range []string{"statuses", "list"} {
+						if _, ok := container[field].([]any); ok {
+							validList = true
+						}
+					}
+				}
+				if !validList {
+					return &weiboRequestError{"upstream", "微博桌面账号接口未返回可识别的点赞列表，暂不能激活扫码会话"}
+				}
+				return nil
+			}
+			if status != http.StatusNotFound && status != http.StatusGone {
+				return fmt.Errorf("微博桌面扫码会话可用性验证失败：%w", err)
+			}
+		}
 		source = "微博移动端会话接口"
 		payload, _, err = weiboSessionRequest("https://m.weibo.cn/api/config", credentials, proxyURL)
 		if err != nil {

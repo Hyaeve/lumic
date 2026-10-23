@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-func TestWeiboQRReturnsOnlyNewValidatedCookieOnce(t *testing.T) {
+func TestWeiboQRActivatesSessionWithoutReturningSecrets(t *testing.T) {
 	for _, scenario := range []struct {
 		name          string
 		desktopStatus int
@@ -35,6 +35,10 @@ func TestWeiboQRReturnsOnlyNewValidatedCookieOnce(t *testing.T) {
 			store := newWeiboAuthTestStore(t, WeiboCredentials{UserID: "42", Cookie: "SUB=old", PasswordUsername: "fixture", Password: "backup-secret"})
 			mobileCalls := 0
 			mockWeiboAPI(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/ajax/statuses/likelist" {
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
 				if r.URL.Path == "/api/config" {
 					mobileCalls++
 					if scenario.mobileStatus == 0 {
@@ -93,17 +97,17 @@ func TestWeiboQRReturnsOnlyNewValidatedCookieOnce(t *testing.T) {
 			if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
 				t.Fatal(err)
 			}
-			if response.Code != http.StatusOK || result["status"] != "connected" || result["configured"] != true || result["qrConnected"] != true || result["userId"] != "42" || !strings.Contains(result["cookie"].(string), "SUB=new-qr-fixture") || result["passwordConfigured"] != true || result["credentialVerified"] != scenario.valid {
+			if response.Code != http.StatusOK || result["status"] != "connected" || result["configured"] != true || result["qrConnected"] != true || result["userId"] != "42" || result["passwordConfigured"] != true || result["credentialVerified"] != scenario.valid {
 				t.Fatal("confirmed QR exchange did not update the connection status")
 			}
-			if scenario.valid && (result["cookie"] != store.config.Weibo.Cookie || result["connectionWarning"] != "") {
+			if scenario.valid && (store.config.Weibo.Cookie != "SUB=new-qr-fixture; SUBP=new-qr-profile" || result["connectionWarning"] != "") {
 				t.Fatal("validated QR credentials were not activated")
 			}
 			if !scenario.valid && (store.config.Weibo.Cookie != "SUB=old" || result["connectionWarning"] == "") {
 				t.Fatal("unverified QR Cookie replaced active credentials or lost its warning")
 			}
-			if strings.Contains(response.Body.String(), "backup-secret") {
-				t.Fatal("QR response exposed backup password")
+			if strings.Contains(response.Body.String(), "backup-secret") || strings.Contains(response.Body.String(), `"cookie":`) || strings.Contains(response.Body.String(), "new-qr-fixture") {
+				t.Fatal("QR response exposed saved login credentials")
 			}
 			stored, err := os.ReadFile(bilibiliFile)
 			if err != nil || strings.Contains(string(stored), "new-qr-fixture") {

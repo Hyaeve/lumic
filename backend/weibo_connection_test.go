@@ -63,8 +63,8 @@ func TestWeiboConfirmedQRConnectsWithoutUsableCredentials(t *testing.T) {
 			if response.Code != http.StatusOK || result["status"] != "connected" || result["configured"] != true || result["qrConnected"] != true || result["sessionReady"] != scenario.ready || result["credentialVerified"] != false || result["connectionWarning"] == "" {
 				t.Fatal("confirmed QR did not persist a connected state separate from credential readiness")
 			}
-			if (result["cookie"] != "") != scenario.cookie {
-				t.Fatal("missing Cookie was fabricated or newly captured Cookie was lost")
+			if _, exposed := result["cookie"]; exposed {
+				t.Fatal("QR connection response must not return Cookie contents")
 			}
 			if scenario.previous.UserID == "42" {
 				if store.config.Weibo.Cookie != scenario.previous.Cookie || store.config.Weibo.Password != scenario.previous.Password {

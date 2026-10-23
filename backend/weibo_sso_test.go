@@ -56,6 +56,10 @@ func TestWeiboQRBuildsDomainSessionsFromCrossDomainReplies(t *testing.T) {
 			mobileChecks, mobileHandshakes, appLogins := 0, 0, 0
 			likesCalls, rejectLikes := 0, false
 			mockWeiboAPI(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/ajax/statuses/likelist" && scenario.companion == 0 {
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
 				if r.URL.Path == "/ajax/statuses/likelist" {
 					likesCalls++
 					if r.Header.Get("Cookie") != "SUB=desktop-fixture" || rejectLikes {
@@ -146,7 +150,11 @@ func TestWeiboQRBuildsDomainSessionsFromCrossDomainReplies(t *testing.T) {
 					}
 				}
 			})
-			if result["credentialVerified"] != true || mobileChecks != 1 || mobileHandshakes != 1 {
+			expectedMobileChecks := 1
+			if scenario.companion != 0 {
+				expectedMobileChecks = 0
+			}
+			if result["credentialVerified"] != true || mobileChecks != expectedMobileChecks || mobileHandshakes != 1 {
 				t.Fatalf("cross-domain sessions were not established/used: verified=%v checks=%d handshakes=%d", result["credentialVerified"], mobileChecks, mobileHandshakes)
 			}
 			if scenario.appTicket && appLogins != 1 || !scenario.appTicket && appLogins != 0 {
@@ -174,11 +182,11 @@ func TestWeiboQRBuildsDomainSessionsFromCrossDomainReplies(t *testing.T) {
 			if scenario.companion != 0 {
 				feed := SourceConfig{ID: "weibo-likes-42", Source: SourceWeibo, Name: weiboLikesName}
 				posts, err := store.fetchWeiboLikedPosts(feed, false)
-				if err != nil || len(posts) != 1 || posts[0].ID != "weibo-status-12345" || likesCalls != 1 {
+				if err != nil || len(posts) != 1 || posts[0].ID != "weibo-status-12345" || likesCalls != 2 {
 					t.Fatal("newly validated QR session was not used for account likes")
 				}
 				rejectLikes = true
-				if _, err := store.fetchWeiboLikedPosts(feed, false); weiboErrorKind(err) != "auth" || likesCalls != 2 {
+				if _, err := store.fetchWeiboLikedPosts(feed, false); weiboErrorKind(err) != "auth" || likesCalls != 3 {
 					t.Fatal("explicit logged-out likes response was bypassed or retried anonymously")
 				}
 			}

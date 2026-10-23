@@ -1491,10 +1491,10 @@ async function pollWeiboQR() {
     const result = await response.json()
     if (generation !== weiboQRGeneration || weiboQR.value?.id !== id) return
     if (result.status === 'connected') {
-      weiboAccount.value = { configured: true, qrConnected: true, sessionReady: result.sessionReady ?? Boolean(result.cookie), connectionWarning: result.connectionWarning || '', cookieConfigured: result.cookieConfigured ?? Boolean(result.cookie), passwordConfigured: Boolean(result.passwordConfigured), userId: result.userId, userName: result.userName, avatar: result.avatar || '' }
-      weiboCredentials.value = { cookie: result.cookie || '', userId: result.userId || '' }
+      weiboAccount.value = { configured: true, qrConnected: true, sessionReady: Boolean(result.sessionReady), connectionWarning: result.connectionWarning || '', cookieConfigured: Boolean(result.cookieConfigured), passwordConfigured: Boolean(result.passwordConfigured), userId: result.userId, userName: result.userName, avatar: result.avatar || '' }
+      weiboCredentials.value = { cookie: '', userId: '' }
       weiboQR.value = null; weiboBusy.value = false; stopWeiboPolling()
-      notify(result.connectionWarning || (result.cookie ? '微博扫码连接成功，凭证已保存并填入' : '微博扫码已连接'), result.connectionWarning ? 'info' : 'success')
+      notify(result.connectionWarning || (result.credentialVerified ? '微博扫码登录成功，会话已保存' : '微博扫码已连接'), result.connectionWarning ? 'info' : 'success')
       return
     }
     weiboPollTimer = setTimeout(pollWeiboQR, 2000)

@@ -7419,6 +7419,10 @@ func validateWeiboCredentials(cookie, userID, proxyURL string) (WeiboCredentials
 }
 
 func validateWeiboSiteCredentials(credentials WeiboCredentials, proxyURL string) (WeiboCredentials, error) {
+	return validateWeiboSiteCredentialsWithIdentity(credentials, proxyURL, validateWeiboSessionIdentity)
+}
+
+func validateWeiboSiteCredentialsWithIdentity(credentials WeiboCredentials, proxyURL string, identity func(*WeiboCredentials, string) error) (WeiboCredentials, error) {
 	credentials.Cookie = normalizeWeiboCookie(credentials.Cookie)
 	credentials.MobileCookie = normalizeWeiboCookie(credentials.MobileCookie)
 	credentials.UserID = strings.TrimSpace(credentials.UserID)
@@ -7428,7 +7432,7 @@ func validateWeiboSiteCredentials(credentials WeiboCredentials, proxyURL string)
 	if weiboCookieValue(credentials.Cookie, "SUB") == "" && weiboCookieValue(credentials.Cookie, "SUBP") == "" && weiboCookieValue(credentials.MobileCookie, "SUB") == "" && weiboCookieValue(credentials.MobileCookie, "SUBP") == "" {
 		return WeiboCredentials{}, errors.New("Cookie 缺少 SUB/SUBP 登录凭证，请从已登录微博的浏览器请求头中复制完整 Cookie")
 	}
-	if err := validateWeiboSessionIdentity(&credentials, proxyURL); err != nil {
+	if err := identity(&credentials, proxyURL); err != nil {
 		return WeiboCredentials{}, fmt.Errorf("微博登录身份验证失败：%w", err)
 	}
 	user, err := fetchWeiboAccountProfile(credentials.UserID, credentials, proxyURL)
@@ -7687,9 +7691,8 @@ func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 		credentials := WeiboCredentials{Cookie: weiboSiteCookie(client, "https://weibo.com/"), MobileCookie: weiboSiteCookie(client, "https://m.weibo.cn/"), CookieScoped: true, UserID: loginUID, UserName: loginPayload.Nick}
 		var validated WeiboCredentials
 		if validateErr == nil {
-			validated, validateErr = validateWeiboSiteCredentials(credentials, proxyURL)
+			validated, validateErr = validateWeiboSiteCredentialsWithIdentity(credentials, proxyURL, validateWeiboQRSessionIdentity)
 		}
-		capturedCookie := firstNonEmptyRemoteText(credentials.Cookie, credentials.MobileCookie)
 		if validateErr != nil {
 			// The SSO exchange confirmed the account even if API validation is unavailable.
 			// Keep new unverified cookies out of the active fetch credentials.
@@ -7708,7 +7711,6 @@ func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 				validated.UserName = credentials.UserName
 			}
 			credentials = validated
-			capturedCookie = firstNonEmptyRemoteText(validated.Cookie, validated.MobileCookie)
 			retainWeiboPassword(previousAccount, &credentials)
 		}
 		credentials.QRConnected = true
@@ -7734,7 +7736,7 @@ func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 		delete(b.weiboClients, id)
 		b.Unlock()
 		result := weiboAccountView(credentials)
-		result["status"], result["cookie"], result["credentialVerified"] = "connected", capturedCookie, validateErr == nil
+		result["status"], result["credentialVerified"] = "connected", validateErr == nil
 		writeJSON(w, result)
 		return
 	}
