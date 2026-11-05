@@ -1,12 +1,12 @@
 <script setup>
 import { RotateCw } from '@lucide/vue'
-defineProps({ failed: Boolean })
+defineProps({ failed: Boolean, loadingLabel: { type: String, default: '正在加载原图' }, retryLabel: { type: String, default: '重试加载原图' } })
 defineEmits(['retry'])
 </script>
 
 <template>
-  <button v-if="failed" class="image-load-retry" type="button" aria-label="重试加载原图" @pointerdown.stop @pointerup.stop @click.stop="$emit('retry', $event)"><RotateCw :size="21" /></button>
-  <span v-else class="image-load-ring" role="status" aria-label="正在加载原图"><span></span></span>
+  <button v-if="failed" class="image-load-retry" type="button" :aria-label="retryLabel" @pointerdown.stop @pointerup.stop @click.stop="$emit('retry', $event)"><RotateCw :size="21" /></button>
+  <span v-else class="image-load-ring" role="status" :aria-label="loadingLabel"><span></span></span>
 </template>
 
 <style>

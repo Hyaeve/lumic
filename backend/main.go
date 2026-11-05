@@ -109,22 +109,23 @@ func mediaPreviewProfileFor(level int, device, network string) mediaPreviewProfi
 }
 
 type Post struct {
-	ID               string      `json:"id"`
-	Source           Source      `json:"source"`
-	FeedIDs          []string    `json:"feedIds,omitempty"`
-	Author           string      `json:"author"`
-	Avatar           string      `json:"avatar"`
-	Caption          string      `json:"caption"`
-	Emojis           []PostEmoji `json:"emojis,omitempty"` // Legacy image metadata, removed while loading.
-	TextFile         string      `json:"textFile,omitempty"`
-	Tags             []string    `json:"tags"`
-	Media            []string    `json:"media"`
-	Videos           []PostVideo `json:"videos,omitempty"`
-	OriginalURL      string      `json:"originalUrl,omitempty"`
-	Published        time.Time   `json:"published"`
-	Liked            bool        `json:"liked"`
-	FavoriteExplicit bool        `json:"favoriteExplicit,omitempty"`
-	Edited           bool        `json:"edited,omitempty"`
+	ID               string          `json:"id"`
+	Source           Source          `json:"source"`
+	FeedIDs          []string        `json:"feedIds,omitempty"`
+	Author           string          `json:"author"`
+	Avatar           string          `json:"avatar"`
+	Caption          string          `json:"caption"`
+	Emojis           []PostEmoji     `json:"emojis,omitempty"` // Legacy image metadata, removed while loading.
+	TextFile         string          `json:"textFile,omitempty"`
+	Tags             []string        `json:"tags"`
+	Media            []string        `json:"media"`
+	LivePhotos       []PostLivePhoto `json:"livePhotos,omitempty"`
+	Videos           []PostVideo     `json:"videos,omitempty"`
+	OriginalURL      string          `json:"originalUrl,omitempty"`
+	Published        time.Time       `json:"published"`
+	Liked            bool            `json:"liked"`
+	FavoriteExplicit bool            `json:"favoriteExplicit,omitempty"`
+	Edited           bool            `json:"edited,omitempty"`
 }
 
 type PostVideo struct {
@@ -1636,7 +1637,12 @@ func (s *Store) mergePosts(incoming []Post) (int, error) {
 			post.FavoriteExplicit = stored.FavoriteExplicit
 			if stored.Edited {
 				post.Caption, post.Media, post.Edited = stored.Caption, stored.Media, true
+				post.LivePhotos = append([]PostLivePhoto(nil), stored.LivePhotos...)
 			}
+			if len(post.LivePhotos) == 0 {
+				post.LivePhotos = append([]PostLivePhoto(nil), stored.LivePhotos...)
+			}
+			post.LivePhotos = normalizePostLivePhotos(post)
 			if hasWeiboLikesFeed(post.FeedIDs) && !stored.FavoriteExplicit {
 				post.Liked = false
 			} else {
@@ -1684,6 +1690,13 @@ func (s *Store) rewriteMediaPrefix(oldPrefix, newPrefix string) error {
 		for mediaIndex, media := range s.posts[postIndex].Media {
 			if strings.HasPrefix(media, oldPrefix) {
 				s.posts[postIndex].Media[mediaIndex] = newPrefix + strings.TrimPrefix(media, oldPrefix)
+				rebindLivePhotoImage(&s.posts[postIndex], media, s.posts[postIndex].Media[mediaIndex])
+				changed = true
+			}
+		}
+		for index := range s.posts[postIndex].LivePhotos {
+			if video := s.posts[postIndex].LivePhotos[index].Video; strings.HasPrefix(video, oldPrefix) {
+				s.posts[postIndex].LivePhotos[index].Video = newPrefix + strings.TrimPrefix(video, oldPrefix)
 				changed = true
 			}
 		}
@@ -1731,11 +1744,14 @@ func (s *Store) reconcileCollectionMedia(feed SourceConfig, configuredFeeds []So
 			_ = os.MkdirAll(filepath.Dir(move.oldLocal), 0755)
 			_ = os.Rename(move.newLocal, move.oldLocal)
 			switch move.mediaKind {
+			case "live":
+				s.posts[move.postIndex].LivePhotos[move.mediaIndex].Video = move.oldPublic
 			case "video":
 				s.posts[move.postIndex].Videos[move.mediaIndex].URL = move.oldPublic
 			case "poster":
 				s.posts[move.postIndex].Videos[move.mediaIndex].Poster = move.oldPublic
 			default:
+				rebindLivePhotoImage(&s.posts[move.postIndex], s.posts[move.postIndex].Media[move.mediaIndex], move.oldPublic)
 				s.posts[move.postIndex].Media[move.mediaIndex] = move.oldPublic
 			}
 		}
@@ -1781,11 +1797,14 @@ func (s *Store) reconcileCollectionMedia(feed SourceConfig, configuredFeeds []So
 		moves = append(moves, mediaMove{postIndex: postIndex, mediaIndex: mediaIndex, mediaKind: mediaKind, oldPublic: media, oldLocal: localPath, newLocal: targetPath})
 		changed = true
 		switch mediaKind {
+		case "live":
+			s.posts[postIndex].LivePhotos[mediaIndex].Video = updated
 		case "video":
 			s.posts[postIndex].Videos[mediaIndex].URL = updated
 		case "poster":
 			s.posts[postIndex].Videos[mediaIndex].Poster = updated
 		default:
+			rebindLivePhotoImage(&s.posts[postIndex], media, updated)
 			s.posts[postIndex].Media[mediaIndex] = updated
 		}
 		return deletePostMedia([]string{media})
@@ -1817,6 +1836,13 @@ func (s *Store) reconcileCollectionMedia(feed SourceConfig, configuredFeeds []So
 				return err
 			}
 			if err := moveMedia(postIndex, videoIndex, "poster", video.Poster, targetName); err != nil {
+				rollback()
+				s.posts = previous
+				return err
+			}
+		}
+		for index, photo := range s.posts[postIndex].LivePhotos {
+			if err := moveMedia(postIndex, index, "live", photo.Video, targetName); err != nil {
 				rollback()
 				s.posts = previous
 				return err
@@ -1982,6 +2008,9 @@ func sameSourceAuthor(left, right string) bool {
 
 func postMediaPaths(post Post) []string {
 	paths := append([]string(nil), post.Media...)
+	for _, photo := range post.LivePhotos {
+		paths = append(paths, photo.Video)
+	}
 	for _, video := range post.Videos {
 		paths = append(paths, video.URL, video.Poster)
 	}
@@ -4276,13 +4305,30 @@ func (b *BilibiliStore) archiveSourceContent(feed SourceConfig, posts []Post) (S
 				if downloadErr != nil {
 					return feed, posts, fmt.Errorf("下载动态 %s 的第 %d 张图片失败: %w", posts[postIndex].ID, mediaIndex+1, downloadErr)
 				}
-				localMedia = append(localMedia, flowPublicPath(target.Source, target.Name, filepath.Base(localPath)))
+				localURL := flowPublicPath(target.Source, target.Name, filepath.Base(localPath))
+				localMedia = append(localMedia, localURL)
+				rebindLivePhotoImage(&posts[postIndex], remoteURL, localURL)
 				if delay := imageDownloadDelay(feed.Source, postIndex+mediaIndex); delay > 0 {
 					time.Sleep(delay)
 				}
 			}
 		}
 		posts[postIndex].Media = localMedia
+		posts[postIndex].LivePhotos = normalizePostLivePhotos(posts[postIndex])
+		for index, photo := range posts[postIndex].LivePhotos {
+			if strings.HasPrefix(photo.Video, "/flow/") {
+				continue
+			}
+			base := availableMediaTargetBase(target.StoragePath, postMediaBaseName(posts[postIndex], index)+"-live")
+			localPath, downloadErr := downloadRemoteVideo(client, photo.Video, base, referer, cookie)
+			if downloadErr != nil {
+				return feed, posts, fmt.Errorf("下载动态 %s 的实况片段失败: %w", posts[postIndex].ID, downloadErr)
+			}
+			posts[postIndex].LivePhotos[index].Video = flowPublicPath(target.Source, target.Name, filepath.Base(localPath))
+			if delay := videoDownloadDelay(feed.Source, postIndex+index); delay > 0 {
+				time.Sleep(delay)
+			}
+		}
 		localVideos := make([]PostVideo, 0, len(posts[postIndex].Videos))
 		for videoIndex, video := range posts[postIndex].Videos {
 			if strings.TrimSpace(video.URL) == "" {
@@ -4684,6 +4730,9 @@ func collectWeiboVideos(value any, videos *[]PostVideo, indexes map[string]int) 
 			collectWeiboVideos(item, videos, indexes)
 		}
 	case map[string]any:
+		if jsonValueString(typed["type"]) == "livephoto" {
+			return
+		}
 		videoURL := weiboDirectVideoURL(typed)
 		if videoURL != "" {
 			poster := weiboDirectVideoPoster(typed)
@@ -4760,11 +4809,30 @@ func collectWeiboPosts(value any, feed SourceConfig, posts *[]Post, seen map[str
 					if image == "" {
 						image = normalizeWeiboOriginalImage(jsonValueString(picture["url"]))
 					}
+					if image == "" {
+						largest, _ := picture["largest"].(map[string]any)
+						image = normalizeWeiboOriginalImage(jsonValueString(largest["url"]))
+					}
 					appendMedia(pictureID, image)
 				}
 			}
 			if picInfos, ok := mblog["pic_infos"].(map[string]any); ok {
-				for pictureID, rawPicture := range picInfos {
+				pictureIDs := make([]string, 0, len(picInfos))
+				if ordered, ok := mblog["pic_ids"].([]any); ok {
+					for _, id := range ordered {
+						pictureIDs = append(pictureIDs, jsonValueString(id))
+					}
+				}
+				remaining := make([]string, 0, len(picInfos))
+				for id := range picInfos {
+					if !containsString(pictureIDs, id) {
+						remaining = append(remaining, id)
+					}
+				}
+				sort.Strings(remaining)
+				pictureIDs = append(pictureIDs, remaining...)
+				for _, pictureID := range pictureIDs {
+					rawPicture := picInfos[pictureID]
 					picture, _ := rawPicture.(map[string]any)
 					original, _ := picture["original"].(map[string]any)
 					image := normalizeWeiboOriginalImage(jsonValueString(original["url"]))
@@ -4772,9 +4840,14 @@ func collectWeiboPosts(value any, feed SourceConfig, posts *[]Post, seen map[str
 						large, _ := picture["large"].(map[string]any)
 						image = normalizeWeiboOriginalImage(jsonValueString(large["url"]))
 					}
+					if image == "" {
+						largest, _ := picture["largest"].(map[string]any)
+						image = normalizeWeiboOriginalImage(jsonValueString(largest["url"]))
+					}
 					appendMedia(pictureID, image)
 				}
 			}
+			livePhotos := collectWeiboLivePhotos(mblog, mediaIndexes, media)
 			videos := make([]PostVideo, 0, 1)
 			collectWeiboVideos(mblog, &videos, make(map[string]int))
 			videos = normalizePostVideos(videos)
@@ -4800,7 +4873,7 @@ func collectWeiboPosts(value any, feed SourceConfig, posts *[]Post, seen map[str
 			if profileID != "" {
 				originalURL = "https://weibo.com/" + url.PathEscape(profileID) + "/" + url.PathEscape(id)
 			}
-			*posts = append(*posts, Post{ID: "weibo-status-" + id, Source: SourceWeibo, FeedIDs: []string{feed.ID}, Author: name, Avatar: avatar, Caption: caption, Tags: append([]string(nil), feed.Tags...), Media: media, Videos: videos, OriginalURL: originalURL, Published: published})
+			*posts = append(*posts, Post{ID: "weibo-status-" + id, Source: SourceWeibo, FeedIDs: []string{feed.ID}, Author: name, Avatar: avatar, Caption: caption, Tags: append([]string(nil), feed.Tags...), Media: media, LivePhotos: livePhotos, Videos: videos, OriginalURL: originalURL, Published: published})
 		}
 		for _, child := range object {
 			collectWeiboPosts(child, feed, posts, seen)
@@ -4939,6 +5012,7 @@ func (s *Store) postsAfterOrCaptionRepair(posts []Post, boundary time.Time) []Po
 			continue
 		}
 		if len(stored.Media) > 0 {
+			post.LivePhotos = append([]PostLivePhoto(nil), stored.LivePhotos...)
 			post.Media = append([]string(nil), stored.Media...)
 		}
 		if len(stored.Videos) > 0 {
@@ -4982,7 +5056,7 @@ func (s *Store) postsAfterOrSourceMembership(posts []Post, boundary time.Time, f
 		if containsString(stored.FeedIDs, feedID) {
 			// Collection syncs also repair legacy remote author avatars. Reuse all
 			// already archived media so this does not trigger a full redownload.
-			if strings.TrimSpace(post.Avatar) == "" || localFlowFileAvailable(stored.Avatar) {
+			if !needsLivePhotoArchive(post, stored) && (strings.TrimSpace(post.Avatar) == "" || localFlowFileAvailable(stored.Avatar)) {
 				continue
 			}
 			prepared, _ := reuseAvailablePostArchive(post, stored)
@@ -4990,7 +5064,9 @@ func (s *Store) postsAfterOrSourceMembership(posts []Post, boundary time.Time, f
 			filtered = append(filtered, prepared)
 			continue
 		}
-		if len(stored.Media) > 0 {
+		if len(post.LivePhotos) > 0 || len(stored.LivePhotos) > 0 {
+			post, _ = reuseAvailablePostArchive(post, stored)
+		} else if len(stored.Media) > 0 {
 			post.Media = append([]string(nil), stored.Media...)
 		}
 		if len(stored.Videos) > 0 {
@@ -5020,6 +5096,8 @@ func localFlowFileAvailable(value string) bool {
 
 func reuseAvailablePostArchive(incoming, stored Post) (Post, bool) {
 	prepared := incoming
+	prepared.LivePhotos = reusePostLivePhotos(incoming, stored)
+	prepared.Media = append([]string(nil), incoming.Media...)
 	complete := true
 	if len(incoming.Media) == 0 && len(stored.Media) > 0 {
 		prepared.Media = append([]string(nil), stored.Media...)
@@ -5030,7 +5108,25 @@ func reuseAvailablePostArchive(incoming, stored Post) (Post, bool) {
 		}
 	} else {
 		for index := range prepared.Media {
+			live := false
+			for _, photo := range incoming.LivePhotos {
+				if photo.Image != incoming.Media[index] {
+					continue
+				}
+				live = true
+				if old, ok := matchingStoredLivePhoto(photo, stored); ok && localFlowFileAvailable(old.Image) {
+					rebindLivePhotoImage(&prepared, prepared.Media[index], old.Image)
+					prepared.Media[index] = old.Image
+				} else {
+					complete = false
+				}
+				break
+			}
+			if live {
+				continue
+			}
 			if index < len(stored.Media) && localFlowFileAvailable(stored.Media[index]) {
+				rebindLivePhotoImage(&prepared, prepared.Media[index], stored.Media[index])
 				prepared.Media[index] = stored.Media[index]
 			} else {
 				complete = false
@@ -5040,6 +5136,12 @@ func reuseAvailablePostArchive(incoming, stored Post) (Post, bool) {
 			if localFlowFileAvailable(stored.Media[index]) {
 				prepared.Media = append(prepared.Media, stored.Media[index])
 			}
+		}
+	}
+	prepared.LivePhotos = normalizePostLivePhotos(prepared)
+	for _, photo := range prepared.LivePhotos {
+		if !localFlowFileAvailable(photo.Video) {
+			complete = false
 		}
 	}
 	if len(incoming.Videos) == 0 && len(stored.Videos) > 0 {

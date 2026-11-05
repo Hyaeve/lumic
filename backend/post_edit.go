@@ -125,6 +125,7 @@ func (s *Store) editPostHandler(w http.ResponseWriter, r *http.Request) {
 	previousPosts := append([]Post(nil), s.posts...)
 	s.posts[index].Caption = r.FormValue("caption")
 	s.posts[index].Media = media
+	s.posts[index].LivePhotos = normalizePostLivePhotos(s.posts[index])
 	s.posts[index].Edited = true
 	archives := map[textArchiveKey]bool{textArchiveKeyForPost(previous): true}
 	if _, err := s.reconcileTextArchivesFor(archives); err != nil {

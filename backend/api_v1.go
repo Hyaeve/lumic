@@ -21,20 +21,21 @@ const (
 )
 
 type apiV1Post struct {
-	ID            string      `json:"id"`
-	Source        Source      `json:"source"`
-	FeedIDs       []string    `json:"feedIds,omitempty"`
-	Author        string      `json:"author"`
-	Avatar        string      `json:"avatar"`
-	Caption       string      `json:"caption"`
-	Tags          []string    `json:"tags"`
-	Media         []string    `json:"media"`
-	PreviewMedia  []string    `json:"previewMedia"`
-	Videos        []PostVideo `json:"videos,omitempty"`
-	PreviewVideos []PostVideo `json:"previewVideos,omitempty"`
-	OriginalURL   string      `json:"originalUrl,omitempty"`
-	Published     time.Time   `json:"published"`
-	Liked         bool        `json:"liked"`
+	ID            string          `json:"id"`
+	Source        Source          `json:"source"`
+	FeedIDs       []string        `json:"feedIds,omitempty"`
+	Author        string          `json:"author"`
+	Avatar        string          `json:"avatar"`
+	Caption       string          `json:"caption"`
+	Tags          []string        `json:"tags"`
+	Media         []string        `json:"media"`
+	PreviewMedia  []string        `json:"previewMedia"`
+	LivePhotos    []PostLivePhoto `json:"livePhotos,omitempty"`
+	Videos        []PostVideo     `json:"videos,omitempty"`
+	PreviewVideos []PostVideo     `json:"previewVideos,omitempty"`
+	OriginalURL   string          `json:"originalUrl,omitempty"`
+	Published     time.Time       `json:"published"`
+	Liked         bool            `json:"liked"`
 }
 
 type apiV1Feed struct {
@@ -734,6 +735,7 @@ func toAPIV1Post(post Post) apiV1Post {
 		Tags:          append([]string(nil), post.Tags...),
 		Media:         append([]string(nil), post.Media...),
 		PreviewMedia:  previews,
+		LivePhotos:    append([]PostLivePhoto(nil), post.LivePhotos...),
 		Videos:        append([]PostVideo(nil), post.Videos...),
 		PreviewVideos: previewVideos,
 		OriginalURL:   post.OriginalURL,

@@ -31,5 +31,12 @@ func withAvailablePostImages(post Post) Post {
 		}
 	}
 	post.Media = media
+	photos := normalizePostLivePhotos(post)
+	post.LivePhotos = nil
+	for _, photo := range photos {
+		if availablePostImage(photo.Video) {
+			post.LivePhotos = append(post.LivePhotos, photo)
+		}
+	}
 	return post
 }

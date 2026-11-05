@@ -4,11 +4,12 @@ import { capturePageSnapshot } from './pageSnapshot'
 import PageSnapshot from './components/PageSnapshot.vue'
 import PostActions from './components/PostActions.vue'
 import ImageLoadRing from './components/ImageLoadRing.vue'
+import LivePhotoPlayback from './components/LivePhotoPlayback.vue'
 import DetailImage from './components/DetailImage.vue'
 import CredentialField from './components/CredentialField.vue'
 import NotificationToasts from './components/NotificationToasts.vue'
 import { notifications, notify } from './notifications'
-import { ListChecks, ChevronLeft, ChevronRight, Plus, KeyRound, Network, SlidersHorizontal, Archive, UserRound, QrCode, X, Download, Upload, Monitor, Smartphone } from '@lucide/vue'
+import { ListChecks, ChevronLeft, ChevronRight, Plus, KeyRound, Network, SlidersHorizontal, Archive, UserRound, QrCode, X, Download, Upload, Monitor, Smartphone, Play } from '@lucide/vue'
 import FavoriteHeart from './components/FavoriteHeart.vue'
 import TimelineStats from './components/TimelineStats.vue'
 import QRCode from 'qrcode'
@@ -260,6 +261,9 @@ const preloadedPreviewUrls = new Set()
 const transientTimers = new Set()
 const lightbox = ref({ open: false, media: [], index: 0, author: '', scale: 1, rotation: 0, fit: true, x: 0, y: 0, dragging: false, motion: 'enter' })
 const lightboxImageElement = ref(null)
+const livePhotoPlayback = ref(null)
+const currentLivePhoto = computed(() => (lightbox.value.livePhotos || []).find(photo => photo.image === lightbox.value.media[lightbox.value.index]) || null)
+function setLivePhotoPlayback(element) { livePhotoPlayback.value = element }
 const lightboxScalePercent = ref(100)
 const lightboxAtOriginalSize = ref(false)
 const lightboxDockVisible = ref(true)
@@ -1863,7 +1867,7 @@ function openLightbox(post, index) {
     window.history.pushState({ ...(window.history.state || {}), lumicLightbox: true }, '', window.location.href)
     lightboxHistoryActive = true
   }
-  lightbox.value = { open: true, media: post.media || [], index, author: post.author, scale: 1, rotation: 0, fit: true, x: 0, y: 0, dragging: false, motion: 'enter' }
+  lightbox.value = { open: true, media: post.media || [], livePhotos: post.livePhotos || [], index, author: post.author, scale: 1, rotation: 0, fit: true, x: 0, y: 0, dragging: false, motion: 'enter' }
   lightboxClosing.value = false
   mobileLightboxEntering.value = phonePortrait.value
   lightboxTransitioning.value = false
@@ -1910,6 +1914,7 @@ function closeLightbox(fromHistory = false, delay = phonePortrait.value ? 180 : 
   if (lightboxClosing.value) return
   fromHistory = fromHistory === true
   lightboxClosing.value = true
+  livePhotoPlayback.value?.stop()
   clearMobileLightboxInertia()
   clearLightboxSingleTap()
   const hadHistory = lightboxHistoryActive
@@ -1951,6 +1956,7 @@ function showMobileLightboxDots(duration = 1500) {
   }, duration)
 }
 function animateMobileLightboxExit(direction) {
+  if (currentLivePhoto.value) return
   if (!phonePortrait.value || lightboxClosing.value) return
   mobileLightboxExitDragging.value = false
   mobileLightboxExitAnimating.value = true
@@ -2177,8 +2183,12 @@ function scheduleLightboxSingleTapClose() {
   clearLightboxSingleTap()
   lightboxSingleTapTimer = window.setTimeout(() => {
     lightboxSingleTapTimer = 0
-    closeLightbox()
+    if (currentLivePhoto.value) livePhotoPlayback.value?.replay()
+    else closeLightbox()
   }, 280)
+}
+function handleLightboxBackdropClick() {
+  if (!currentLivePhoto.value) closeLightbox()
 }
 function scheduleLightboxLongPress(event) {
   clearLightboxLongPress()
@@ -2485,6 +2495,7 @@ function moveLightboxGesture(event) {
     }
     if (lightboxGesture.axis === 'vertical') {
       clearLightboxLongPress()
+      if (currentLivePhoto.value) return
       lightbox.value.dragging = false
       mobileLightboxExitDragging.value = true
       mobileLightboxExitAnimating.value = false
@@ -2568,7 +2579,7 @@ function stopLightboxGesture(event) {
   const verticalExitThresholdMet = gesture?.startDefaultView
     ? (Math.abs(dy) > Math.min(116, window.innerHeight * .15) || (Math.abs(dy) > 42 && Math.abs(velocityY) > .72))
     : false
-  const isVerticalExit = phonePortrait.value && !wasCancelled && !lightboxGestureHadPinch && wasSinglePan && !gesture.longPressed && gesture?.startDefaultView && duration < 780 && verticalExitThresholdMet && Math.abs(dy) > Math.abs(dx) * 1.08
+  const isVerticalExit = !currentLivePhoto.value && phonePortrait.value && !wasCancelled && !lightboxGestureHadPinch && wasSinglePan && !gesture.longPressed && gesture?.startDefaultView && duration < 780 && verticalExitThresholdMet && Math.abs(dy) > Math.abs(dx) * 1.08
   const isTap = !wasCancelled && !lightboxGestureHadPinch && wasSinglePan && !gesture.longPressed && duration < 280 && Math.hypot(dx, dy) < 10
 
   clearLightboxLongPress()
@@ -5100,13 +5111,13 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
       <button type="button" class="selection-select-all-button" :disabled="!loadedSelectionPosts.length" :aria-pressed="allLoadedPostsSelected" :aria-label="allLoadedPostsSelected ? '取消全选' : '全选当前已加载动态'" @click="toggleSelectAllLoadedPosts"><ListChecks aria-hidden="true" /></button>
       <button type="button" class="selection-delete-button" :disabled="!selectedPostCount || postActionBusy === 'batch-delete'" aria-label="删除所选动态" @click="deleteSelectedPosts"><span class="action-icon-mask" :style="{ '--action-icon-mask': `url(${deleteIcon})` }" aria-hidden="true"></span></button>
     </div>
-    <div v-if="lightbox.open" :class="['lightbox-layer', { closing: lightboxClosing, 'mobile-entering': mobileLightboxEntering, 'mobile-exit-dragging': mobileLightboxExitDragging, 'mobile-gesture-exiting': mobileLightboxExitAnimating }]" :style="phonePortrait ? mobileLightboxLayerStyle : undefined" role="dialog" aria-modal="true" :aria-label="`${lightbox.author} 的动态媒体`" @click.self="closeLightbox" @pointermove="updateDesktopLightboxHover" @pointerleave="clearDesktopLightboxHover" @wheel.prevent="zoomLightbox">
-      <div v-if="!phonePortrait" class="lightbox-close-hotspot" @pointerenter="showDesktopLightboxClose" @pointerleave="hideDesktopLightboxClose">
+    <div v-if="lightbox.open" :class="['lightbox-layer', { closing: lightboxClosing, 'mobile-entering': mobileLightboxEntering, 'mobile-exit-dragging': mobileLightboxExitDragging, 'mobile-gesture-exiting': mobileLightboxExitAnimating }]" :style="phonePortrait ? mobileLightboxLayerStyle : undefined" role="dialog" aria-modal="true" :aria-label="`${lightbox.author} 的动态媒体`" @click.self="handleLightboxBackdropClick" @pointermove="updateDesktopLightboxHover" @pointerleave="clearDesktopLightboxHover" @wheel.prevent="zoomLightbox">
+      <div v-if="!phonePortrait && !currentLivePhoto" class="lightbox-close-hotspot" @pointerenter="showDesktopLightboxClose" @pointerleave="hideDesktopLightboxClose">
         <button :class="['lightbox-close', { 'pointer-visible': desktopLightboxHoverTarget === 'close' }]" type="button" aria-label="关闭大图" @click="closeLightbox"><span class="lightbox-tool-mask lightbox-close-symbol" :style="{ '--lightbox-tool-mask': `url(${closeLightboxIcon})` }" aria-hidden="true"></span></button>
       </div>
       <button v-if="!phonePortrait" :class="['lightbox-edge-nav', 'previous', { 'edge-visible': desktopLightboxHoverTarget === 'previous', disabled: lightbox.media.length < 2 }]" type="button" :aria-disabled="lightbox.media.length < 2" aria-label="上一张" @click.stop="moveLightbox(-1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 5-7 7 7 7"/></svg></button>
       <button v-if="!phonePortrait" :class="['lightbox-edge-nav', 'next', { 'edge-visible': desktopLightboxHoverTarget === 'next', disabled: lightbox.media.length < 2 }]" type="button" :aria-disabled="lightbox.media.length < 2" aria-label="下一张" @click.stop="moveLightbox(1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"/></svg></button>
-      <div :class="['lightbox-image-stage', `motion-${lightbox.motion}`, { 'mobile-original-size': phonePortrait && lightboxAtOriginalSize }]" @click.self="closeLightbox" @contextmenu="handleLightboxContextMenu">
+      <div :class="['lightbox-image-stage', `motion-${lightbox.motion}`, { 'mobile-original-size': phonePortrait && lightboxAtOriginalSize }]" @click.self="handleLightboxBackdropClick" @contextmenu="handleLightboxContextMenu">
         <figure v-if="phonePortrait" class="mobile-lightbox-carousel" :class="{ 'ios-native-image-menu': iosImageCallout }" @click.stop @pointerdown="startLightboxGesture" @pointermove="moveLightboxGesture" @pointerup="stopLightboxGesture" @pointercancel="stopLightboxGesture">
           <div class="mobile-lightbox-track" :style="mobileLightboxTrackStyle">
             <div v-for="slide in mobileLightboxSlides" :key="`${slide.position}:${slide.media}`" :class="['mobile-lightbox-slide', { current: slide.position === 0 }]">
@@ -5114,6 +5125,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
                 <div :class="['mobile-lightbox-media-frame', { dragging: lightbox.dragging, 'zoom-animating': lightboxZoomAnimating, 'original-size': !lightbox.fit }]" :style="{ transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) rotate(${lightbox.rotation}deg) scale(${lightbox.scale})` }">
                   <img class="mobile-lightbox-preview" :src="retainedPreview(slide.media)" :alt="`${lightbox.author} 的动态图片 ${slide.index + 1}`" decoding="async" draggable="false">
                   <img ref="lightboxImageElement" class="mobile-lightbox-original" :src="slide.media" :alt="`${lightbox.author} 的动态图片 ${slide.index + 1}`" :class="{ 'original-loaded': lightboxOriginalLoaded }" decoding="async" fetchpriority="high" draggable="false" @load="handleLightboxImageLoad" @error="lightboxOriginalFailed = true">
+                  <LivePhotoPlayback v-if="currentLivePhoto" :key="`${slide.media}:${currentLivePhoto.video}`" :ref="setLivePhotoPlayback" :source="currentLivePhoto.video" :image-width="lightboxNaturalSize.width" :image-height="lightboxNaturalSize.height" :active="lightboxOriginalLoaded && !lightboxClosing && !lightboxTransitioning && !mobileLightboxAnimating" />
                 </div>
                 <ImageLoadRing v-if="!lightboxOriginalLoaded" :failed="lightboxOriginalFailed" @retry="retryLightboxOriginal" />
               </template>
@@ -5122,10 +5134,11 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
           </div>
           <div :class="['mobile-lightbox-dots', { visible: mobileLightboxDotsVisible }]" aria-hidden="true"><i v-for="(_, index) in lightbox.media" :key="index" :class="{ active: index === lightbox.index }"></i></div>
         </figure>
-        <figure v-else :key="lightbox.media[lightbox.index]" @click.self="closeLightbox">
+        <figure v-else :key="lightbox.media[lightbox.index]" @click.self="handleLightboxBackdropClick">
           <div class="desktop-lightbox-media-frame" :class="{ dragging: lightbox.dragging }" :style="{ transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) rotate(${lightbox.rotation}deg) scale(${lightbox.scale})`, width: !lightbox.fit && lightboxNaturalSize.width ? `${lightboxNaturalSize.width}px` : undefined, height: !lightbox.fit && lightboxNaturalSize.height ? `${lightboxNaturalSize.height}px` : undefined }" @click.stop @pointerdown.prevent.stop="startLightboxGesture" @pointermove.prevent.stop="moveLightboxGesture" @pointerup.prevent.stop="stopLightboxGesture" @pointercancel.prevent.stop="stopLightboxGesture">
             <img class="desktop-lightbox-preview" :src="lightboxDisplaySource" alt="" draggable="false">
             <img ref="lightboxImageElement" class="desktop-lightbox-original" :src="lightbox.media[lightbox.index]" :alt="`${lightbox.author} 的动态图片 ${lightbox.index + 1}`" :class="{ 'original-loaded': lightboxOriginalLoaded }" decoding="async" draggable="false" @load="handleLightboxImageLoad" @error="lightboxOriginalFailed = true">
+            <LivePhotoPlayback v-if="currentLivePhoto" :key="currentLivePhoto.video" :ref="setLivePhotoPlayback" :source="currentLivePhoto.video" :image-width="lightboxNaturalSize.width" :image-height="lightboxNaturalSize.height" :active="lightboxOriginalLoaded && !lightboxClosing && !lightboxTransitioning" />
           </div>
           <ImageLoadRing v-if="!lightboxOriginalLoaded" :failed="lightboxOriginalFailed" @retry="retryLightboxOriginal" />
         </figure>
@@ -5144,6 +5157,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
           <svg v-else class="lightbox-fit-symbol" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H6a2 2 0 0 0-2 2v2M16 4h2a2 2 0 0 1 2 2v2M8 20H6a2 2 0 0 1-2-2v-2M16 20h2a2 2 0 0 0 2-2v-2"/><rect x="8" y="8" width="8" height="8" rx="2.2"/></svg>
         </button>
         <i></i>
+        <button v-if="currentLivePhoto" type="button" title="播放实况照片" aria-label="播放实况照片" :disabled="!lightboxOriginalLoaded || lightboxClosing || lightboxTransitioning" @click="livePhotoPlayback?.replay()"><Play aria-hidden="true" /></button>
         <button type="button" title="顺时针旋转" aria-label="顺时针旋转" @click="rotateLightbox"><span class="lightbox-tool-mask lightbox-rotate-symbol" :style="{ '--lightbox-tool-mask': `url(${rotateLightboxIcon})` }" aria-hidden="true"></span></button>
         <button type="button" title="下载原图" aria-label="下载原图" @click="downloadLightboxImage"><span class="lightbox-tool-mask lightbox-download-symbol" :style="{ '--lightbox-tool-mask': `url(${downloadLightboxIcon})` }" aria-hidden="true"></span></button>
       </div>
