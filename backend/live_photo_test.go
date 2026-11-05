@@ -57,9 +57,9 @@ func TestLivePhotoArchiveAPILifecycleAndHistoryRepair(t *testing.T) {
 	}))
 	defer server.Close()
 	image := server.URL + "/one.jpg"
-	post := Post{ID: "weibo-status-123", Source: SourceWeibo, Author: "fixture", FeedIDs: []string{"weibo-42"}, Media: []string{image}, LivePhotos: []PostLivePhoto{{Image: image, Video: server.URL + "/one.mov", PictureID: "one"}}}
+	post := Post{ID: "weibo-status-123", Source: SourceWeibo, Author: "fixture", FeedIDs: []string{"weibo-42"}, Media: []string{image}, LivePhotos: []PostLivePhoto{{Image: image, Video: "http://us.sinaimg.cn/one.mov", PictureID: "one"}}}
 	feed := SourceConfig{ID: "weibo-42", Name: "fixture", Source: SourceWeibo}
-	platform := &BilibiliStore{}
+	platform := &BilibiliStore{config: BilibiliConfig{ProxyURL: server.URL}}
 	_, archived, err := platform.archiveSourceContent(feed, []Post{post})
 	if err != nil || len(archived) != 1 || images != 1 || videos != 1 {
 		t.Fatalf("failed to archive live photo: images=%d videos=%d err=%v", images, videos, err)
@@ -171,9 +171,9 @@ func TestWeiboLivePhotoRejectsInvalidFIDs(t *testing.T) {
 	}
 }
 
-func TestWeiboLivePhotoUnwrapsExplicitCDNMotion(t *testing.T) {
+func TestWeiboLivePhotoPreservesValidatedDispatch(t *testing.T) {
 	for _, scenario := range []struct{ source, want string }{
-		{"https://video.weibo.com/media/play?livephoto=%2F%2Flivephoto.us.sinaimg.cn%2Fone.mov", "https://livephoto.us.sinaimg.cn/one.mov"},
+		{"https://video.weibo.com/media/play?livephoto=%2F%2Flivephoto.us.sinaimg.cn%2Fone.mov", "https://video.weibo.com/media/play?livephoto=%2F%2Flivephoto.us.sinaimg.cn%2Fone.mov"},
 		{"https://video.weibo.com/media/play?livephoto=https%3A%2F%2Fevil.test%2Fone.mov", ""},
 		{"https://video.weibo.com/media/play?livephoto=javascript%3Aalert%281%29", ""},
 		{"https://video.weibo.com/media/play", ""},

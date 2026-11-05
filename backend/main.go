@@ -4240,6 +4240,9 @@ func (b *BilibiliStore) archiveSourceContent(feed SourceConfig, posts []Post) (S
 	if err != nil {
 		return feed, posts, err
 	}
+	prepared.LastSyncWarning = ""
+	liveFailures := 0
+	var firstLiveFailure, liveRejected error
 	client, err := externalHTTPClient(b.config.ProxyURL)
 	if err != nil {
 		return feed, posts, err
@@ -4263,6 +4266,10 @@ func (b *BilibiliStore) archiveSourceContent(feed SourceConfig, posts []Post) (S
 	configuredFeeds = append(configuredFeeds, b.config.WeiboSubscriptions...)
 	configuredFeeds = append(configuredFeeds, b.config.PixivSubscriptions...)
 	configuredFeeds = append(configuredFeeds, b.config.TwitterSubscriptions...)
+	archiveStart, progressAt := time.Now(), time.Now()
+	if len(posts) > 0 {
+		logArchiveProgress(feed, 0, len(posts), archiveStart)
+	}
 	for postIndex := range posts {
 		posts[postIndex].Videos = normalizePostVideos(posts[postIndex].Videos)
 		target := prepared
@@ -4320,14 +4327,29 @@ func (b *BilibiliStore) archiveSourceContent(feed SourceConfig, posts []Post) (S
 				continue
 			}
 			base := availableMediaTargetBase(target.StoragePath, postMediaBaseName(posts[postIndex], index)+"-live")
-			localPath, downloadErr := downloadRemoteVideo(client, photo.Video, base, referer, cookie)
+			var localPath string
+			downloadErr := liveRejected
+			if downloadErr == nil {
+				localPath, downloadErr = downloadWeiboLivePhoto(client, photo.Video, base, cookie)
+				if downloadErr != nil {
+					logLivePhotoFailure(feed, posts[postIndex], index, downloadErr)
+				}
+				if delay := videoDownloadDelay(feed.Source, postIndex+index); delay > 0 {
+					time.Sleep(delay)
+				}
+			}
 			if downloadErr != nil {
-				return feed, posts, fmt.Errorf("下载动态 %s 的实况片段失败: %w", posts[postIndex].ID, downloadErr)
+				liveFailures++
+				if firstLiveFailure == nil {
+					firstLiveFailure = downloadErr
+				}
+				var mediaError *livePhotoDownloadError
+				if errors.As(downloadErr, &mediaError) && (mediaError.status == 401 || mediaError.status == 403 || mediaError.status == 418 || mediaError.status == 429) {
+					liveRejected = downloadErr
+				}
+				continue
 			}
 			posts[postIndex].LivePhotos[index].Video = flowPublicPath(target.Source, target.Name, filepath.Base(localPath))
-			if delay := videoDownloadDelay(feed.Source, postIndex+index); delay > 0 {
-				time.Sleep(delay)
-			}
 		}
 		localVideos := make([]PostVideo, 0, len(posts[postIndex].Videos))
 		for videoIndex, video := range posts[postIndex].Videos {
@@ -4358,6 +4380,13 @@ func (b *BilibiliStore) archiveSourceContent(feed SourceConfig, posts []Post) (S
 		}
 		posts[postIndex].Videos = localVideos
 		posts[postIndex].Emojis = nil
+		if postIndex == len(posts)-1 || time.Since(progressAt) >= 5*time.Second {
+			logArchiveProgress(feed, postIndex+1, len(posts), archiveStart)
+			progressAt = time.Now()
+		}
+	}
+	if liveFailures > 0 {
+		prepared.LastSyncWarning = fmt.Sprintf("%d 张实况照片的片段未归档，已保留静态原图；%v；请检查账号或网络后重新拉取历史补齐", liveFailures, firstLiveFailure)
 	}
 	prepared, err = prepareSourceStorage(prepared)
 	return prepared, posts, err
@@ -4973,7 +5002,7 @@ func (b *BilibiliStore) weiboLikesHandler(w http.ResponseWriter, r *http.Request
 		writeAPIError(w, http.StatusInternalServerError, "无法保存微博点赞动态")
 		return
 	}
-	writeJSON(w, map[string]any{"status": "success", "added": added, "count": len(posts), "message": fmt.Sprintf("已同步 %d 条微博点赞动态", len(posts))})
+	writeJSON(w, map[string]any{"status": "success", "added": added, "count": len(posts), "warning": feed.LastSyncWarning, "message": fmt.Sprintf("已同步 %d 条微博点赞动态", len(posts))})
 }
 
 func postsAfter(posts []Post, boundary time.Time) []Post {
@@ -5247,6 +5276,7 @@ func (s *Store) postsForHistoryBackfill(posts []Post, feed SourceConfig) ([]Post
 }
 
 func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, error) {
+	trace := startSyncTrace(feed, full)
 	originalID := feed.ID
 	b.RLock()
 	feed = collectionFeedWithAccountProfile(feed, b.config)
@@ -5304,6 +5334,8 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 	default:
 		err = errors.New("该来源尚未配置采集器")
 	}
+	trace.stage("fetch", len(posts), err)
+	archiveWarning := ""
 	added, historyEligible, historyPending, historySkipped := 0, 0, 0, 0
 	if err == nil {
 		if !full {
@@ -5325,6 +5357,7 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 			}
 			historyPending = len(posts)
 		}
+		trace.stage("filter", len(posts), nil)
 		if len(posts) > 0 && !strings.HasPrefix(feed.ID, "weibo-likes-") && !strings.HasPrefix(feed.ID, "pixiv-bookmarks-") && !strings.HasPrefix(feed.ID, "twitter-likes-") && !isBilibiliFavoriteOpusFeed(feed) {
 			if strings.TrimSpace(posts[0].Author) != "" {
 				feed.Name = posts[0].Author
@@ -5337,6 +5370,8 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 		b.RLock()
 		feed, posts, err = b.archiveSourceContent(feed, posts)
 		b.RUnlock()
+		archiveWarning = feed.LastSyncWarning
+		trace.stage("archive", len(posts), err)
 		if err == nil && b.content == nil {
 			err = errors.New("动态存储未初始化")
 		} else if err == nil {
@@ -5344,6 +5379,12 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 			if err == nil && isCollectionFeed(feed) {
 				err = b.content.reconcileCollectionMedia(feed, b.allSourceConfigs())
 			}
+		}
+		trace.stage("store", added, err)
+	}
+	if archiveWarning == "" && b.content != nil {
+		if pending := b.content.pendingLivePhotoCount(feed.ID); pending > 0 {
+			archiveWarning = fmt.Sprintf("仍有 %d 张实况照片的片段未归档，当前仅显示静态原图；请检查账号或网络后重新拉取历史补齐", pending)
 		}
 	}
 	now := time.Now()
@@ -5362,7 +5403,7 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 			}
 			(*list)[index].LastSyncedAt = now
 			(*list)[index].LastSyncCount = added
-			(*list)[index].LastSyncWarning = weiboReport.warning(full)
+			(*list)[index].LastSyncWarning = strings.Join(mergeUniqueStrings([]string{weiboReport.warning(full)}, []string{archiveWarning}), "；")
 			if err != nil {
 				(*list)[index].LastSyncStatus = "failed"
 				(*list)[index].LastSyncMessage = err.Error()
@@ -5392,6 +5433,7 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 	if saveErr := b.save(); saveErr != nil && err == nil {
 		err = saveErr
 	}
+	trace.finish(added, archiveWarning != "" || weiboReport.warning(full) != "", err)
 	return feed, err
 }
 

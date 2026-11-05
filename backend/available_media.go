@@ -34,7 +34,7 @@ func withAvailablePostImages(post Post) Post {
 	photos := normalizePostLivePhotos(post)
 	post.LivePhotos = nil
 	for _, photo := range photos {
-		if availablePostImage(photo.Video) {
+		if localFlowFileAvailable(photo.Video) {
 			post.LivePhotos = append(post.LivePhotos, photo)
 		}
 	}
