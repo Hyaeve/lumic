@@ -210,3 +210,48 @@ func TestLivePhotoPairSurvivesReorderAndDropsRemovedImage(t *testing.T) {
 		t.Fatal("live photos use unstable positional indexes")
 	}
 }
+
+func TestLegacyLivePhotoMP4NeedsRefresh(t *testing.T) {
+	oldRoot := flowRoot
+	flowRoot = t.TempDir()
+	t.Cleanup(func() { flowRoot = oldRoot })
+	image := "/flow/weibo/fixture/image.jpg"
+	legacyMotion := "/flow/weibo/fixture/image.mp4"
+	for _, value := range []string{image, legacyMotion} {
+		path, ok := localFlowArchivePath(value)
+		if !ok {
+			t.Fatalf("invalid fixture path: %s", value)
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("fixture"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	post := Post{Media: []string{image}, LivePhotos: []PostLivePhoto{{Image: image, Video: legacyMotion}}}
+	if !needsLivePhotoArchive(post, post) {
+		t.Fatal("legacy mp4 was treated as a completed live photo")
+	}
+	if _, complete := reuseAvailablePostArchive(post, post); complete {
+		t.Fatal("legacy mp4 archive did not require refresh")
+	}
+	mov := "/flow/weibo/fixture/image.mov"
+	path, _ := localFlowArchivePath(mov)
+	if err := os.WriteFile(path, []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	legacyPath := strings.TrimSuffix(path, ".mov") + ".mp4"
+	if err := os.WriteFile(legacyPath, []byte("legacy"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	removeLegacyLivePhotoMotion(strings.TrimSuffix(path, ".mov"))
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Fatal("legacy mp4 sidecar was not removed after a fresh mov archive")
+	}
+	paired := post
+	paired.LivePhotos = []PostLivePhoto{{Image: image, Video: mov}}
+	if needsLivePhotoArchive(paired, paired) {
+		t.Fatal("mov live photo was not reusable")
+	}
+}

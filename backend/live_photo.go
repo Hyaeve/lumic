@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -166,7 +168,7 @@ func downloadWeiboLivePhoto(client *http.Client, source, base, cookie string) (s
 		}
 		return nil
 	}
-	path, err := downloadRemoteVideo(&copyClient, source, base, "https://weibo.com/", cookie)
+	path, err := downloadRemoteVideoWithExtension(&copyClient, source, base, "https://weibo.com/", cookie, ".mov")
 	if err == nil {
 		return path, nil
 	}
@@ -230,11 +232,29 @@ func matchingStoredLivePhoto(photo PostLivePhoto, stored Post) (PostLivePhoto, b
 func needsLivePhotoArchive(incoming, stored Post) bool {
 	for _, photo := range incoming.LivePhotos {
 		old, ok := matchingStoredLivePhoto(photo, stored)
-		if !ok || !localFlowFileAvailable(old.Image) || !localFlowFileAvailable(old.Video) {
+		if !ok || !localFlowFileAvailable(old.Image) || !livePhotoMotionAvailable(old.Video) {
 			return true
 		}
 	}
 	return false
+}
+
+// A legacy .mp4 sidecar is not treated as a completed Live Photo archive.
+// The next sync must fetch the paired motion asset again and write it as MOV.
+func livePhotoMotionAvailable(value string) bool {
+	localPath, ok := localFlowArchivePath(value)
+	if !ok || !strings.EqualFold(filepath.Ext(localPath), ".mov") {
+		return false
+	}
+	info, err := os.Stat(localPath)
+	return err == nil && !info.IsDir()
+}
+
+func removeLegacyLivePhotoMotion(targetBase string) {
+	if strings.TrimSpace(targetBase) == "" {
+		return
+	}
+	_ = os.Remove(targetBase + ".mp4")
 }
 
 func (s *Store) pendingLivePhotoCount(feedID string) int {
@@ -246,7 +266,7 @@ func (s *Store) pendingLivePhotoCount(feedID string) int {
 			continue
 		}
 		for _, photo := range normalizePostLivePhotos(post) {
-			if availablePostImage(photo.Image) && !localFlowFileAvailable(photo.Video) {
+			if availablePostImage(photo.Image) && !livePhotoMotionAvailable(photo.Video) {
 				count++
 			}
 		}
@@ -261,7 +281,7 @@ func reusePostLivePhotos(incoming, stored Post) []PostLivePhoto {
 	}
 	photos := make([]PostLivePhoto, 0, len(incoming.LivePhotos))
 	for _, photo := range incoming.LivePhotos {
-		if old, ok := matchingStoredLivePhoto(photo, stored); ok && localFlowFileAvailable(old.Video) {
+		if old, ok := matchingStoredLivePhoto(photo, stored); ok && livePhotoMotionAvailable(old.Video) {
 			photo.Video = old.Video
 		}
 		photos = append(photos, photo)

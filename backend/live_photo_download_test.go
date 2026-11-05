@@ -25,6 +25,19 @@ func TestWeiboLivePhotoKeepsOfficialDispatchURL(t *testing.T) {
 	}
 }
 
+func TestLivePhotoStaticImagePreservesHEICOrJPEGExtension(t *testing.T) {
+	for _, scenario := range []struct{ url, contentType, want string }{
+		{"https://wx1.sinaimg.cn/large/fixture.heic", "image/jpeg", ".heic"},
+		{"https://wx1.sinaimg.cn/large/fixture.jpg", "image/heic", ".jpg"},
+		{"https://wx1.sinaimg.cn/large/fixture", "image/heic", ".heic"},
+		{"https://wx1.sinaimg.cn/large/fixture", "image/jpeg", ".jpg"},
+	} {
+		if got := mediaFileExtension(scenario.url, scenario.contentType); got != scenario.want {
+			t.Fatalf("static live-photo extension mismatch: got=%s want=%s", got, scenario.want)
+		}
+	}
+}
+
 func TestLivePhotoDispatchRedirectAndCookieIsolation(t *testing.T) {
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

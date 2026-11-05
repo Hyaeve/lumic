@@ -9,7 +9,7 @@ import DetailImage from './components/DetailImage.vue'
 import CredentialField from './components/CredentialField.vue'
 import NotificationToasts from './components/NotificationToasts.vue'
 import { notifications, notify } from './notifications'
-import { ListChecks, ChevronLeft, ChevronRight, Plus, KeyRound, Network, SlidersHorizontal, Archive, UserRound, QrCode, X, Download, Upload, Monitor, Smartphone, Play } from '@lucide/vue'
+import { ListChecks, ChevronLeft, ChevronRight, Plus, KeyRound, Network, SlidersHorizontal, Archive, UserRound, QrCode, X, Download, Upload, Monitor, Smartphone, Play, CircleDot } from '@lucide/vue'
 import FavoriteHeart from './components/FavoriteHeart.vue'
 import TimelineStats from './components/TimelineStats.vue'
 import QRCode from 'qrcode'
@@ -3039,6 +3039,9 @@ function masonryCover(post) {
 function masonryCoverIsVideo(post) {
   return false
 }
+function isLivePhoto(post, media) {
+  return Boolean(media && post?.livePhotos?.some(photo => photo.image === media))
+}
 function masonryPostHasVideo(post) {
   return Boolean(primaryVideo(post))
 }
@@ -4868,7 +4871,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
 </div>
 <PostCaption v-if="post.caption" v-model:expanded="expandedCaptions[post.id]" :text="post.caption" />
 <div v-if="post.media?.length" :class="['media-grid', `media-count-${Math.min(post.media.length, 9)}`]">
-<button v-for="(media, mediaIndex) in post.media.slice(0, 9)" :key="media" :class="['media-frame', mediaShape(post, mediaIndex)]" type="button" :aria-label="`查看 ${post.author} 的第 ${mediaIndex + 1} 张图片`" @click="openLightbox(post, mediaIndex)"><img :src="previewMedia(media)" alt="" loading="lazy" decoding="async" fetchpriority="low" @load="setMediaShape(post, mediaIndex, $event); scheduleTimelineWindow()"><span v-if="mediaIndex === 8 && post.media.length > 9" class="media-more-count">+{{ post.media.length - 9 }}</span></button>
+<button v-for="(media, mediaIndex) in post.media.slice(0, 9)" :key="media" :class="['media-frame', mediaShape(post, mediaIndex)]" type="button" :aria-label="`查看 ${post.author} 的第 ${mediaIndex + 1} 张图片`" @click="openLightbox(post, mediaIndex)"><img :src="previewMedia(media)" alt="" loading="lazy" decoding="async" fetchpriority="low" @load="setMediaShape(post, mediaIndex, $event); scheduleTimelineWindow()"><span v-if="isLivePhoto(post, media)" class="live-photo-mark" aria-label="实况照片"><CircleDot :size="16" :stroke-width="1.8" aria-hidden="true" /></span><span v-if="mediaIndex === 8 && post.media.length > 9" class="media-more-count">+{{ post.media.length - 9 }}</span></button>
 </div>
 <div v-if="primaryVideo(post)" class="post-video-list">
 <div :class="['post-video-frame', postVideoFrameClass(post)]" :style="postVideoFrameStyle(post)"><video :src="primaryVideo(post).url" :poster="primaryVideo(post).poster ? previewMedia(primaryVideo(post).poster) : undefined" controls playsinline preload="metadata" @loadedmetadata="setPostVideoRatio(post, $event)"></video></div>
@@ -4889,7 +4892,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
   <div v-if="masonryCover(item.post)" class="masonry-cover">
     <img :src="previewMedia(masonryCover(item.post))" alt="" loading="lazy" decoding="async" fetchpriority="low" @load="setMasonryCoverRatio(item.post, $event, masonryCoverIsVideo(item.post))">
     <span v-if="!masonryCoverIsVideo(item.post) && item.post.media?.length > 1" class="masonry-media-count">1 / {{ item.post.media.length }}</span>
-    <span v-if="masonryPostHasVideo(item.post)" class="masonry-video-mark" aria-label="视频动态"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 7 8 5-8 5Z"/></svg></span>
+    <span v-if="isLivePhoto(item.post, masonryCover(item.post))" class="live-photo-mark" aria-label="实况照片"><CircleDot :size="16" :stroke-width="1.8" aria-hidden="true" /></span><span v-if="masonryPostHasVideo(item.post)" class="masonry-video-mark" aria-label="视频动态"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 7 8 5-8 5Z"/></svg></span>
   </div>
   <div v-else-if="primaryVideo(item.post)" class="masonry-cover masonry-video-cover">
     <img v-if="primaryVideo(item.post).poster" :src="previewMedia(primaryVideo(item.post).poster)" alt="视频封面" loading="lazy" decoding="async" fetchpriority="low" @load="setMasonryCoverRatio(item.post, $event, true)">

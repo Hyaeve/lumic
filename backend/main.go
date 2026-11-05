@@ -3816,7 +3816,7 @@ func shouldFetchBilibiliDynamicDetail(dynamicType, caption string) bool {
 
 func mediaFileExtension(remoteURL, contentType string) string {
 	extension := strings.ToLower(filepath.Ext(path.Base(strings.Split(remoteURL, "?")[0])))
-	if matched, _ := regexp.MatchString(`^\.(jpe?g|png|gif|webp|avif)$`, extension); matched {
+	if matched, _ := regexp.MatchString(`^\.(jpe?g|png|gif|webp|avif|heic|heif)$`, extension); matched {
 		return extension
 	}
 	contentType = strings.ToLower(strings.Split(contentType, ";")[0])
@@ -3829,6 +3829,10 @@ func mediaFileExtension(remoteURL, contentType string) string {
 		return ".webp"
 	case "image/avif":
 		return ".avif"
+	case "image/heic":
+		return ".heic"
+	case "image/heif":
+		return ".heif"
 	default:
 		return ".jpg"
 	}
@@ -3913,6 +3917,10 @@ func downloadRemoteImage(client *http.Client, remoteURL, targetBase, referer, co
 }
 
 func downloadRemoteVideo(client *http.Client, remoteURL, targetBase, referer, cookie string) (string, error) {
+	return downloadRemoteVideoWithExtension(client, remoteURL, targetBase, referer, cookie, "")
+}
+
+func downloadRemoteVideoWithExtension(client *http.Client, remoteURL, targetBase, referer, cookie, forcedExtension string) (string, error) {
 	remoteURL = normalizeRemoteImage(stdhtml.UnescapeString(remoteURL))
 	if remoteURL == "" || strings.HasPrefix(remoteURL, "/flow/") {
 		return remoteURL, nil
@@ -3921,7 +3929,11 @@ func downloadRemoteVideo(client *http.Client, remoteURL, targetBase, referer, co
 	if err != nil {
 		return "", err
 	}
-	request.Header.Set("Accept", "video/mp4,video/webm,video/*;q=0.9,application/octet-stream;q=0.7,*/*;q=0.5")
+	accept := "video/mp4,video/webm,video/*;q=0.9,application/octet-stream;q=0.7,*/*;q=0.5"
+	if strings.EqualFold(forcedExtension, ".mov") {
+		accept = "video/quicktime,video/*;q=0.9,application/octet-stream;q=0.7,*/*;q=0.5"
+	}
+	request.Header.Set("Accept", accept)
 	request.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36")
 	if referer != "" {
 		request.Header.Set("Referer", referer)
@@ -3943,7 +3955,11 @@ func downloadRemoteVideo(client *http.Client, remoteURL, targetBase, referer, co
 	if !strings.HasPrefix(contentType, "video/") && !strings.HasPrefix(contentType, "application/octet-stream") && !knownExtension {
 		return "", fmt.Errorf("unexpected content type %s", contentType)
 	}
-	target := targetBase + videoFileExtension(remoteURL, contentType)
+	extension := videoFileExtension(remoteURL, contentType)
+	if forcedExtension != "" {
+		extension = forcedExtension
+	}
+	target := targetBase + extension
 	if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
 		return "", err
 	}
@@ -4349,6 +4365,7 @@ func (b *BilibiliStore) archiveSourceContent(feed SourceConfig, posts []Post) (S
 				}
 				continue
 			}
+			removeLegacyLivePhotoMotion(base)
 			posts[postIndex].LivePhotos[index].Video = flowPublicPath(target.Source, target.Name, filepath.Base(localPath))
 		}
 		localVideos := make([]PostVideo, 0, len(posts[postIndex].Videos))
@@ -5169,7 +5186,7 @@ func reuseAvailablePostArchive(incoming, stored Post) (Post, bool) {
 	}
 	prepared.LivePhotos = normalizePostLivePhotos(prepared)
 	for _, photo := range prepared.LivePhotos {
-		if !localFlowFileAvailable(photo.Video) {
+		if !livePhotoMotionAvailable(photo.Video) {
 			complete = false
 		}
 	}

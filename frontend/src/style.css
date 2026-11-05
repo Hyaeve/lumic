@@ -504,6 +504,10 @@ body, button, input, textarea, select { font-size: 14px; }
 .dark .post-foot .post-visit-button:hover:not(:disabled) { color: #dce5f8; }
 .media-grid { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px; width: min(100%, 820px); margin: 14px 0 18px; }
 .media-grid .media-frame { display: flex; align-items: flex-start; justify-content: center; overflow: hidden; width: min(100%, 400px); height: auto; aspect-ratio: auto; padding: 0; background: #edf1ee; border: 1px solid #e0e7e2; }
+.media-grid .media-frame, .masonry-cover { position: relative; }
+.live-photo-mark { position: absolute; left: 9px; bottom: 9px; z-index: 4; display: grid; place-items: center; width: 28px; height: 28px; color: #fff; background: #111827a8; border: 1px solid #ffffff66; border-radius: 999px; box-shadow: 0 2px 10px #0008; backdrop-filter: blur(8px); pointer-events: none; }
+.live-photo-mark svg { display: block; }
+.dark .live-photo-mark { color: #edf2ff; background: #0a0d16c4; border-color: #cdd8ff52; box-shadow: 0 0 12px #8a9cff4d; }
 .media-grid .media-frame.landscape { width: min(100%, 520px); }
 .media-grid .media-frame.portrait { width: auto; max-width: min(100%, 400px); }
 .media-grid .media-frame img { display: block; width: auto; max-width: 100%; height: auto; max-height: min(72vh, 760px); object-fit: contain; }
