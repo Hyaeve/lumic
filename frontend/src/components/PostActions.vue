@@ -121,6 +121,7 @@ async function save() {
   } catch (e) { error.value = e.message; notify(e.message, 'error') } finally { busy.value = false }
 }
 onUnmounted(() => { cleanup(); if (menu.value || editing.value) emit('overlay', null) })
+defineExpose({ edit })
 </script>
 
 <template>
