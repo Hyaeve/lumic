@@ -9,7 +9,7 @@ import DetailImage from './components/DetailImage.vue'
 import CredentialField from './components/CredentialField.vue'
 import NotificationToasts from './components/NotificationToasts.vue'
 import { notifications, notify } from './notifications'
-import { ListChecks, ChevronLeft, ChevronRight, Plus, KeyRound, Network, SlidersHorizontal, Archive, UserRound, QrCode, X, Download, Upload, Monitor, Smartphone, Play, CircleDot } from '@lucide/vue'
+import { ListChecks, ChevronLeft, ChevronRight, Plus, KeyRound, Network, SlidersHorizontal, Archive, UserRound, QrCode, X, Download, Upload, Monitor, Smartphone, Play } from '@lucide/vue'
 import FavoriteHeart from './components/FavoriteHeart.vue'
 import TimelineStats from './components/TimelineStats.vue'
 import QRCode from 'qrcode'
@@ -42,6 +42,7 @@ import originalSizeIcon from '../icon/原始尺寸.png'
 import rotateLightboxIcon from '../icon/旋转.png'
 import downloadLightboxIcon from '../icon/下载-细线.png'
 import closeLightboxIcon from '../icon/取消.png'
+import livePhotoIcon from '../icon/实况照片.png'
 import visitPostIcon from '../icon/访问.png'
 import scrollTopIcon from '../icon/回到顶部.png'
 import deleteIcon from '../icon/删除.png'
@@ -2183,8 +2184,8 @@ function scheduleLightboxSingleTapClose() {
   clearLightboxSingleTap()
   lightboxSingleTapTimer = window.setTimeout(() => {
     lightboxSingleTapTimer = 0
-    if (currentLivePhoto.value) livePhotoPlayback.value?.replay()
-    else closeLightbox()
+    if (currentLivePhoto.value && phonePortrait.value) livePhotoPlayback.value?.replay()
+    else if (!currentLivePhoto.value || isLightboxOriginalSize() || (lightbox.value.fit && Math.abs(lightbox.value.scale - 1) < .02)) closeLightbox()
   }, 280)
 }
 function handleLightboxBackdropClick() {
@@ -4871,7 +4872,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
 </div>
 <PostCaption v-if="post.caption" v-model:expanded="expandedCaptions[post.id]" :text="post.caption" />
 <div v-if="post.media?.length" :class="['media-grid', `media-count-${Math.min(post.media.length, 9)}`]">
-<button v-for="(media, mediaIndex) in post.media.slice(0, 9)" :key="media" :class="['media-frame', mediaShape(post, mediaIndex)]" type="button" :aria-label="`查看 ${post.author} 的第 ${mediaIndex + 1} 张图片`" @click="openLightbox(post, mediaIndex)"><img :src="previewMedia(media)" alt="" loading="lazy" decoding="async" fetchpriority="low" @load="setMediaShape(post, mediaIndex, $event); scheduleTimelineWindow()"><span v-if="isLivePhoto(post, media)" class="live-photo-mark" aria-label="实况照片"><CircleDot :size="16" :stroke-width="1.8" aria-hidden="true" /></span><span v-if="mediaIndex === 8 && post.media.length > 9" class="media-more-count">+{{ post.media.length - 9 }}</span></button>
+<button v-for="(media, mediaIndex) in post.media.slice(0, 9)" :key="media" :class="['media-frame', mediaShape(post, mediaIndex)]" type="button" :aria-label="`查看 ${post.author} 的第 ${mediaIndex + 1} 张图片`" @click="openLightbox(post, mediaIndex)"><img :src="previewMedia(media)" alt="" loading="lazy" decoding="async" fetchpriority="low" @load="setMediaShape(post, mediaIndex, $event); scheduleTimelineWindow()"><span v-if="isLivePhoto(post, media)" class="live-photo-mark" role="img" aria-label="实况照片"><span class="live-photo-symbol" :style="{ '--live-photo-symbol': `url(${livePhotoIcon})` }" aria-hidden="true"></span></span><span v-if="mediaIndex === 8 && post.media.length > 9" class="media-more-count">+{{ post.media.length - 9 }}</span></button>
 </div>
 <div v-if="primaryVideo(post)" class="post-video-list">
 <div :class="['post-video-frame', postVideoFrameClass(post)]" :style="postVideoFrameStyle(post)"><video :src="primaryVideo(post).url" :poster="primaryVideo(post).poster ? previewMedia(primaryVideo(post).poster) : undefined" controls playsinline preload="metadata" @loadedmetadata="setPostVideoRatio(post, $event)"></video></div>
@@ -4892,7 +4893,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
   <div v-if="masonryCover(item.post)" class="masonry-cover">
     <img :src="previewMedia(masonryCover(item.post))" alt="" loading="lazy" decoding="async" fetchpriority="low" @load="setMasonryCoverRatio(item.post, $event, masonryCoverIsVideo(item.post))">
     <span v-if="!masonryCoverIsVideo(item.post) && item.post.media?.length > 1" class="masonry-media-count">1 / {{ item.post.media.length }}</span>
-    <span v-if="isLivePhoto(item.post, masonryCover(item.post))" class="live-photo-mark" aria-label="实况照片"><CircleDot :size="16" :stroke-width="1.8" aria-hidden="true" /></span><span v-if="masonryPostHasVideo(item.post)" class="masonry-video-mark" aria-label="视频动态"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 7 8 5-8 5Z"/></svg></span>
+    <span v-if="isLivePhoto(item.post, masonryCover(item.post))" class="live-photo-mark" role="img" aria-label="实况照片"><span class="live-photo-symbol" :style="{ '--live-photo-symbol': `url(${livePhotoIcon})` }" aria-hidden="true"></span></span><span v-if="masonryPostHasVideo(item.post)" class="masonry-video-mark" aria-label="视频动态"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 7 8 5-8 5Z"/></svg></span>
   </div>
   <div v-else-if="primaryVideo(item.post)" class="masonry-cover masonry-video-cover">
     <img v-if="primaryVideo(item.post).poster" :src="previewMedia(primaryVideo(item.post).poster)" alt="视频封面" loading="lazy" decoding="async" fetchpriority="low" @load="setMasonryCoverRatio(item.post, $event, true)">
@@ -5115,7 +5116,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
       <button type="button" class="selection-delete-button" :disabled="!selectedPostCount || postActionBusy === 'batch-delete'" aria-label="删除所选动态" @click="deleteSelectedPosts"><span class="action-icon-mask" :style="{ '--action-icon-mask': `url(${deleteIcon})` }" aria-hidden="true"></span></button>
     </div>
     <div v-if="lightbox.open" :class="['lightbox-layer', { closing: lightboxClosing, 'mobile-entering': mobileLightboxEntering, 'mobile-exit-dragging': mobileLightboxExitDragging, 'mobile-gesture-exiting': mobileLightboxExitAnimating }]" :style="phonePortrait ? mobileLightboxLayerStyle : undefined" role="dialog" aria-modal="true" :aria-label="`${lightbox.author} 的动态媒体`" @click.self="handleLightboxBackdropClick" @pointermove="updateDesktopLightboxHover" @pointerleave="clearDesktopLightboxHover" @wheel.prevent="zoomLightbox">
-      <div v-if="!phonePortrait && !currentLivePhoto" class="lightbox-close-hotspot" @pointerenter="showDesktopLightboxClose" @pointerleave="hideDesktopLightboxClose">
+      <div v-if="!phonePortrait" class="lightbox-close-hotspot" @pointerenter="showDesktopLightboxClose" @pointerleave="hideDesktopLightboxClose">
         <button :class="['lightbox-close', { 'pointer-visible': desktopLightboxHoverTarget === 'close' }]" type="button" aria-label="关闭大图" @click="closeLightbox"><span class="lightbox-tool-mask lightbox-close-symbol" :style="{ '--lightbox-tool-mask': `url(${closeLightboxIcon})` }" aria-hidden="true"></span></button>
       </div>
       <button v-if="!phonePortrait" :class="['lightbox-edge-nav', 'previous', { 'edge-visible': desktopLightboxHoverTarget === 'previous', disabled: lightbox.media.length < 2 }]" type="button" :aria-disabled="lightbox.media.length < 2" aria-label="上一张" @click.stop="moveLightbox(-1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 5-7 7 7 7"/></svg></button>
@@ -5160,7 +5161,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
           <svg v-else class="lightbox-fit-symbol" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H6a2 2 0 0 0-2 2v2M16 4h2a2 2 0 0 1 2 2v2M8 20H6a2 2 0 0 1-2-2v-2M16 20h2a2 2 0 0 0 2-2v-2"/><rect x="8" y="8" width="8" height="8" rx="2.2"/></svg>
         </button>
         <i></i>
-        <button v-if="currentLivePhoto" type="button" title="播放实况照片" aria-label="播放实况照片" :disabled="!lightboxOriginalLoaded || lightboxClosing || lightboxTransitioning" @click="livePhotoPlayback?.replay()"><Play aria-hidden="true" /></button>
+        <button v-if="currentLivePhoto" class="lightbox-live-play" type="button" title="播放实况照片" aria-label="播放实况照片" :disabled="!lightboxOriginalLoaded || lightboxClosing || lightboxTransitioning" @click="livePhotoPlayback?.replay()"><Play aria-hidden="true" /></button>
         <button type="button" title="顺时针旋转" aria-label="顺时针旋转" @click="rotateLightbox"><span class="lightbox-tool-mask lightbox-rotate-symbol" :style="{ '--lightbox-tool-mask': `url(${rotateLightboxIcon})` }" aria-hidden="true"></span></button>
         <button type="button" title="下载原图" aria-label="下载原图" @click="downloadLightboxImage"><span class="lightbox-tool-mask lightbox-download-symbol" :style="{ '--lightbox-tool-mask': `url(${downloadLightboxIcon})` }" aria-hidden="true"></span></button>
       </div>

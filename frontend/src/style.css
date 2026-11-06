@@ -117,6 +117,7 @@ a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color
 .lightbox-dock button:hover, .lightbox-dock button.active { background: #ffffff1d; }
 .lightbox-dock button:disabled { opacity: .3; cursor: default; }
 .lightbox-dock svg { width: 29px; height: 29px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.lightbox-dock .lightbox-live-play svg { width: 22px; height: 22px; stroke-width: 1.7; }
 .lightbox-tool-mask { display: block; width: 30px; height: 30px; background: currentColor; -webkit-mask: var(--lightbox-tool-mask) center / contain no-repeat; mask: var(--lightbox-tool-mask) center / contain no-repeat; }
 .lightbox-original-size-symbol { width: 30px; height: 30px; opacity: .96; }
 .lightbox-rotate-symbol { width: 27px; height: 27px; opacity: .9; transform: scale(.88); }
@@ -506,7 +507,7 @@ body, button, input, textarea, select { font-size: 14px; }
 .media-grid .media-frame { display: flex; align-items: flex-start; justify-content: center; overflow: hidden; width: min(100%, 400px); height: auto; aspect-ratio: auto; padding: 0; background: #edf1ee; border: 1px solid #e0e7e2; }
 .media-grid .media-frame, .masonry-cover { position: relative; }
 .live-photo-mark { position: absolute; left: 9px; bottom: 9px; z-index: 4; display: grid; place-items: center; width: 28px; height: 28px; color: #fff; background: #111827a8; border: 1px solid #ffffff66; border-radius: 999px; box-shadow: 0 2px 10px #0008; backdrop-filter: blur(8px); pointer-events: none; }
-.live-photo-mark svg { display: block; }
+.live-photo-mark .live-photo-symbol { display: block; width: 22px; height: 22px; background: currentColor; -webkit-mask: var(--live-photo-symbol) center / contain no-repeat; mask: var(--live-photo-symbol) center / contain no-repeat; }
 .dark .live-photo-mark { color: #edf2ff; background: #0a0d16c4; border-color: #cdd8ff52; box-shadow: 0 0 12px #8a9cff4d; }
 .media-grid .media-frame.landscape { width: min(100%, 520px); }
 .media-grid .media-frame.portrait { width: auto; max-width: min(100%, 400px); }
