@@ -99,7 +99,7 @@ a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color
 .phone-ui .masonry-card { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .ios-native-image-menu .mobile-lightbox-media-frame img { -webkit-touch-callout: default; }
 .ios-native-image-menu .mobile-lightbox-original { pointer-events: auto; }
-.mobile-lightbox-slide:not(.current) img { opacity: .92; transform: scale(.985); }
+.mobile-lightbox-slide:not(.current) .mobile-lightbox-preview { opacity: .92; transform: scale(.985); }
 .mobile-lightbox-dots { position: absolute; bottom: max(22px, env(safe-area-inset-bottom)); left: 50%; z-index: 3; display: flex; align-items: center; gap: 5px; padding: 6px 8px; background: #10121770; border-radius: 999px; opacity: 0; pointer-events: none; transform: translate(-50%, 7px); backdrop-filter: blur(8px); transition: opacity .2s ease, transform .22s ease; }
 .mobile-lightbox-dots.visible { opacity: 1; transform: translate(-50%, 0); }
 .mobile-lightbox-dots i { width: 5px; height: 5px; background: #ffffff70; border-radius: 50%; transition: width .18s ease, background .18s ease; }
@@ -549,6 +549,21 @@ body, button, input, textarea, select { font-size: 14px; }
 .media-grid .media-frame, .masonry-cover { position: relative; }
 .live-photo-mark { position: absolute; left: 9px; bottom: 9px; z-index: 4; display: grid; place-items: center; width: 28px; height: 28px; color: #fff; background: #111827a8; border: 1px solid #ffffff66; border-radius: 999px; box-shadow: 0 2px 10px #0008; backdrop-filter: blur(8px); pointer-events: none; }
 .live-photo-symbol { display: block; width: 22px; height: 22px; background: currentColor; -webkit-mask: var(--live-photo-symbol) center / contain no-repeat; mask: var(--live-photo-symbol) center / contain no-repeat; }
+@supports (mask-composite: intersect) {
+  @media (prefers-reduced-motion: no-preference) {
+    .lightbox-layer:has(.live-photo-playback[data-state="playing"]) .live-photo-symbol { position: relative; background: transparent; -webkit-mask: none; mask: none; }
+    .lightbox-layer:has(.live-photo-playback[data-state="playing"]) .live-photo-symbol::before,
+    .lightbox-layer:has(.live-photo-playback[data-state="playing"]) .live-photo-symbol::after { content: ""; position: absolute; inset: 0; background: currentColor; }
+    /* The PNG's transparent gap separates its solid rings from the outer dots. */
+    .lightbox-layer:has(.live-photo-playback[data-state="playing"]) .live-photo-symbol::before { mask: var(--live-photo-symbol) center / contain no-repeat; clip-path: circle(35%); }
+    .lightbox-layer:has(.live-photo-playback[data-state="playing"]) .live-photo-symbol::after {
+      mask: var(--live-photo-symbol) center / contain no-repeat, radial-gradient(circle closest-side, transparent 70%, #000 70%);
+      mask-composite: intersect;
+      animation: live-photo-outer-spin 2.4s linear infinite;
+    }
+  }
+}
+@keyframes live-photo-outer-spin { to { transform: rotate(1turn); } }
 .dark .live-photo-mark { color: #edf2ff; background: #0a0d16c4; border-color: #cdd8ff52; box-shadow: 0 0 12px #8a9cff4d; }
 .detail-live-photo-mark { position: absolute; left: 12px; bottom: 12px; z-index: 8; display: grid; place-items: center; width: 25px; height: 25px; color: #fff; background: #111827b5; border: 1px solid #ffffff66; border-radius: 999px; box-shadow: 0 2px 10px #0008; backdrop-filter: blur(8px); pointer-events: none; }
 .detail-live-photo-mark .live-photo-symbol { width: 19px; height: 19px; }

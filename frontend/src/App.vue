@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, shallowReactive, shallowRef, watch } from 'vue'
 import { capturePageSnapshot } from './pageSnapshot'
 import PageSnapshot from './components/PageSnapshot.vue'
 import PostActions from './components/PostActions.vue'
@@ -9,7 +9,7 @@ import DetailImage from './components/DetailImage.vue'
 import CredentialField from './components/CredentialField.vue'
 import NotificationToasts from './components/NotificationToasts.vue'
 import { notifications, notify } from './notifications'
-import { ListChecks, ChevronLeft, ChevronRight, Plus, KeyRound, Network, SlidersHorizontal, Archive, UserRound, QrCode, X, Download, Upload, Monitor, Smartphone, Play } from '@lucide/vue'
+import { ListChecks, ChevronLeft, ChevronRight, Plus, KeyRound, Network, SlidersHorizontal, Archive, UserRound, QrCode, X, Download, Upload, Monitor, Smartphone } from '@lucide/vue'
 import FavoriteHeart from './components/FavoriteHeart.vue'
 import TimelineStats from './components/TimelineStats.vue'
 import QRCode from 'qrcode'
@@ -292,6 +292,8 @@ const mobileLightboxDetailsOpen = ref(false)
 const mobileLightboxDetailsProgress = ref(0)
 const mobileLightboxDetailsDragging = ref(false)
 const mobileLightboxSlideshow = ref(false)
+const mobileLightboxSlideshowDelay = 6000
+const decodedMobileLightboxOriginals = shallowReactive(new WeakSet())
 const mobileLightboxActions = ref(null)
 const postActionOverlay = shallowRef(null)
 let mobileMenuDismissArmed = false
@@ -337,6 +339,7 @@ let mobileLightboxTransitionStep = 0
 let mobileLightboxDotsTimer = 0
 let mobileLightboxInertiaFrame = 0
 let mobileLightboxSlideshowTimer = 0
+let mobileLightboxSlideshowElapsed = false
 let lightboxZoomTimer = 0
 let mobileControlsTimer = 0
 
@@ -449,12 +452,16 @@ const mobileDetailTrackStyle = computed(() => {
 const mobileLightboxSlides = computed(() => {
   const media = lightbox.value.media || []
   if (!media.length) return []
-  if (media.length === 1) return [{ source: lightboxDisplaySource.value || media[0], media: media[0], index: 0, position: 0 }]
-  return [-1, 0, 1].map(position => {
+  return (media.length === 1 ? [0] : [-1, 0, 1]).map(position => {
     const index = (lightbox.value.index + position + media.length) % media.length
-    const source = position === 0 ? (lightboxDisplaySource.value || previewMedia(media[index])) : previewMedia(media[index])
-    return { source, media: media[index], index, position }
+    const mirror = media.length === 2 && position === -1
+    return { key: `${mirror ? 'mirror' : 'slide'}:${index}:${media[index]}`, media: media[index], index, position }
   })
+})
+const mobileLightboxNextIndex = computed(() => (lightbox.value.index + 1) % lightbox.value.media.length)
+const mobileLightboxNextReady = computed(() => {
+  const image = mobileLightboxOriginalAt(mobileLightboxNextIndex.value)
+  return Boolean(image && decodedMobileLightboxOriginals.has(image))
 })
 const mobileLightboxTrackStyle = computed(() => {
   const baseShift = lightbox.value.media.length > 1 ? -100 : 0
@@ -1877,7 +1884,6 @@ function resetLightboxView() {
   mobileLightboxDetailsOpen.value = false
   mobileLightboxDetailsProgress.value = 0
   mobileLightboxDetailsDragging.value = false
-  mobileLightboxSlideshow.value = false
   clearLightboxSingleTap()
   clearLightboxLongPress()
   scheduleLightboxScaleUpdate()
@@ -1899,7 +1905,7 @@ function openLightbox(post, index) {
   mobileLightboxDetailsOpen.value = false
   mobileLightboxDetailsProgress.value = 0
   mobileLightboxDetailsDragging.value = false
-  mobileLightboxSlideshow.value = false
+  stopMobileLightboxSlideshow()
   showLightboxDock(true)
   prepareLightboxSource()
   scheduleLightboxScaleUpdate()
@@ -1930,14 +1936,12 @@ function resetLightboxState() {
   mobileLightboxDetailsOpen.value = false
   mobileLightboxDetailsProgress.value = 0
   mobileLightboxDetailsDragging.value = false
-  mobileLightboxSlideshow.value = false
+  stopMobileLightboxSlideshow()
   clearLightboxLongPress()
   clearLightboxSingleTap()
   clearLightboxDockTimer()
   if (mobileLightboxDotsTimer) window.clearTimeout(mobileLightboxDotsTimer)
   mobileLightboxDotsTimer = 0
-  if (mobileLightboxSlideshowTimer) window.clearInterval(mobileLightboxSlideshowTimer)
-  mobileLightboxSlideshowTimer = 0
   if (lightboxZoomTimer) window.clearTimeout(lightboxZoomTimer)
   lightboxZoomTimer = 0
   if (lightboxScaleFrame) window.cancelAnimationFrame(lightboxScaleFrame)
@@ -1947,6 +1951,7 @@ function closeLightbox(fromHistory = false, delay = phonePortrait.value ? 180 : 
   if (lightboxClosing.value) return
   fromHistory = fromHistory === true
   lightboxClosing.value = true
+  stopMobileLightboxSlideshow()
   livePhotoPlayback.value?.stop()
   clearMobileLightboxInertia()
   clearLightboxSingleTap()
@@ -1993,6 +1998,7 @@ function animateMobileLightboxExit(direction) {
   mobileLightboxExitDragging.value = false
   mobileLightboxExitAnimating.value = true
   lightboxClosing.value = true
+  stopMobileLightboxSlideshow()
   mobileLightboxExitY.value = (direction < 0 ? -1 : 1) * Math.max(window.innerHeight + 48, 768)
   const hadHistory = lightboxHistoryActive
   scheduleTransient(() => {
@@ -2076,24 +2082,35 @@ function prepareLightboxSource() {
   lightboxOriginalLoaded.value = false
   lightboxOriginalFailed.value = false
   lightboxNaturalSize.value = { width: 0, height: 0 }
-  if (phonePortrait.value && lightbox.value.media.length > 1) {
-    for (const offset of [-1, 1]) {
-      const index = (lightbox.value.index + offset + lightbox.value.media.length) % lightbox.value.media.length
-      const preload = new Image()
-      preload.src = previewMedia(lightbox.value.media[index])
-    }
+  const original = phonePortrait.value && mobileLightboxOriginalAt(lightbox.value.index)
+  if (original && decodedMobileLightboxOriginals.has(original)) revealLightboxOriginal(original)
+}
+function handleMobileLightboxOriginalError(image, index) {
+  if (!image.isConnected || !lightbox.value.open || lightboxClosing.value) return
+  if (index === lightbox.value.index) lightboxOriginalFailed.value = true
+  else if (mobileLightboxSlideshow.value && index === mobileLightboxNextIndex.value) {
+    stopMobileLightboxSlideshow()
+    notify('下一张图片加载失败，已停止放映', 'error')
   }
 }
-async function handleLightboxImageLoad(event) {
+async function handleLightboxImageLoad(event, mobileIndex) {
   const image = event.target
   const sequence = lightboxLoadSequence
   try {
     await image.decode()
   } catch {
-    if (sequence === lightboxLoadSequence && image.isConnected) lightboxOriginalFailed.value = true
+    if (mobileIndex !== undefined) handleMobileLightboxOriginalError(image, mobileIndex)
+    else if (sequence === lightboxLoadSequence && image.isConnected) lightboxOriginalFailed.value = true
     return
   }
-  if (sequence !== lightboxLoadSequence || !image.isConnected || !lightbox.value.open) return
+  if (!image.isConnected || !lightbox.value.open || lightboxClosing.value) return
+  if (mobileIndex !== undefined) {
+    decodedMobileLightboxOriginals.add(image)
+    if (mobileIndex !== lightbox.value.index) return
+  } else if (sequence !== lightboxLoadSequence) return
+  revealLightboxOriginal(image)
+}
+function revealLightboxOriginal(image) {
   lightboxNaturalSize.value = { width: image.naturalWidth, height: image.naturalHeight }
   lightboxOriginalLoaded.value = true
   lightboxOriginalFailed.value = false
@@ -2223,16 +2240,41 @@ function shareMobileLightboxPost() {
   else navigator.clipboard?.writeText(url).then(() => notify('原链接已复制')).catch(() => notify('无法分享此动态', 'error'))
 }
 function startMobileLightboxSlideshow() {
-  if (mobileLightboxSlideshowTimer) window.clearInterval(mobileLightboxSlideshowTimer)
+  if (lightbox.value.media.length < 2) return
   mobileLightboxSlideshow.value = true
   mobileLightboxMoreOpen.value = false
-  mobileLightboxSlideshowTimer = window.setInterval(() => moveLightbox(1), 3200)
+}
+function clearMobileLightboxSlideshowTimer() {
+  if (mobileLightboxSlideshowTimer) window.clearTimeout(mobileLightboxSlideshowTimer)
+  mobileLightboxSlideshowTimer = 0
 }
 function stopMobileLightboxSlideshow() {
-  if (mobileLightboxSlideshowTimer) window.clearInterval(mobileLightboxSlideshowTimer)
-  mobileLightboxSlideshowTimer = 0
+  clearMobileLightboxSlideshowTimer()
+  mobileLightboxSlideshowElapsed = false
   mobileLightboxSlideshow.value = false
 }
+function advanceMobileLightboxSlideshow() {
+  clearMobileLightboxSlideshowTimer()
+  if (!mobileLightboxSlideshow.value || !mobileLightboxSlideshowElapsed || !mobileLightboxNextReady.value || lightboxClosing.value) return
+  if (lightboxPointers.size || mobileLightboxAnimating.value || mobileLightboxMoreOpen.value || mobileLightboxDetailsOpen.value || mobileLightboxMenu.value.open || document.hidden) {
+    mobileLightboxSlideshowTimer = window.setTimeout(advanceMobileLightboxSlideshow, 250)
+    return
+  }
+  mobileLightboxSlideshowElapsed = false
+  moveLightbox(1)
+}
+watch([mobileLightboxSlideshow, () => lightbox.value.index, () => lightboxOriginalLoaded.value || lightboxOriginalFailed.value], () => {
+  clearMobileLightboxSlideshowTimer()
+  mobileLightboxSlideshowElapsed = false
+  if (!mobileLightboxSlideshow.value || !(lightboxOriginalLoaded.value || lightboxOriginalFailed.value)) return
+  mobileLightboxSlideshowTimer = window.setTimeout(() => {
+    mobileLightboxSlideshowElapsed = true
+    advanceMobileLightboxSlideshow()
+  }, mobileLightboxSlideshowDelay)
+})
+watch(mobileLightboxNextReady, ready => {
+  if (ready && mobileLightboxSlideshowElapsed) advanceMobileLightboxSlideshow()
+})
 function toggleMobileLightboxSlideshow() {
   if (mobileLightboxSlideshow.value) stopMobileLightboxSlideshow()
   else startMobileLightboxSlideshow()
@@ -2337,12 +2379,17 @@ function scheduleLightboxScaleUpdate() {
     lightboxAtOriginalSize.value = Math.abs(renderedScale - 1) < 0.015
   })
 }
+function mobileLightboxOriginalAt(index) {
+  const candidates = lightboxImageElement.value
+  return Array.isArray(candidates) ? candidates.find(image => image.isConnected && image.dataset.slideIndex === String(index)) : null
+}
 function currentLightboxImage() {
+  if (phonePortrait.value) {
+    return mobileLightboxOriginalAt(lightbox.value.index)
+      || document.querySelector('.mobile-lightbox-slide.current .mobile-lightbox-preview')
+  }
   const candidates = Array.isArray(lightboxImageElement.value) ? lightboxImageElement.value : [lightboxImageElement.value]
-  return candidates.find(image => image?.closest?.('.mobile-lightbox-slide.current'))
-    || candidates.find(Boolean)
-    || document.querySelector('.mobile-lightbox-slide.current .mobile-lightbox-preview')
-    || null
+  return candidates.find(image => image?.isConnected) || null
 }
 function lightboxBaseScale() {
   const image = currentLightboxImage()
@@ -4463,7 +4510,10 @@ function updatePhonePortrait() {
   mobileControlsVisible.value = true
   mobileMenuOpen.value = false
   mobileSourcesOpen.value = false
-  if (lightbox.value.open && !nextPhonePortrait) showLightboxDock(true)
+  if (lightbox.value.open && !nextPhonePortrait) {
+    stopMobileLightboxSlideshow()
+    showLightboxDock(true)
+  }
   if (nextPhonePortrait && masonryDetailPost.value && !window.location.pathname.startsWith('/post/')) {
     mobilePostReturnPath.value = window.location.pathname
     updateRoute(`/post/${encodeURIComponent(masonryDetailPost.value.id)}`)
@@ -5223,16 +5273,13 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
       <div :class="['lightbox-image-stage', `motion-${lightbox.motion}`, { 'mobile-original-size': phonePortrait && lightboxAtOriginalSize }]" @click.self="handleLightboxBackdropClick" @contextmenu="handleLightboxContextMenu">
         <figure v-if="phonePortrait" class="mobile-lightbox-carousel" :class="{ 'ios-native-image-menu': iosImageCallout }" @click.stop @pointerdown="startLightboxGesture" @pointermove="moveLightboxGesture" @pointerup="stopLightboxGesture" @pointercancel="stopLightboxGesture">
           <div class="mobile-lightbox-track" :style="mobileLightboxTrackStyle">
-            <div v-for="slide in mobileLightboxSlides" :key="`${slide.position}:${slide.media}`" :class="['mobile-lightbox-slide', { current: slide.position === 0 }]">
-              <template v-if="slide.position === 0">
-                <div :class="['mobile-lightbox-media-frame', { dragging: lightbox.dragging, 'zoom-animating': lightboxZoomAnimating, 'original-size': !lightbox.fit }]" :style="{ transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) rotate(${lightbox.rotation}deg) scale(${lightbox.scale})` }">
-                  <img class="mobile-lightbox-preview" :src="retainedPreview(slide.media)" :alt="`${lightbox.author} 的动态图片 ${slide.index + 1}`" decoding="async" draggable="false">
-                  <img ref="lightboxImageElement" class="mobile-lightbox-original" :src="slide.media" :alt="`${lightbox.author} 的动态图片 ${slide.index + 1}`" :class="{ 'original-loaded': lightboxOriginalLoaded }" decoding="async" fetchpriority="high" draggable="false" @load="handleLightboxImageLoad" @error="lightboxOriginalFailed = true">
-                  <LivePhotoPlayback v-if="currentLivePhoto" :key="`${slide.media}:${currentLivePhoto.video}`" :ref="setLivePhotoPlayback" :source="currentLivePhoto.video" :image-width="lightboxNaturalSize.width" :image-height="lightboxNaturalSize.height" :active="lightboxOriginalLoaded && !lightboxClosing && !lightboxTransitioning && !mobileLightboxAnimating" />
-                </div>
-                <ImageLoadRing v-if="!lightboxOriginalLoaded" :failed="lightboxOriginalFailed" @retry="retryLightboxOriginal" />
-              </template>
-              <img v-else :src="slide.source" alt="" draggable="false">
+            <div v-for="slide in mobileLightboxSlides" :key="slide.key" :class="['mobile-lightbox-slide', { current: slide.position === 0 }]">
+              <div :class="['mobile-lightbox-media-frame', { dragging: slide.position === 0 && lightbox.dragging, 'zoom-animating': slide.position === 0 && lightboxZoomAnimating, 'original-size': slide.position === 0 && !lightbox.fit }]" :style="slide.position === 0 ? { transform: `translate3d(${lightbox.x}px, ${lightbox.y}px, 0) rotate(${lightbox.rotation}deg) scale(${lightbox.scale})` } : undefined">
+                <img class="mobile-lightbox-preview" :src="retainedPreview(slide.media)" :alt="slide.position === 0 ? `${lightbox.author} 的动态图片 ${slide.index + 1}` : ''" decoding="async" draggable="false">
+                <img v-if="slide.position === 0 || (slide.position === 1 && mobileLightboxSlideshow)" ref="lightboxImageElement" class="mobile-lightbox-original" :data-slide-index="slide.index" :src="slide.media" :alt="slide.position === 0 ? `${lightbox.author} 的动态图片 ${slide.index + 1}` : ''" :class="{ 'original-loaded': slide.position === 0 ? lightboxOriginalLoaded : mobileLightboxNextReady }" decoding="async" :fetchpriority="slide.position === 0 ? 'high' : 'low'" draggable="false" @load="handleLightboxImageLoad($event, slide.index)" @error="handleMobileLightboxOriginalError($event.target, slide.index)">
+                <LivePhotoPlayback v-if="slide.position === 0 && currentLivePhoto" :key="`${slide.media}:${currentLivePhoto.video}`" :ref="setLivePhotoPlayback" :source="currentLivePhoto.video" :image-width="lightboxNaturalSize.width" :image-height="lightboxNaturalSize.height" :active="lightboxOriginalLoaded && !lightboxClosing && !lightboxTransitioning && !mobileLightboxAnimating" />
+              </div>
+              <ImageLoadRing v-if="slide.position === 0 && !lightboxOriginalLoaded" :failed="lightboxOriginalFailed" @retry="retryLightboxOriginal" />
             </div>
           </div>
           <div :class="['mobile-lightbox-dots', { visible: mobileLightboxDotsVisible }]" aria-hidden="true"><i v-for="(_, index) in lightbox.media" :key="index" :class="{ active: index === lightbox.index }"></i></div>
@@ -5277,7 +5324,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
           <button type="button" :class="{ active: lightbox.post?.liked }" :aria-label="lightbox.post?.liked ? '取消收藏' : '收藏动态'" @click.stop="lightbox.post && togglePostLike(lightbox.post)"><span class="post-action-mask post-favorite-symbol" :style="{ '--post-action-mask': `url(${favoriteNavIcon})` }" aria-hidden="true"></span></button>
           <button type="button" :class="{ active: mobileLightboxDetailsOpen }" aria-label="动态详情" @click.stop="toggleMobileLightboxDetails"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 10.5v6M12 7.5h.01"/></svg></button>
           <button type="button" aria-label="保存图片" @click.stop="saveMobileLightboxImage"><span class="mobile-lightbox-save-icon" :style="{ '--save-icon': `url(${downloadLightboxIcon})` }" aria-hidden="true"></span></button>
-          <button v-if="currentLivePhoto" type="button" aria-label="播放实况照片" @click.stop="livePhotoPlayback?.replay()"><Play aria-hidden="true" /></button>
+          <button v-if="currentLivePhoto" class="lightbox-live-play" type="button" aria-label="播放实况照片" @click.stop="livePhotoPlayback?.replay()"><span class="live-photo-symbol" :style="{ '--live-photo-symbol': `url(${livePhotoIcon})` }" aria-hidden="true"></span></button>
         </div>
         <button type="button" aria-label="删除动态" @click.stop="deleteMobileLightboxPost"><span class="mobile-lightbox-delete-icon" :style="{ '--delete-icon': `url(${deleteIcon})` }" aria-hidden="true"></span></button>
       </div>
@@ -5289,7 +5336,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
       </div>
       <button v-if="phonePortrait && mobileLightboxMoreOpen" class="mobile-lightbox-more-scrim" type="button" aria-label="关闭更多操作" @click.stop="mobileLightboxMoreOpen = false"></button>
       <div v-if="phonePortrait && mobileLightboxMoreOpen" class="mobile-lightbox-more-menu" role="menu" aria-label="更多操作">
-        <button type="button" role="menuitem" @click="toggleMobileLightboxSlideshow"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7Z"/><path d="M5 5v14"/></svg><span>{{ mobileLightboxSlideshow ? '停止放映' : '幻灯片放映' }}</span></button>
+        <button type="button" role="menuitem" :disabled="lightbox.media.length < 2" @click="toggleMobileLightboxSlideshow"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7Z"/><path d="M5 5v14"/></svg><span>{{ mobileLightboxSlideshow ? '停止放映' : '幻灯片放映' }}</span></button>
         <button type="button" role="menuitem" @click="openMobileLightboxEditor"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 16-.8 4.8L8 20l11.2-11.2a2.8 2.8 0 0 0-4-4Z"/><path d="m14 6 4 4"/></svg><span>编辑信息</span></button>
       </div>
     </div>
