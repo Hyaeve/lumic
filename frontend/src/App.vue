@@ -5295,16 +5295,16 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
       </div>
       <div v-if="!phonePortrait" class="lightbox-dock-zone" @pointerenter="showLightboxDock(false)" @pointermove="showLightboxDock(false)" @pointerleave="scheduleLightboxDockHide(2400)">
       <div :class="['lightbox-dock', { hidden: !lightboxDockVisible }]" role="toolbar" aria-label="图片查看工具">
-        <button type="button" title="上一张" aria-label="上一张" :disabled="lightbox.media.length < 2" @click="moveLightbox(-1)"><svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg></button>
+        <button type="button" title="上一张" aria-label="上一张" :disabled="lightbox.media.length < 2" @click="moveLightbox(-1)"><ChevronLeft class="lightbox-dock-chevron" viewBox="3 3 18 18" aria-hidden="true" /></button>
         <span class="lightbox-counter">{{ lightbox.index + 1 }}/{{ lightbox.media.length }}</span>
-        <button type="button" title="下一张" aria-label="下一张" :disabled="lightbox.media.length < 2" @click="moveLightbox(1)"><svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></button>
+        <button type="button" title="下一张" aria-label="下一张" :disabled="lightbox.media.length < 2" @click="moveLightbox(1)"><ChevronRight class="lightbox-dock-chevron" viewBox="3 3 18 18" aria-hidden="true" /></button>
         <i></i>
         <button type="button" title="缩小" aria-label="缩小" @click="zoomLightboxBy(-0.25)"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M8 11h6M16 16l5 5"/></svg></button>
         <span class="lightbox-scale">{{ lightboxScalePercent }}%</span>
         <button type="button" title="放大" aria-label="放大" @click="zoomLightboxBy(0.25)"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M8 11h6M11 8v6M16 16l5 5"/></svg></button>
         <button type="button" :title="lightbox.fit ? '原始尺寸' : '适应页面'" :aria-label="lightbox.fit ? '原始尺寸' : '适应页面'" :class="{ active: !lightbox.fit }" :disabled="!lightboxOriginalLoaded" @click="toggleLightboxFit">
           <span v-if="lightbox.fit" class="lightbox-tool-mask lightbox-original-size-symbol" :style="{ '--lightbox-tool-mask': `url(${originalSizeIcon})` }" aria-hidden="true"></span>
-          <svg v-else class="lightbox-fit-symbol" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H6a2 2 0 0 0-2 2v2M16 4h2a2 2 0 0 1 2 2v2M8 20H6a2 2 0 0 1-2-2v-2M16 20h2a2 2 0 0 0 2-2v-2"/><rect x="8" y="8" width="8" height="8" rx="2.2"/></svg>
+          <svg v-else viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H6a2 2 0 0 0-2 2v2M16 4h2a2 2 0 0 1 2 2v2M8 20H6a2 2 0 0 1-2-2v-2M16 20h2a2 2 0 0 0 2-2v-2"/><rect x="8" y="8" width="8" height="8" rx="2.2"/></svg>
         </button>
         <i></i>
         <button v-if="currentLivePhoto" class="lightbox-live-play" type="button" title="播放实况照片" aria-label="播放实况照片" :disabled="!lightboxOriginalLoaded || lightboxClosing || lightboxTransitioning" @click="livePhotoPlayback?.replay()"><span class="live-photo-symbol" :style="{ '--live-photo-symbol': `url(${livePhotoIcon})` }" aria-hidden="true"></span></button>

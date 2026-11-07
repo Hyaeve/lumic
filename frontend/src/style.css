@@ -125,12 +125,13 @@ a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color
 .lightbox-dock button { display: grid; place-items: center; width: 42px; height: 42px; flex: none; padding: 0; color: #eef3ef; background: transparent; border-radius: 7px; }
 .lightbox-dock button:hover, .lightbox-dock button.active { background: #ffffff1d; }
 .lightbox-dock button:disabled { opacity: .3; cursor: default; }
-.lightbox-dock svg { width: 29px; height: 29px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.lightbox-dock svg { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.lightbox-dock .lightbox-dock-chevron { stroke-width: 1.4; }
+.lightbox-dock .live-photo-symbol { width: 24px; height: 24px; }
 .lightbox-tool-mask { display: block; width: 30px; height: 30px; background: currentColor; -webkit-mask: var(--lightbox-tool-mask) center / contain no-repeat; mask: var(--lightbox-tool-mask) center / contain no-repeat; }
-.lightbox-original-size-symbol { width: 30px; height: 30px; opacity: .96; }
-.lightbox-rotate-symbol { width: 27px; height: 27px; opacity: .9; transform: scale(.88); }
-.lightbox-download-symbol { width: 24px; height: 24px; opacity: .9; transform: scale(.88); }
-.lightbox-fit-symbol { width: 30px!important; height: 30px!important; }
+.lightbox-original-size-symbol { width: 27px; height: 27px; opacity: .96; }
+.lightbox-rotate-symbol { width: 23px; height: 23px; opacity: .9; }
+.lightbox-download-symbol { width: 21px; height: 21px; opacity: .9; }
 .lightbox-dock > i { width: 1px; height: 32px; margin: 0 7px; background: #ffffff24; }
 .lightbox-counter, .lightbox-scale { min-width: 56px; color: #edf2ee; font-size: 17px; font-variant-numeric: tabular-nums; text-align: center; white-space: nowrap; }
 .lightbox-scale { min-width: 52px; }
