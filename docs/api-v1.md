@@ -37,7 +37,7 @@ Content-Type: application/json
 {
   "accessToken": "opaque-token",
   "tokenType": "Bearer",
-  "expiresIn": 86400,
+  "expiresIn": 2592000,
   "expiresAt": "2026-08-16T12:00:00Z"
 }
 ```
@@ -48,7 +48,7 @@ Content-Type: application/json
 Authorization: Bearer <accessToken>
 ```
 
-Token 在24小时后失效；Lumic 容器重启后也会立即失效。安卓端应将 Token 保存到 EncryptedSharedPreferences 或 Android Keystore，不要写入普通日志、URL 查询参数或明文数据库。
+Token 从签发时起有效 30 天，不会随访问或重启续期。保留 Lumic 的 `/data` 数据卷即可在容器重启后继续使用。退出只撤销当前 Token；修改服务端账号凭证会使既有会话失效。旧版本仅存于内存的 Token 无法迁移，升级后需要重新登录一次。安卓端应将 Token 保存到 EncryptedSharedPreferences 或 Android Keystore，不要写入普通日志、URL 查询参数或明文数据库。
 
 登录状态与退出：
 

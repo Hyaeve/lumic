@@ -2,10 +2,11 @@ package main
 
 import (
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"log"
 	"math/rand"
 	"net/http"
 	"sort"
@@ -15,7 +16,6 @@ import (
 )
 
 const (
-	sessionLifetime      = 24 * time.Hour
 	apiV1DefaultPageSize = 30
 	apiV1MaxPageSize     = 100
 )
@@ -109,7 +109,7 @@ type apiV1PostQuery struct {
 func registerAPIV1Routes(mux *http.ServeMux, sessions *SessionStore, auth *AuthConfig, store *Store, platforms *BilibiliStore) {
 	mux.HandleFunc("/api/v1", apiV1InfoHandler)
 	mux.HandleFunc("/api/v1/health", apiV1HealthHandler)
-	mux.HandleFunc("/api/v1/auth/login", apiV1LoginHandler(sessions, auth))
+	mux.HandleFunc("/api/v1/auth/login", apiV1LoginHandler(sessions))
 	mux.HandleFunc("/api/v1/auth/session", apiV1SessionHandler(sessions))
 	mux.HandleFunc("/api/v1/auth/logout", apiV1LogoutHandler(sessions))
 	mux.HandleFunc("/api/v1/posts", apiV1PostsHandler(store))
@@ -159,7 +159,7 @@ func apiV1HealthHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"status": "ok", "apiVersion": "v1"})
 }
 
-func apiV1LoginHandler(sessions *SessionStore, auth *AuthConfig) http.HandlerFunc {
+func apiV1LoginHandler(sessions *SessionStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -170,16 +170,20 @@ func apiV1LoginHandler(sessions *SessionStore, auth *AuthConfig) http.HandlerFun
 			Username string `json:"username"`
 			Password string `json:"password"`
 		}
-		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&input) != nil || !credentialsMatch(auth, input.Username, input.Password) {
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&input) != nil {
 			writeAPIError(w, http.StatusUnauthorized, "账号或密码错误")
 			return
 		}
-		token, err := sessions.create()
+		token, expiresAt, err := sessions.login(input.Username, input.Password, true)
+		if errors.Is(err, errInvalidCredentials) {
+			writeAPIError(w, http.StatusUnauthorized, "账号或密码错误")
+			return
+		}
 		if err != nil {
+			log.Printf("unable to create client session: %v", err)
 			writeAPIError(w, http.StatusInternalServerError, "无法创建客户端会话")
 			return
 		}
-		expiresAt, _ := sessions.expiration(token)
 		writeJSON(w, map[string]any{
 			"accessToken": token,
 			"tokenType":   "Bearer",
@@ -196,24 +200,25 @@ func apiV1SessionHandler(sessions *SessionStore) http.HandlerFunc {
 			return
 		}
 		w.Header().Set("Cache-Control", "no-store")
-		token := requestSessionToken(r)
-		if token == "" || !sessions.valid(token) {
+		expiresAt, ok := sessions.expiration(requestSessionToken(r))
+		if !ok {
 			writeJSON(w, map[string]any{"authenticated": false})
 			return
 		}
-		expiresAt, _ := sessions.expiration(token)
 		writeJSON(w, map[string]any{"authenticated": true, "expiresAt": expiresAt.UTC()})
 	}
 }
 
 func apiV1LogoutHandler(sessions *SessionStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 		if token := requestSessionToken(r); token != "" {
 			if err := sessions.revoke(token); err != nil {
+				log.Printf("unable to revoke client session: %v", err)
 				http.Error(w, "unable to revoke session", http.StatusInternalServerError)
 				return
 			}
@@ -221,13 +226,6 @@ func apiV1LogoutHandler(sessions *SessionStore) http.HandlerFunc {
 		clearSessionCookie(w)
 		writeJSON(w, map[string]string{"status": "logged_out"})
 	}
-}
-
-func credentialsMatch(auth *AuthConfig, username, password string) bool {
-	auth.RLock()
-	storedUsername, storedHash := auth.Username, auth.PasswordHash
-	auth.RUnlock()
-	return subtle.ConstantTimeCompare([]byte(username), []byte(storedUsername)) == 1 && passwordMatches(password, storedHash)
 }
 
 func bearerToken(r *http.Request) string {
@@ -255,17 +253,6 @@ func isPublicAPIPath(path string) bool {
 	default:
 		return false
 	}
-}
-
-func (s *SessionStore) expiration(token string) (time.Time, bool) {
-	s.RLock()
-	expiresAt, ok := s.tokens[token]
-	if !ok {
-		record, exists := s.remembered[sessionDigest(token)]
-		expiresAt, ok = record.Expires, exists && record.Credentials == s.credentialsDigest()
-	}
-	s.RUnlock()
-	return expiresAt, ok
 }
 
 func apiV1PostsHandler(store *Store) http.HandlerFunc {

@@ -99,7 +99,8 @@ const confirmDialog = ref({ open: false, title: '', message: '', confirmText: '�
 let confirmResolver = null
 const loginBusy = ref(false)
 const credentials = ref({ username: '', password: '' })
-const keepLoggedIn = ref(false)
+const keepLoggedIn = ref(true)
+const keepLoggedInPreferenceKey = 'lumic-keep-login-30d'
 const passwordVisible = ref(false)
 const activeNav = ref('all')
 const activeSource = ref('all')
@@ -297,6 +298,7 @@ let mobileMenuDismissArmed = false
 const iosImageCallout = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
 const mobileDetailTwoFingerPreparing = ref(false)
 const meteorBurst = ref([])
+const desktopLightboxDragThreshold = 5
 const lightboxPointers = new Map()
 let lightboxGesture = null
 let lightboxGestureHadPinch = false
@@ -1063,10 +1065,10 @@ async function login() {
   loginBusy.value = true
   try {
     const response = await fetch('/api/login', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...credentials.value, keepLoggedIn: keepLoggedIn.value }) })
-    if (!response.ok) throw new Error('账号或密码不正确')
+    if (!response.ok) throw new Error(response.status === 401 ? '账号或密码不正确' : '登录暂时不可用，请稍后重试')
     try {
       localStorage.removeItem('lumic-remembered-login')
-      localStorage.setItem('lumic-keep-login', String(keepLoggedIn.value))
+      localStorage.setItem(keepLoggedInPreferenceKey, String(keepLoggedIn.value))
     } catch {}
     credentials.value.password = ''
     authenticated.value = true
@@ -1105,10 +1107,9 @@ async function logout() {
 }
 function loadRememberedLogin() {
   try {
-    keepLoggedIn.value = localStorage.getItem('lumic-keep-login') === 'true'
-  } catch {
-    keepLoggedIn.value = false
-  } finally {
+    keepLoggedIn.value = localStorage.getItem(keepLoggedInPreferenceKey) !== 'false'
+    localStorage.removeItem('lumic-keep-login')
+  } catch {} finally {
     try { localStorage.removeItem('lumic-remembered-login') } catch {}
   }
 }
@@ -2251,17 +2252,13 @@ function clearLightboxSingleTap() {
   if (lightboxSingleTapTimer) window.clearTimeout(lightboxSingleTapTimer)
   lightboxSingleTapTimer = 0
 }
-function isDesktopOriginalLightboxView() {
-  return !phonePortrait.value && (!lightbox.value.fit || lightboxAtOriginalSize.value || isLightboxOriginalSize())
-}
 function scheduleLightboxSingleTapClose() {
   clearLightboxSingleTap()
-  const desktopOriginal = isDesktopOriginalLightboxView()
-  if (desktopOriginal) livePhotoPlayback.value?.stop()
+  if (!phonePortrait.value) livePhotoPlayback.value?.stop()
   lightboxSingleTapTimer = window.setTimeout(() => {
     lightboxSingleTapTimer = 0
     if (phonePortrait.value) toggleMobileLightboxDock()
-    else if (!currentLivePhoto.value || desktopOriginal) closeLightbox()
+    else closeLightbox()
   }, 280)
 }
 function handleLightboxBackdropClick() {
@@ -2470,7 +2467,7 @@ function beginLightboxPan(pointer) {
     startTime: pointer.time, imageX: lightbox.value.x, imageY: lightbox.value.y,
     startScale: lightbox.value.scale, startFit: lightbox.value.fit,
     startSwipeView: isMobileLightboxSwipeView(), startDefaultView: isMobileLightboxDefaultView(), startedOnImage: pointer.startedOnImage, longPressed: false,
-    axis: '', edgeOverscroll: 0, prevX: pointer.x, prevY: pointer.y, prevTime: pointer.time, lastX: pointer.x, lastY: pointer.y, lastTime: pointer.time
+    axis: '', edgeOverscroll: 0, desktopDragged: false, prevX: pointer.x, prevY: pointer.y, prevTime: pointer.time, lastX: pointer.x, lastY: pointer.y, lastTime: pointer.time
   }
 }
 function beginLightboxPinch() {
@@ -2595,8 +2592,12 @@ function moveLightboxGesture(event) {
     mobileLightboxDragX.value = Math.max(-limit, Math.min(limit, dx))
     return
   }
-  lightbox.value.x = lightboxGesture.imageX + event.clientX - lightboxGesture.startX
-  lightbox.value.y = lightboxGesture.imageY + event.clientY - lightboxGesture.startY
+  const dx = event.clientX - lightboxGesture.startX
+  const dy = event.clientY - lightboxGesture.startY
+  if (!lightboxGesture.desktopDragged && Math.hypot(dx, dy) < desktopLightboxDragThreshold) return
+  lightboxGesture.desktopDragged = true
+  lightbox.value.x = lightboxGesture.imageX + dx
+  lightbox.value.y = lightboxGesture.imageY + dy
 }
 function toggleLightboxDoubleTap(event) {
   lightboxZoomAnimating.value = true
@@ -2663,7 +2664,9 @@ function stopLightboxGesture(event) {
     : false
   const isDetailsOpenSwipe = phonePortrait.value && !wasCancelled && !lightboxGestureHadPinch && wasSinglePan && !gesture.longPressed && gesture?.startDefaultView && duration < 900 && dy < -Math.min(116, window.innerHeight * .15) && Math.abs(dy) > Math.abs(dx) * 1.08
   const isVerticalExit = phonePortrait.value && !wasCancelled && !lightboxGestureHadPinch && wasSinglePan && !gesture.longPressed && gesture?.startDefaultView && duration < 780 && dy > 0 && verticalExitThresholdMet && Math.abs(dy) > Math.abs(dx) * 1.08
-  const isTap = !wasCancelled && !lightboxGestureHadPinch && wasSinglePan && !gesture.longPressed && duration < 280 && Math.hypot(dx, dy) < 10
+  const tapDistance = phonePortrait.value ? 10 : desktopLightboxDragThreshold
+  const isTap = !wasCancelled && !lightboxGestureHadPinch && wasSinglePan && !gesture.longPressed && !gesture.desktopDragged && duration < 280 && Math.hypot(dx, dy) < tapDistance
+  if (!phonePortrait.value && !isTap) lightboxLastTap = { time: 0, x: 0, y: 0 }
 
   clearLightboxLongPress()
   if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
@@ -4845,7 +4848,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
       <form class="login-form" @submit.prevent="login" autocomplete="on">
         <div class="login-input-field"><svg class="login-field-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="7" r="3.5"/><path d="M4 21v-2a8 6 0 0 1 16 0v2Z"/></svg><input id="username" v-model="credentials.username" type="text" name="username" aria-label="用户名" placeholder="用户名" autocomplete="username" required autofocus></div>
         <div class="login-input-field login-password-field"><svg class="login-field-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="10" width="15" height="11" rx="2"/><path d="M8 10V6a4 4 0 0 1 8 0v4M12 14v3"/></svg><input id="password" v-model="credentials.password" :type="passwordVisible ? 'text' : 'password'" name="password" aria-label="密码" placeholder="密码" autocomplete="current-password" required><button type="button" :aria-label="passwordVisible ? '隐藏密码' : '显示密码'" :aria-pressed="passwordVisible" @click="passwordVisible = !passwordVisible"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.8 12s3.2-5.2 9.2-5.2S21.2 12 21.2 12s-3.2 5.2-9.2 5.2S2.8 12 2.8 12Z"/><circle cx="12" cy="12" r="2.5"/><path v-if="!passwordVisible" d="m4 4 16 16"/></svg></button></div>
-        <label class="remember-password"><input v-model="keepLoggedIn" type="checkbox"><span>保持登录</span></label>
+        <label class="remember-password"><input v-model="keepLoggedIn" type="checkbox"><span>保持登录 30 天</span></label>
         <p v-if="loginError" class="login-error" role="alert">{{ loginError }}</p>
         <button class="login-button" type="submit" :disabled="loginBusy">{{ loginBusy ? '验证中…' : '登录拾光' }}</button>
       </form>
@@ -5206,7 +5209,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
       <button type="button" class="selection-select-all-button" :disabled="!loadedSelectionPosts.length" :aria-pressed="allLoadedPostsSelected" :aria-label="allLoadedPostsSelected ? '取消全选' : '全选当前已加载动态'" @click="toggleSelectAllLoadedPosts"><ListChecks aria-hidden="true" /></button>
       <button type="button" class="selection-delete-button" :disabled="!selectedPostCount || postActionBusy === 'batch-delete'" aria-label="删除所选动态" @click="deleteSelectedPosts"><span class="action-icon-mask" :style="{ '--action-icon-mask': `url(${deleteIcon})` }" aria-hidden="true"></span></button>
     </div>
-    <div v-if="lightbox.open" :class="['lightbox-layer', { closing: lightboxClosing, 'mobile-entering': mobileLightboxEntering, 'mobile-exit-dragging': mobileLightboxExitDragging, 'mobile-gesture-exiting': mobileLightboxExitAnimating }]" :style="phonePortrait ? mobileLightboxLayerStyle : undefined" role="dialog" aria-modal="true" :aria-label="`${lightbox.author} 的动态媒体`" @click.self="handleLightboxBackdropClick" @pointermove="updateDesktopLightboxHover" @pointerleave="clearDesktopLightboxHover" @wheel.prevent="zoomLightbox">
+    <div v-if="lightbox.open" :class="['lightbox-layer', { closing: lightboxClosing, 'mobile-entering': mobileLightboxEntering, 'mobile-exit-dragging': mobileLightboxExitDragging, 'mobile-gesture-exiting': mobileLightboxExitAnimating, 'mobile-dock-hidden': phonePortrait && !lightboxDockVisible && !mobileLightboxDetailsOpen }]" :style="phonePortrait ? mobileLightboxLayerStyle : undefined" role="dialog" aria-modal="true" :aria-label="`${lightbox.author} 的动态媒体`" @click.self="handleLightboxBackdropClick" @pointermove="updateDesktopLightboxHover" @pointerleave="clearDesktopLightboxHover" @wheel.prevent="zoomLightbox">
       <div v-if="!phonePortrait" class="lightbox-close-hotspot" @pointerenter="showDesktopLightboxClose" @pointerleave="hideDesktopLightboxClose">
         <button :class="['lightbox-close', { 'pointer-visible': desktopLightboxHoverTarget === 'close' }]" type="button" aria-label="关闭大图" @click="closeLightbox"><span class="lightbox-tool-mask lightbox-close-symbol" :style="{ '--lightbox-tool-mask': `url(${closeLightboxIcon})` }" aria-hidden="true"></span></button>
       </div>
@@ -5257,7 +5260,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
           <svg v-else class="lightbox-fit-symbol" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H6a2 2 0 0 0-2 2v2M16 4h2a2 2 0 0 1 2 2v2M8 20H6a2 2 0 0 1-2-2v-2M16 20h2a2 2 0 0 0 2-2v-2"/><rect x="8" y="8" width="8" height="8" rx="2.2"/></svg>
         </button>
         <i></i>
-        <button v-if="currentLivePhoto" class="lightbox-live-play" type="button" title="播放实况照片" aria-label="播放实况照片" :disabled="!lightboxOriginalLoaded || lightboxClosing || lightboxTransitioning" @click="livePhotoPlayback?.replay()"><Play aria-hidden="true" /></button>
+        <button v-if="currentLivePhoto" class="lightbox-live-play" type="button" title="播放实况照片" aria-label="播放实况照片" :disabled="!lightboxOriginalLoaded || lightboxClosing || lightboxTransitioning" @click="livePhotoPlayback?.replay()"><span class="live-photo-symbol" :style="{ '--live-photo-symbol': `url(${livePhotoIcon})` }" aria-hidden="true"></span></button>
         <button type="button" title="顺时针旋转" aria-label="顺时针旋转" @click="rotateLightbox"><span class="lightbox-tool-mask lightbox-rotate-symbol" :style="{ '--lightbox-tool-mask': `url(${rotateLightboxIcon})` }" aria-hidden="true"></span></button>
         <button type="button" title="下载原图" aria-label="下载原图" @click="downloadLightboxImage"><span class="lightbox-tool-mask lightbox-download-symbol" :style="{ '--lightbox-tool-mask': `url(${downloadLightboxIcon})` }" aria-hidden="true"></span></button>
       </div>

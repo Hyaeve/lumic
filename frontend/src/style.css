@@ -126,7 +126,6 @@ a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color
 .lightbox-dock button:hover, .lightbox-dock button.active { background: #ffffff1d; }
 .lightbox-dock button:disabled { opacity: .3; cursor: default; }
 .lightbox-dock svg { width: 29px; height: 29px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.lightbox-dock .lightbox-live-play svg { width: 22px; height: 22px; stroke-width: 1.7; }
 .lightbox-tool-mask { display: block; width: 30px; height: 30px; background: currentColor; -webkit-mask: var(--lightbox-tool-mask) center / contain no-repeat; mask: var(--lightbox-tool-mask) center / contain no-repeat; }
 .lightbox-original-size-symbol { width: 30px; height: 30px; opacity: .96; }
 .lightbox-rotate-symbol { width: 27px; height: 27px; opacity: .9; transform: scale(.88); }
@@ -159,6 +158,7 @@ a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color
 @keyframes mobile-lightbox-content-in { from { opacity: .96; } to { opacity: 1; } }
 @keyframes mobile-lightbox-content-out { from { opacity: 1; transform: scale(1); } to { opacity: 0; transform: scale(.97); } }
 .phone-ui .lightbox-layer { padding: 0; background: rgba(7, 9, 14, .30); backdrop-filter: blur(22px) saturate(.86) brightness(.78); }
+.phone-ui .lightbox-layer.mobile-dock-hidden { background: #000; backdrop-filter: none; -webkit-backdrop-filter: none; }
 .phone-ui.lightbox-active > :is(.sidebar, .content, .settings-page, .add-fab, .masonry-detail-backdrop) { filter: blur(16px) brightness(.76) saturate(.80); }
 .phone-ui .lightbox-layer.mobile-entering { animation: none; }
 .phone-ui .lightbox-layer.closing { animation: mobile-lightbox-layer-out .18s cubic-bezier(.2,.7,.3,1) both; }
@@ -189,7 +189,7 @@ a, [role="button"], label, input, textarea, select { -webkit-tap-highlight-color
 .phone-ui .mobile-lightbox-dock button { width: 46px; height: 46px; background: transparent; border: 0; box-shadow: none; }
 .phone-ui .mobile-lightbox-dock button.active { background: #ffffff22; }
 .phone-ui .mobile-lightbox-save-icon, .phone-ui .mobile-lightbox-delete-icon { display: block; width: 23px; height: 23px; background: currentColor; mask: var(--save-icon) center / contain no-repeat; -webkit-mask: var(--save-icon) center / contain no-repeat; }
-.phone-ui .mobile-lightbox-delete-icon { mask-image: var(--delete-icon); -webkit-mask-image: var(--delete-icon); }
+.phone-ui .mobile-lightbox-delete-icon { background: currentColor; mask: var(--delete-icon) center / contain no-repeat; -webkit-mask: var(--delete-icon) center / contain no-repeat; }
 .phone-ui .mobile-lightbox-details { position: fixed; right: 0; bottom: 0; left: 0; z-index: 7; display: block; max-height: 62dvh; padding: 18px 18px max(88px, calc(18px + env(safe-area-inset-bottom))); overflow: auto; color: #f4f5f7; background: #15171de8; border-top: 1px solid #ffffff22; border-radius: 22px 22px 0 0; box-shadow: 0 -18px 45px #0005; backdrop-filter: blur(24px); }
 .phone-ui .mobile-lightbox-details header { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
 .phone-ui .mobile-lightbox-details header strong, .phone-ui .mobile-lightbox-details header span, .phone-ui .mobile-lightbox-details p, .phone-ui .mobile-lightbox-details time { display: block; }
@@ -548,7 +548,7 @@ body, button, input, textarea, select { font-size: 14px; }
 .media-grid .media-frame { display: flex; align-items: flex-start; justify-content: center; overflow: hidden; width: min(100%, 400px); height: auto; aspect-ratio: auto; padding: 0; background: #edf1ee; border: 1px solid #e0e7e2; }
 .media-grid .media-frame, .masonry-cover { position: relative; }
 .live-photo-mark { position: absolute; left: 9px; bottom: 9px; z-index: 4; display: grid; place-items: center; width: 28px; height: 28px; color: #fff; background: #111827a8; border: 1px solid #ffffff66; border-radius: 999px; box-shadow: 0 2px 10px #0008; backdrop-filter: blur(8px); pointer-events: none; }
-.live-photo-mark .live-photo-symbol { display: block; width: 22px; height: 22px; background: currentColor; -webkit-mask: var(--live-photo-symbol) center / contain no-repeat; mask: var(--live-photo-symbol) center / contain no-repeat; }
+.live-photo-symbol { display: block; width: 22px; height: 22px; background: currentColor; -webkit-mask: var(--live-photo-symbol) center / contain no-repeat; mask: var(--live-photo-symbol) center / contain no-repeat; }
 .dark .live-photo-mark { color: #edf2ff; background: #0a0d16c4; border-color: #cdd8ff52; box-shadow: 0 0 12px #8a9cff4d; }
 .detail-live-photo-mark { position: absolute; left: 12px; bottom: 12px; z-index: 8; display: grid; place-items: center; width: 25px; height: 25px; color: #fff; background: #111827b5; border: 1px solid #ffffff66; border-radius: 999px; box-shadow: 0 2px 10px #0008; backdrop-filter: blur(8px); pointer-events: none; }
 .detail-live-photo-mark .live-photo-symbol { width: 19px; height: 19px; }

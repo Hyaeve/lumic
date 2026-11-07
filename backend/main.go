@@ -722,13 +722,6 @@ type AuthBackup struct {
 	PasswordHash string `json:"passwordHash"`
 }
 
-type SessionStore struct {
-	sync.RWMutex
-	tokens     map[string]time.Time
-	remembered map[string]rememberedSession
-	auth       *AuthConfig
-}
-
 type AuthConfig struct {
 	sync.RWMutex
 	Username     string `json:"username"`
@@ -1092,6 +1085,19 @@ func migrateSourceStorage(from, to string) error {
 }
 
 func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
+	return writeFileViaRename(path, data, mode, func(temporaryName, path string) error {
+		if err := os.Rename(temporaryName, path); err == nil {
+			return nil
+		}
+		// Windows 不允许 Rename 覆盖已有文件；数据已完整同步到临时文件后再替换。
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return os.Rename(temporaryName, path)
+	})
+}
+
+func writeFileViaRename(path string, data []byte, mode os.FileMode, rename func(string, string) error) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
@@ -1116,14 +1122,7 @@ func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
 	if err := temporary.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(temporaryName, path); err == nil {
-		return nil
-	}
-	// Windows 不允许 Rename 覆盖已有文件；数据已完整同步到临时文件后再替换。
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return os.Rename(temporaryName, path)
+	return rename(temporaryName, path)
 }
 
 func (b *BilibiliStore) save() error {
@@ -1203,51 +1202,6 @@ func configurationBackupHandler(auth *AuthConfig, platforms *BilibiliStore) http
 	}
 }
 
-func (s *SessionStore) create() (string, error) {
-	random := make([]byte, 32)
-	if _, err := rand.Read(random); err != nil {
-		return "", err
-	}
-	token := base64.RawURLEncoding.EncodeToString(random)
-	s.Lock()
-	if s.tokens == nil {
-		s.tokens = make(map[string]time.Time)
-	}
-	now := time.Now()
-	for existing, expiresAt := range s.tokens {
-		if !expiresAt.After(now) {
-			delete(s.tokens, existing)
-		}
-	}
-	s.tokens[token] = now.Add(sessionLifetime)
-	s.Unlock()
-	return token, nil
-}
-
-func (s *SessionStore) valid(token string) bool {
-	s.Lock()
-	defer s.Unlock()
-	expires, exists := s.tokens[token]
-	if !exists {
-		record, ok := s.remembered[sessionDigest(token)]
-		return ok && record.Expires.After(time.Now()) && record.Credentials == s.credentialsDigest()
-	}
-	if time.Now().After(expires) {
-		delete(s.tokens, token)
-		return false
-	}
-	return true
-}
-
-func (s *SessionStore) revoke(token string) error {
-	s.Lock()
-	defer s.Unlock()
-	key := sessionDigest(token)
-	delete(s.remembered, key)
-	delete(s.tokens, token)
-	return nil
-}
-
 func clearSessionCookie(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{Name: "lumic_session", Value: "", Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: os.Getenv("LUMIC_COOKIE_SECURE") == "true", MaxAge: -1, Expires: time.Unix(1, 0)})
 }
@@ -1267,7 +1221,7 @@ func passwordMatches(password, encoded string) bool {
 	return subtle.ConstantTimeCompare([]byte(actual), []byte(encoded)) == 1
 }
 
-func loginHandler(sessions *SessionStore, auth *AuthConfig) http.HandlerFunc {
+func loginHandler(sessions *SessionStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		if r.Method != http.MethodPost {
@@ -1279,31 +1233,25 @@ func loginHandler(sessions *SessionStore, auth *AuthConfig) http.HandlerFunc {
 			Password     string `json:"password"`
 			KeepLoggedIn *bool  `json:"keepLoggedIn"`
 		}
-		auth.RLock()
-		username, storedHash := auth.Username, auth.PasswordHash
-		auth.RUnlock()
-		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&input) != nil || subtle.ConstantTimeCompare([]byte(input.Username), []byte(username)) != 1 || !passwordMatches(input.Password, storedHash) {
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&input) != nil {
 			http.Error(w, "invalid credentials", http.StatusUnauthorized)
 			return
 		}
-		var token string
-		var err error
-		lifetime := sessionLifetime
-		if input.KeepLoggedIn != nil && *input.KeepLoggedIn {
-			lifetime = rememberedSessionLifetime
-			token, err = sessions.createRemembered()
-		} else {
-			token, err = sessions.create()
+		persistent := input.KeepLoggedIn == nil || *input.KeepLoggedIn
+		token, expires, err := sessions.login(input.Username, input.Password, persistent)
+		if errors.Is(err, errInvalidCredentials) {
+			http.Error(w, "invalid credentials", http.StatusUnauthorized)
+			return
 		}
 		if err != nil {
+			log.Printf("unable to create browser session: %v", err)
 			http.Error(w, "unable to create session", http.StatusInternalServerError)
 			return
 		}
 		cookie := &http.Cookie{Name: "lumic_session", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: os.Getenv("LUMIC_COOKIE_SECURE") == "true"}
-		// Omitted by older clients, which retain the existing persistent session.
-		if input.KeepLoggedIn == nil || *input.KeepLoggedIn {
-			cookie.MaxAge = int(lifetime.Seconds())
-			cookie.Expires = time.Now().Add(lifetime)
+		if persistent {
+			cookie.MaxAge = int(sessionLifetime.Seconds())
+			cookie.Expires = expires
 		}
 		http.SetCookie(w, cookie)
 		writeJSON(w, map[string]string{"status": "ok"})
@@ -1336,6 +1284,7 @@ func logoutHandler(sessions *SessionStore) http.HandlerFunc {
 		}
 		if token := requestSessionToken(r); token != "" {
 			if err := sessions.revoke(token); err != nil {
+				log.Printf("unable to revoke browser session: %v", err)
 				http.Error(w, "unable to revoke session", http.StatusInternalServerError)
 				return
 			}
@@ -7990,6 +7939,10 @@ func main() {
 		log.Fatal("unable to load content data: ", err)
 	}
 	auth := loadAuthConfig()
+	sessions, err := loadSessionStore(auth, filepath.Join(filepath.Dir(authFile), "sessions-v1.json"))
+	if err != nil {
+		log.Fatal("unable to load saved sessions: ", err)
+	}
 	bilibili, err := loadBilibiliStore()
 	if err != nil {
 		log.Fatal("unable to load Bilibili configuration: ", err)
@@ -8002,9 +7955,8 @@ func main() {
 		log.Fatal("unable to persist source storage paths: ", err)
 	}
 	bilibili.startScheduler()
-	sessions := newSessionStore(auth)
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/login", loginHandler(sessions, auth))
+	mux.HandleFunc("/api/login", loginHandler(sessions))
 	mux.HandleFunc("/api/session", sessionHandler(sessions))
 	mux.HandleFunc("/api/logout", logoutHandler(sessions))
 	mux.HandleFunc("/api/settings", settingsHandler(auth))

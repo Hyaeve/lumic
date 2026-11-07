@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -98,14 +99,19 @@ func TestAPIV1RandomPaginationAndScopedMetadata(t *testing.T) {
 }
 
 func TestAPIV1BearerLoginAuthorizesAndLogoutRevokes(t *testing.T) {
-	sessions := &SessionStore{tokens: make(map[string]time.Time)}
 	auth := &AuthConfig{Username: "lumir", PasswordHash: hashPassword("correct-password", []byte("lumic-default-salt-v1"))}
+	path := filepath.Join(t.TempDir(), "sessions-v1.json")
+	sessions := openTestSessionStore(t, auth, path)
 	store := &Store{posts: []Post{{ID: "post-1", Source: SourceWeibo, Author: "Author", Published: time.Now()}}}
 	platforms := &BilibiliStore{config: BilibiliConfig{Subscriptions: []SourceConfig{}, WeiboSubscriptions: []SourceConfig{}, PixivSubscriptions: []SourceConfig{}}}
-	mux := http.NewServeMux()
-	registerAPIV1Routes(mux, sessions, auth, store, platforms)
-	handler := authMiddleware(sessions, mux)
+	newHandler := func(sessions *SessionStore) http.Handler {
+		mux := http.NewServeMux()
+		registerAPIV1Routes(mux, sessions, auth, store, platforms)
+		return authMiddleware(sessions, mux)
+	}
+	handler := newHandler(sessions)
 
+	start := time.Now()
 	login := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"username":"lumir","password":"correct-password"}`))
 	loginResponse := httptest.NewRecorder()
 	handler.ServeHTTP(loginResponse, login)
@@ -121,8 +127,18 @@ func TestAPIV1BearerLoginAuthorizesAndLogoutRevokes(t *testing.T) {
 	if err := json.Unmarshal(loginResponse.Body.Bytes(), &loginPayload); err != nil {
 		t.Fatalf("decode login response: %v", err)
 	}
-	if loginPayload.AccessToken == "" || loginPayload.TokenType != "Bearer" || loginPayload.ExpiresIn != int(sessionLifetime.Seconds()) || loginPayload.ExpiresAt.Before(time.Now().Add(23*time.Hour)) {
-		t.Fatalf("unexpected login payload: %#v", loginPayload)
+	if loginPayload.AccessToken == "" || loginPayload.TokenType != "Bearer" || loginPayload.ExpiresIn != 2592000 ||
+		loginPayload.ExpiresAt.Before(start.Add(30*24*time.Hour)) || loginPayload.ExpiresAt.After(time.Now().Add(30*24*time.Hour)) {
+		t.Fatal("expected a 30-day bearer token")
+	}
+
+	sessions = openTestSessionStore(t, auth, path)
+	handler = newHandler(sessions)
+	info := httptest.NewRecorder()
+	handler.ServeHTTP(info, httptest.NewRequest(http.MethodGet, "/api/v1", nil))
+	var discovery struct{ SessionTTLSeconds int }
+	if err := json.Unmarshal(info.Body.Bytes(), &discovery); err != nil || discovery.SessionTTLSeconds != 2592000 {
+		t.Fatal("discovery must advertise a 30-day token lifetime", err)
 	}
 
 	unauthorized := httptest.NewRecorder()
@@ -143,8 +159,13 @@ func TestAPIV1BearerLoginAuthorizesAndLogoutRevokes(t *testing.T) {
 	sessionRequest.Header.Set("Authorization", "bearer "+loginPayload.AccessToken)
 	sessionResponse := httptest.NewRecorder()
 	handler.ServeHTTP(sessionResponse, sessionRequest)
-	if sessionResponse.Code != http.StatusOK || !strings.Contains(sessionResponse.Body.String(), `"authenticated":true`) {
-		t.Fatalf("v1 session endpoint rejected bearer token: status=%d body=%s", sessionResponse.Code, sessionResponse.Body.String())
+	var status struct {
+		Authenticated bool
+		ExpiresAt     time.Time
+	}
+	if err := json.Unmarshal(sessionResponse.Body.Bytes(), &status); err != nil || sessionResponse.Code != http.StatusOK ||
+		!status.Authenticated || !status.ExpiresAt.Equal(loginPayload.ExpiresAt) {
+		t.Fatalf("v1 session must retain its original expiry after restart: status=%d body=%s", sessionResponse.Code, sessionResponse.Body.String())
 	}
 
 	logoutRequest := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
@@ -155,6 +176,7 @@ func TestAPIV1BearerLoginAuthorizesAndLogoutRevokes(t *testing.T) {
 		t.Fatalf("v1 logout did not revoke token: status=%d body=%s", logoutResponse.Code, logoutResponse.Body.String())
 	}
 
+	handler = newHandler(openTestSessionStore(t, auth, path))
 	revokedRequest := httptest.NewRequest(http.MethodGet, "/api/v1/posts", nil)
 	revokedRequest.Header.Set("Authorization", "Bearer "+loginPayload.AccessToken)
 	revokedResponse := httptest.NewRecorder()
