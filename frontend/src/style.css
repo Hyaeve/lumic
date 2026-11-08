@@ -750,7 +750,7 @@ body, button, input, textarea, select { font-size: 14px; }
 .dark .scroll-top-button:hover { color: #f0dda0; border-color: #756c51; }
 @keyframes scroll-top-in { from { opacity: 0; transform: translateY(9px) scale(.94); } }
 @keyframes context-menu-in { from { opacity: 0; transform: translateY(-4px) scale(.98); } }
-@keyframes selection-dock-in { from { opacity: 0; transform: translateY(8px); } }
+@keyframes selection-dock-in { from { opacity: 0; transform: translate(-50%, 8px); } }
 @keyframes start-date-picker-in { from { opacity: 0; transform: translateY(-5px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
 .danger-outline-button { min-height: 40px; padding: 0 14px; color: #a95650; background: #fff7f6; border: 1px solid #e5beb9; border-radius: 7px; font-size: 12px; font-weight: 600; }
 .danger-outline-button:disabled { opacity: .5; cursor: not-allowed; }
@@ -2725,4 +2725,90 @@ html.gallery-presenting .phone-ui :is(.mobile-menu-toggle, .mobile-timeline-togg
     -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 65%, transparent 100%);
     mask-image: linear-gradient(to bottom, #000 0%, #000 65%, transparent 100%);
   }
+}
+
+.app-shell .selection-dock {
+  --selection-accent: #4d7865;
+  --selection-danger: #a95362;
+  position: fixed;
+  right: auto;
+  left: calc(50% + 129px);
+  bottom: max(20px, env(safe-area-inset-bottom));
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: max-content;
+  max-width: calc(100vw - 282px);
+  min-height: 54px;
+  padding: 5px 10px 5px 17px;
+  border: 1px solid #d9e4df;
+  border-radius: 999px;
+  color: var(--ink);
+  background: rgba(248, 252, 250, .93);
+  box-shadow: 0 10px 40px #203d3526, inset 0 1px 0 #ffffff99;
+  -webkit-backdrop-filter: blur(24px) saturate(120%);
+  backdrop-filter: blur(24px) saturate(120%);
+  transform: translateX(-50%);
+  animation: none;
+  white-space: nowrap;
+}
+.app-shell.dark .selection-dock {
+  --selection-accent: #b9bbff;
+  --selection-danger: #f0a4ae;
+  color: #e5e8f5;
+  background: rgba(30, 33, 45, .94);
+  border-color: #a6add92e;
+  box-shadow: 0 12px 40px #0006, inset 0 1px 0 #d9deff12;
+}
+.selection-dock .selection-count { font-size: 13px; font-variant-numeric: tabular-nums; }
+.selection-dock .selection-count strong { color: var(--selection-accent); font-weight: 600; }
+.selection-dock .selection-progress { color: var(--muted); font-size: 11px; margin-left: 5px; font-variant-numeric: tabular-nums; }
+.selection-dock .selection-divider { height: 20px; width: 1px; background: var(--line); margin: 0 5px 0 9px; }
+.app-shell .selection-dock button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: auto;
+  min-width: 66px;
+  height: 42px;
+  padding: 0 9px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  transition: color .16s ease, background .16s ease;
+}
+.app-shell .selection-dock :is(svg, .action-icon-mask) { width: 17px; height: 17px; flex: none; }
+.app-shell .selection-dock button:is(:hover, :focus-visible):not(:disabled),
+.app-shell .selection-dock button[aria-pressed="true"] { color: var(--selection-accent); background: #8b98dd14; }
+.app-shell .selection-dock button:focus-visible { outline: 2px solid var(--selection-accent); outline-offset: -3px; }
+.app-shell .selection-dock .selection-delete-button { color: var(--selection-danger); }
+.app-shell .selection-dock button:disabled { opacity: .4; cursor: default; }
+.selection-dock .spinning { animation: spin 1.4s linear infinite; }
+.selection-toolbar-enter-active { transition: opacity .2s ease, transform .28s cubic-bezier(.18,.84,.22,1); }
+.selection-toolbar-leave-active { transition: opacity .16s ease, transform .2s ease; }
+.selection-toolbar-enter-from, .selection-toolbar-leave-to { opacity: 0; transform: translate(-50%, 12px) scale(.97)!important; }
+@media (max-width: 760px) {
+  .app-shell .selection-dock { left: 50%; max-width: calc(100vw - 16px); bottom: max(12px, env(safe-area-inset-bottom)); padding: 4px 7px 4px 12px; gap: 1px; }
+  .app-shell .selection-dock button { min-width: 49px; padding: 0 5px; gap: 3px; font-size: 12px; }
+  .app-shell .selection-dock :is(svg, .action-icon-mask) { width: 16px; height: 16px; }
+  .selection-dock .selection-count { font-size: 12px; }
+  .selection-dock .selection-divider { margin: 0 4px; }
+  .phone-ui .post-card { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+}
+@media (max-width: 360px) {
+  .app-shell .selection-dock { gap: 0; padding-inline: 8px; }
+  .app-shell .selection-dock button { flex-direction: column; gap: 1px; min-width: 43px; padding-inline: 3px; font-size: 11px; }
+  .selection-dock .selection-count { font-size: 11px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .selection-toolbar-enter-active, .selection-toolbar-leave-active { transition: opacity .1s; }
+  .selection-toolbar-enter-from, .selection-toolbar-leave-to { transform: translateX(-50%)!important; }
+  .selection-dock .spinning { animation: none; }
 }

@@ -9,7 +9,7 @@ import DetailImage from './components/DetailImage.vue'
 import CredentialField from './components/CredentialField.vue'
 import NotificationToasts from './components/NotificationToasts.vue'
 import { notifications, notify } from './notifications'
-import { ListChecks, ChevronLeft, ChevronRight, Plus, KeyRound, Network, SlidersHorizontal, Archive, UserRound, QrCode, X, Download, Upload, Monitor, Smartphone } from '@lucide/vue'
+import { ListChecks, RotateCcw, Trash2, ChevronLeft, ChevronRight, Plus, KeyRound, Network, SlidersHorizontal, Archive, UserRound, QrCode, X, Download, Upload, Monitor, Smartphone } from '@lucide/vue'
 import FavoriteHeart from './components/FavoriteHeart.vue'
 import TimelineStats from './components/TimelineStats.vue'
 import QRCode from 'qrcode'
@@ -177,6 +177,8 @@ function reportSource(message, tone = 'success') {
 const selectionMode = ref(false)
 const selectionAction = ref('delete')
 const selectedPostIds = ref([])
+const selectionBusy = ref(false)
+const selectionResetProgress = ref('')
 const contextMenu = ref({ open: false, x: 0, y: 0, post: null })
 const timelineSort = ref('newest')
 const allTimelineOrder = ref('random')
@@ -881,7 +883,7 @@ const visibleMasonryItems = computed(() => {
   return masonryLayout.value.items.filter(item => item.y + item.height >= top && item.y <= bottom)
 })
 const masonryFeedStyle = computed(() => isMasonryView.value && filteredPosts.value.length && masonryMetricsReady.value ? { height: `${Math.ceil(masonryLayout.value.height)}px` } : undefined)
-const loadedSelectionPosts = computed(() => isMasonryView.value ? visibleMasonryItems.value.map(item => item.post) : visiblePosts.value)
+const loadedSelectionPosts = computed(() => filteredPosts.value)
 const allLoadedPostsSelected = computed(() => loadedSelectionPosts.value.length > 0 && loadedSelectionPosts.value.every(post => selectedPostIds.value.includes(post.id)))
 const timelineOffsets = computed(() => {
   const offsets = [0]
@@ -2950,6 +2952,11 @@ function selectPostRange(post) {
   if (!selectionAnchor) selectionAnchor = post.id
 }
 function handlePostSelectionClick(event, post) {
+  if (selectionMode.value && selectionBusy.value) {
+    event.preventDefault()
+    event.stopPropagation()
+    return
+  }
   if (performance.now() < masonryLongPressSuppressUntil) {
     event.preventDefault()
     event.stopPropagation()
@@ -2962,15 +2969,16 @@ function handlePostSelectionClick(event, post) {
   if (event.shiftKey) selectPostRange(post)
   else { togglePostSelection(post); selectionAnchor = post.id }
 }
-function stopSelection() { selectionMode.value = false; selectionAction.value = 'delete'; selectedPostIds.value = []; selectionAnchor = null; clearMasonryPress() }
+function stopSelection() { if (selectionBusy.value) return; selectionMode.value = false; selectionAction.value = 'delete'; selectedPostIds.value = []; selectionAnchor = null; clearMasonryPress() }
 function dismissSelectionOutside(event) {
   if (!selectionMode.value || performance.now() < masonryLongPressSuppressUntil) return
   if (!event.target.closest('.post-card, .masonry-card, .selection-dock, .confirm-dialog-layer, .timeline-context-menu')) stopSelection()
 }
 function closeContextMenu() { contextMenu.value = { open: false, x: 0, y: 0, post: null } }
 function openContextMenu(event, post = null) {
-  if (phonePortrait.value && timelineView.value === 'masonry' && post) {
+  if (post) {
     enterMasonrySelection(post)
+    if (!masonryPress?.active) masonryLongPressSuppressUntil = 0
     return
   }
   const width = activeNav.value === 'liked' ? 126 : 106
@@ -2981,6 +2989,8 @@ let masonryLongPressTimer = 0
 let masonryPress = null
 let masonryLongPressSuppressUntil = 0
 function enterMasonrySelection(post) {
+  if (selectionBusy.value) return
+  closeContextMenu()
   selectionMode.value = true
   selectionAction.value = 'delete'
   if (!selectedPostIds.value.includes(post.id)) selectedPostIds.value.push(post.id)
@@ -2988,10 +2998,17 @@ function enterMasonrySelection(post) {
   masonryLongPressSuppressUntil = performance.now() + 650
 }
 function beginMasonryPress(event, post) {
+  if (event.pointerType && event.pointerType !== 'mouse') return
   clearMasonryPress()
-  if (!phonePortrait.value || event.touches?.length !== 1 || event.target.closest('button, input, a')) return
-  const touch = event.touches[0]
+  if (selectionBusy.value || (event.touches ? event.touches.length !== 1 : event.button !== 0)) return
+  if (event.target.closest('input, a, video, .post-select-control, button:not(.media-frame)')) return
+  const touch = event.touches ? event.touches[0] : event
   masonryPress = { x: touch.clientX, y: touch.clientY, active: false }
+  window.addEventListener('pointerup', clearMasonryPress, { once: true })
+  if (event.pointerType === 'mouse') {
+    window.addEventListener('pointermove', moveMasonryPress)
+    window.addEventListener('pointercancel', clearMasonryPress, { once: true })
+  }
   masonryLongPressTimer = window.setTimeout(() => {
     enterMasonrySelection(post)
     if (masonryPress) masonryPress.active = true
@@ -2999,8 +3016,9 @@ function beginMasonryPress(event, post) {
   }, 550)
 }
 function moveMasonryPress(event) {
-  const touch = event.touches?.[0]
-  if (touch && event.touches.length === 1 && masonryPress?.active) {
+  if (event.pointerType && event.pointerType !== 'mouse') return
+  const touch = event.touches ? event.touches[0] : event
+  if (touch && (!event.touches || event.touches.length === 1) && masonryPress?.active) {
     if (event.cancelable) event.preventDefault()
     masonryLongPressSuppressUntil = performance.now() + 650
     const id = document.elementFromPoint(touch.clientX, touch.clientY)?.closest('[data-post-id]')?.dataset.postId
@@ -3008,9 +3026,12 @@ function moveMasonryPress(event) {
     if (post) selectPostRange(post)
     return
   }
-  if (!touch || event.touches.length !== 1 || !masonryPress || Math.hypot(touch.clientX - masonryPress.x, touch.clientY - masonryPress.y) > 9) clearMasonryPress()
+  if (!touch || (event.touches && event.touches.length !== 1) || !masonryPress || Math.hypot(touch.clientX - masonryPress.x, touch.clientY - masonryPress.y) > 9) clearMasonryPress()
 }
 function clearMasonryPress() {
+  window.removeEventListener('pointerup', clearMasonryPress)
+  window.removeEventListener('pointermove', moveMasonryPress)
+  window.removeEventListener('pointercancel', clearMasonryPress)
   if (masonryPress?.active) masonryLongPressSuppressUntil = performance.now() + 650
   window.clearTimeout(masonryLongPressTimer)
   masonryLongPressTimer = 0
@@ -3039,14 +3060,43 @@ function startMultiSelectMode() {
   selectionMode.value = true
 }
 function toggleSelectAllLoadedPosts() {
+  if (selectionBusy.value) return
   const loadedIDs = loadedSelectionPosts.value.map(post => post.id)
   if (!loadedIDs.length) return
-  if (allLoadedPostsSelected.value) {
-    const loadedIDSet = new Set(loadedIDs)
-    selectedPostIds.value = selectedPostIds.value.filter(id => !loadedIDSet.has(id))
-    return
-  }
   selectedPostIds.value = [...new Set([...selectedPostIds.value, ...loadedIDs])]
+}
+async function resetSelectedPosts() {
+  if (!selectedPostCount.value || selectionBusy.value || postActionBusy.value) return
+  const ids = [...selectedPostIds.value]
+  selectionBusy.value = true
+  try {
+    const confirmed = await askConfirm({ title: `重新拉取 ${ids.length} 条动态？`, message: '将覆盖手动编辑的正文和图片，保留收藏与来源。', confirmText: '重置', compact: true })
+    if (!confirmed) return
+    postActionBusy.value = 'batch-reset'
+    let completed = 0
+    const failed = []
+    for (const id of ids) {
+      selectionResetProgress.value = `${completed + failed.length + 1} / ${ids.length}`
+      try {
+        const response = await fetch('/api/posts/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) })
+        if (!response.ok) throw new Error(await responseError(response, '重新拉取失败'))
+        const result = await response.json()
+        if (result.post?.id !== id) throw new Error('返回的动态编号不匹配')
+        applyEditedPost(result.post)
+        completed++
+      } catch (error) {
+        failed.push(id)
+        reportTimeline(error.message, 'error')
+      }
+    }
+    selectedPostIds.value = failed
+    void refreshFeedMetadata()
+    reportTimeline(failed.length ? `已重置 ${completed} 条，${failed.length} 条失败，失败项已保留选中` : `已重新拉取 ${completed} 条动态`, failed.length ? 'error' : 'success')
+  } finally {
+    postActionBusy.value = ''
+    selectionResetProgress.value = ''
+    selectionBusy.value = false
+  }
 }
 function deleteContextPost() {
   const post = contextMenu.value.post
@@ -3059,19 +3109,22 @@ async function unfavoriteContextPost() {
   if (post) await updatePostFavorite(post, false)
 }
 async function deleteSelectedPosts() {
-  if (!selectedPostCount.value) return
-  const confirmed = await askConfirm({ title: `删除 ${selectedPostCount.value} 条动态？`, message: '删除后无法恢复。', confirmText: '删除', compact: true })
-  if (!confirmed) return
-  postActionBusy.value = 'batch-delete'
+  if (!selectedPostCount.value || selectionBusy.value || postActionBusy.value) return
+  const ids = [...selectedPostIds.value]
+  selectionBusy.value = true
   try {
-    const response = await fetch('/api/posts', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: selectedPostIds.value }) })
+    const confirmed = await askConfirm({ title: `删除 ${ids.length} 条动态？`, message: '删除后无法恢复。', confirmText: '删除', compact: true })
+    if (!confirmed) return
+    postActionBusy.value = 'batch-delete'
+    const response = await fetch('/api/posts', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) })
     if (!response.ok) throw new Error(await responseError(response, '批量删除失败'))
-    const removed = new Set(selectedPostIds.value)
+    const removed = new Set(ids)
     posts.value = posts.value.filter(post => !removed.has(post.id))
     void refreshFeedMetadata()
     reportTimeline(`已删除 ${removed.size} 条动态`)
+    selectionBusy.value = false
     stopSelection()
-  } catch (error) { reportTimeline(error.message, 'error') } finally { postActionBusy.value = '' }
+  } catch (error) { reportTimeline(error.message, 'error') } finally { postActionBusy.value = ''; selectionBusy.value = false }
 }
 async function unfavoriteSelectedPosts() {
   if (!selectedPostCount.value) return
@@ -5002,7 +5055,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
       <section ref="feedListElement" :class="['feed-list', { 'masonry-feed': isMasonryView }]" :style="masonryFeedStyle">
 <template v-if="!isMasonryView">
 <div v-if="timelineTopSpace" class="timeline-spacer" :style="{ height: `${timelineTopSpace}px` }" aria-hidden="true"></div>
-<article v-for="post in visiblePosts" :key="post.id" :ref="element => setPostCard(post, element, 'list')" :class="['post-card', { selected: selectedPostIds.includes(post.id), selectable: selectionMode }]" :data-post-id="post.id" @touchstart.passive="beginMasonryPress($event, post)" @touchmove="moveMasonryPress" @touchend="clearMasonryPress" @touchcancel="clearMasonryPress" @click.capture="handlePostSelectionClick($event, post)" @contextmenu.stop.prevent="openContextMenu($event, post)">
+<article v-for="post in visiblePosts" :key="post.id" :ref="element => setPostCard(post, element, 'list')" :class="['post-card', { selected: selectedPostIds.includes(post.id), selectable: selectionMode }]" :data-post-id="post.id" @dragstart="selectionMode && $event.preventDefault()" @pointerdown="beginMasonryPress($event, post)" @pointermove="moveMasonryPress" @pointercancel="clearMasonryPress" @touchstart.passive="beginMasonryPress($event, post)" @touchmove="moveMasonryPress" @touchend="clearMasonryPress" @touchcancel="clearMasonryPress" @click.capture="handlePostSelectionClick($event, post)" @contextmenu.stop.prevent="openContextMenu($event, post)">
 <label v-if="selectionMode" class="post-select-control" :title="`选择 ${post.author} 的这条动态`" @click.prevent><input type="checkbox" :checked="selectedPostIds.includes(post.id)" tabindex="-1"><span></span></label>
 <div class="post-head" :style="authorAccent(post.source)">
 <button class="post-author-avatar" type="button" :aria-label="`查看 ${post.author} 的动态`" @click="openAuthor(post)"><img :key="`${post.id}:${postAvatar(post)}`" :src="postAvatar(post)" data-fallback-index="0" :alt="post.author" referrerpolicy="no-referrer" @load="handlePostAvatarLoad($event, post)" @error="handlePostAvatarError($event, post)"></button>
@@ -5030,7 +5083,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
 <div v-if="timelineBottomSpace" class="timeline-spacer" :style="{ height: `${timelineBottomSpace}px` }" aria-hidden="true"></div>
 </template>
 <template v-else>
-<article v-for="item in visibleMasonryItems" :key="item.post.id" :ref="element => setPostCard(item.post, element, 'masonry')" :class="['masonry-card', { selected: selectedPostIds.includes(item.post.id), selectable: selectionMode, 'text-only': !masonryCover(item.post) && !item.post.videos?.length }]" :style="masonryItemStyle(item)" :data-post-id="item.post.id" tabindex="0" @touchstart.passive="beginMasonryPress($event, item.post)" @touchmove="moveMasonryPress" @touchend="clearMasonryPress" @touchcancel="clearMasonryPress" @click.capture="handlePostSelectionClick($event, item.post)" @click="openMasonryPost(item.post, $event)" @keydown.enter.prevent="openMasonryPost(item.post, $event)" @contextmenu.stop.prevent="openContextMenu($event, item.post)">
+<article v-for="item in visibleMasonryItems" :key="item.post.id" :ref="element => setPostCard(item.post, element, 'masonry')" :class="['masonry-card', { selected: selectedPostIds.includes(item.post.id), selectable: selectionMode, 'text-only': !masonryCover(item.post) && !item.post.videos?.length }]" :style="masonryItemStyle(item)" :data-post-id="item.post.id" tabindex="0" @dragstart="selectionMode && $event.preventDefault()" @pointerdown="beginMasonryPress($event, item.post)" @pointermove="moveMasonryPress" @pointercancel="clearMasonryPress" @touchstart.passive="beginMasonryPress($event, item.post)" @touchmove="moveMasonryPress" @touchend="clearMasonryPress" @touchcancel="clearMasonryPress" @click.capture="handlePostSelectionClick($event, item.post)" @click="openMasonryPost(item.post, $event)" @keydown.enter.prevent="openMasonryPost(item.post, $event)" @contextmenu.stop.prevent="openContextMenu($event, item.post)">
   <label v-if="selectionMode" class="post-select-control masonry-select-control" :title="`选择 ${item.post.author} 的这条动态`" @click.prevent><input type="checkbox" :checked="selectedPostIds.includes(item.post.id)" tabindex="-1"><span></span></label>
   <div v-if="masonryCover(item.post)" class="masonry-cover">
     <img :src="previewMedia(masonryCover(item.post))" alt="" loading="lazy" decoding="async" fetchpriority="low" @load="setMasonryCoverRatio(item.post, $event, masonryCoverIsVideo(item.post))">
@@ -5255,10 +5308,17 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
       <button v-if="contextMenu.post && activeNav === 'liked'" type="button" class="danger" role="menuitem" @click="unfavoriteContextPost"><svg viewBox="0 0 24 24"><path d="M12 20.5S4.5 16.2 4.5 10.2A4.2 4.2 0 0 1 12 7.6a4.2 4.2 0 0 1 7.5 2.6c0 6-7.5 10.3-7.5 10.3Z"/><path d="M8.5 11.5h7"/></svg><span>取消收藏</span></button>
       <button v-else-if="contextMenu.post" type="button" class="danger" role="menuitem" @click="deleteContextPost"><span class="action-icon-mask" :style="{ '--action-icon-mask': `url(${deleteIcon})` }" aria-hidden="true"></span><span>删除</span></button>
     </div>
-    <div v-if="selectionMode" class="selection-dock">
-      <button type="button" class="selection-select-all-button" :disabled="!loadedSelectionPosts.length" :aria-pressed="allLoadedPostsSelected" :aria-label="allLoadedPostsSelected ? '取消全选' : '全选当前已加载动态'" @click="toggleSelectAllLoadedPosts"><ListChecks aria-hidden="true" /></button>
-      <button type="button" class="selection-delete-button" :disabled="!selectedPostCount || postActionBusy === 'batch-delete'" aria-label="删除所选动态" @click="deleteSelectedPosts"><span class="action-icon-mask" :style="{ '--action-icon-mask': `url(${deleteIcon})` }" aria-hidden="true"></span></button>
-    </div>
+    <Transition name="selection-toolbar">
+      <div v-if="selectionMode" class="selection-dock" role="toolbar" aria-label="所选动态操作" :aria-busy="selectionBusy">
+        <span class="selection-count" role="status" aria-live="polite">已选 <strong>{{ selectedPostCount }}</strong> 条</span>
+        <span v-if="selectionResetProgress" class="selection-progress" role="status">{{ selectionResetProgress }}</span>
+        <span class="selection-divider" aria-hidden="true"></span>
+        <button type="button" class="selection-select-all-button" :disabled="selectionBusy || !loadedSelectionPosts.length" :aria-pressed="allLoadedPostsSelected" aria-label="全选当前已加载动态" @click="toggleSelectAllLoadedPosts"><ListChecks aria-hidden="true" /><span>全选</span></button>
+        <button type="button" :disabled="selectionBusy" aria-label="清空选择" @click="stopSelection"><X aria-hidden="true" /><span>清空</span></button>
+        <button type="button" class="selection-reset-button" :disabled="selectionBusy || !selectedPostCount || !!postActionBusy" aria-label="重置所选动态" @click="resetSelectedPosts"><RotateCcw :class="{ spinning: postActionBusy === 'batch-reset' }" aria-hidden="true" /><span>重置</span></button>
+        <button type="button" class="selection-delete-button" :disabled="selectionBusy || !selectedPostCount || !!postActionBusy" aria-label="删除所选动态" @click="deleteSelectedPosts"><Trash2 aria-hidden="true" /><span>删除</span></button>
+      </div>
+    </Transition>
     <div v-if="lightbox.open" :class="['lightbox-layer', { closing: lightboxClosing, 'mobile-entering': mobileLightboxEntering, 'mobile-exit-dragging': mobileLightboxExitDragging, 'mobile-gesture-exiting': mobileLightboxExitAnimating, 'mobile-dock-hidden': phonePortrait && !lightboxDockVisible && !mobileLightboxDetailsOpen }]" :style="phonePortrait ? mobileLightboxLayerStyle : undefined" role="dialog" aria-modal="true" :aria-label="`${lightbox.author} 的动态媒体`" @click.self="handleLightboxBackdropClick" @pointermove="updateDesktopLightboxHover" @pointerleave="clearDesktopLightboxHover" @wheel.prevent="zoomLightbox">
       <div v-if="!phonePortrait" class="lightbox-close-hotspot" @pointerenter="showDesktopLightboxClose" @pointerleave="hideDesktopLightboxClose">
         <button :class="['lightbox-close', { 'pointer-visible': desktopLightboxHoverTarget === 'close' }]" type="button" aria-label="关闭大图" @click="closeLightbox"><span class="lightbox-tool-mask lightbox-close-symbol" :style="{ '--lightbox-tool-mask': `url(${closeLightboxIcon})` }" aria-hidden="true"></span></button>

@@ -608,6 +608,8 @@ type BilibiliStore struct {
 	weiboQR         map[string]WeiboQRSession
 	weiboClients    map[string]*http.Client
 	syncInProgress  bool
+	resetMu         sync.Mutex
+	lastPostReset   time.Time
 	weiboRecoveryMu sync.Mutex
 	weiboRecovery   weiboRecoveryState
 }
@@ -4477,50 +4479,6 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 			HasMore bool              `json:"has_more"`
 		} `json:"data"`
 	}
-	type bilibiliDynamicItem struct {
-		ID      string `json:"id_str"`
-		Type    string `json:"type"`
-		Modules struct {
-			Author struct {
-				Name  string          `json:"name"`
-				Face  string          `json:"face"`
-				PubTs json.RawMessage `json:"pub_ts"`
-			} `json:"module_author"`
-			Dynamic struct {
-				Desc *struct {
-					Text          string            `json:"text"`
-					RichTextNodes []json.RawMessage `json:"rich_text_nodes"`
-				} `json:"desc"`
-				Major *struct {
-					Draw *struct {
-						Items []struct {
-							Src string `json:"src"`
-						} `json:"items"`
-					} `json:"draw"`
-					Article *struct {
-						Title   string   `json:"title"`
-						Desc    string   `json:"desc"`
-						Content string   `json:"content"`
-						Covers  []string `json:"covers"`
-					} `json:"article"`
-					Opus *struct {
-						Title   string          `json:"title"`
-						Summary json.RawMessage `json:"summary"`
-						Content json.RawMessage `json:"content"`
-						Pics    []struct {
-							URL string `json:"url"`
-						} `json:"pics"`
-					} `json:"opus"`
-					Archive *struct {
-						BVID  string `json:"bvid"`
-						Cover string `json:"cover"`
-						Title string `json:"title"`
-						Desc  string `json:"desc"`
-					} `json:"archive"`
-				} `json:"major"`
-			} `json:"module_dynamic"`
-		} `json:"modules"`
-	}
 	posts := make([]Post, 0)
 	offset := ""
 	for page := 0; page < 100; page++ {
@@ -4541,77 +4499,12 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 		}
 		reachedBoundary := false
 		for _, rawItem := range payload.Data.Items {
-			var item bilibiliDynamicItem
-			if json.Unmarshal(rawItem, &item) != nil {
+			post, err := b.parseBilibiliDynamicPost(rawItem, feed, credentials, proxyURL)
+			if err != nil {
 				continue
 			}
-			if item.ID == "" || !bilibiliDynamicTypeEnabled(item.Type, feed.ContentTypes, feed.IncludeVideos) {
-				continue
-			}
-			captionParts := make([]string, 0, 4)
-			if item.Modules.Dynamic.Desc != nil {
-				captionParts = append(captionParts, item.Modules.Dynamic.Desc.Text)
-				if nodes, err := json.Marshal(item.Modules.Dynamic.Desc.RichTextNodes); err == nil {
-					captionParts = append(captionParts, bilibiliRichText(nodes))
-				}
-			}
-			media := make([]string, 0)
-			videos := make([]PostVideo, 0, 1)
-			if major := item.Modules.Dynamic.Major; major != nil {
-				if major.Draw != nil {
-					for _, image := range major.Draw.Items {
-						media = append(media, normalizeRemoteImage(image.Src))
-					}
-				}
-				if major.Article != nil {
-					for _, image := range major.Article.Covers {
-						media = append(media, normalizeRemoteImage(image))
-					}
-				}
-				if major.Opus != nil {
-					for _, image := range major.Opus.Pics {
-						media = append(media, normalizeRemoteImage(image.URL))
-					}
-				}
-				if major.Article != nil {
-					captionParts = append(captionParts, major.Article.Title, major.Article.Desc, major.Article.Content)
-				}
-				if major.Opus != nil {
-					captionParts = append(captionParts, major.Opus.Title, bilibiliRichText(major.Opus.Summary), bilibiliRichText(major.Opus.Content))
-				}
-				if major.Archive != nil {
-					captionParts = append(captionParts, major.Archive.Title, major.Archive.Desc)
-					if feed.IncludeVideos {
-						time.Sleep(260 * time.Millisecond)
-						videoURL, videoErr := fetchBilibiliVideoURL(major.Archive.BVID, credentials, proxyURL)
-						if videoErr != nil {
-							log.Printf("unable to resolve Bilibili video %s: %v", major.Archive.BVID, videoErr)
-						} else {
-							videos = append(videos, PostVideo{URL: videoURL, Poster: normalizeRemoteImage(major.Archive.Cover)})
-						}
-					}
-				}
-			}
-			caption := mergeBilibiliCaption(combineRemoteText(captionParts...), bilibiliCaptionFromRaw(rawItem))
-			if shouldFetchBilibiliDynamicDetail(item.Type, caption) {
-				// 动态详情接口与专栏页面共享 B 站限流策略，避免一批动态连续请求。
-				time.Sleep(260 * time.Millisecond)
-				detailCaption := b.fetchBilibiliDynamicCaption(item.ID, credentials, proxyURL)
-				caption = mergeBilibiliCaption(caption, detailCaption)
-			}
-			publishedAt := parseRemoteTimestamp(item.Modules.Author.PubTs)
-			published := time.Unix(publishedAt, 0)
-			if publishedAt == 0 {
-				published = time.Now()
-			}
-			name, avatar := item.Modules.Author.Name, normalizeRemoteImage(item.Modules.Author.Face)
-			if name == "" {
-				name = feed.Name
-			}
-			if avatar == "" {
-				avatar = feed.Avatar
-			}
-			posts = append(posts, Post{ID: "bili-dynamic-" + item.ID, Source: SourceBilibili, FeedIDs: []string{feed.ID}, Author: name, Avatar: avatar, Caption: caption, Tags: append([]string(nil), feed.Tags...), Media: media, Videos: videos, OriginalURL: "https://t.bilibili.com/" + url.PathEscape(item.ID), Published: published})
+			posts = append(posts, post)
+			published := post.Published
 			if !full && !feed.LastSyncedAt.IsZero() && !published.After(feed.LastSyncedAt) {
 				reachedBoundary = true
 			}
@@ -5790,27 +5683,9 @@ func (b *BilibiliStore) fetchPixivPosts(feed SourceConfig, full bool) ([]Post, e
 			}
 			continue
 		}
-		body, ok := detail["body"].(map[string]any)
-		if !ok {
-			continue
+		if post, err := pixivDetailPost(client, credentials, id, detail, feed); err == nil {
+			posts = append(posts, post)
 		}
-		user, _ := body["user"].(map[string]any)
-		author := firstNonEmptyRemoteText(jsonValueString(body["userName"]), jsonValueString(user["name"]), feed.Name)
-		avatar := firstNonEmptyRemoteText(jsonValueString(body["profileImageUrl"]), jsonValueString(user["imageBig"]), feed.Avatar)
-		avatar = normalizeRemoteImage(avatar)
-		if avatar == "" {
-			avatar = feed.Avatar
-		}
-		caption := combineRemoteText(jsonValueString(body["title"]), jsonValueString(body["description"]))
-		media := pixivOriginalURLs(client, credentials, id, detail)
-		if len(media) == 0 {
-			if index+1 < len(ids) {
-				time.Sleep(pixivRequestDelay(index))
-			}
-			continue
-		}
-		published := parsePixivTime(jsonValueString(body["createDate"]))
-		posts = append(posts, Post{ID: "pixiv-illust-" + id, Source: SourcePixiv, FeedIDs: []string{feed.ID}, Author: author, Avatar: avatar, Caption: caption, Tags: append([]string(nil), feed.Tags...), Media: media, OriginalURL: "https://www.pixiv.net/artworks/" + id, Published: published})
 		if index+1 < len(ids) {
 			time.Sleep(pixivRequestDelay(index))
 		}
@@ -6080,38 +5955,7 @@ func (b *BilibiliStore) fetchTwitterPostsFromAPI(feed SourceConfig, full bool, e
 				continue
 			}
 			seen[tweetID] = true
-			authorObject, _ := tweet["author"].(map[string]any)
-			_, username, authorName, avatar := twitterUserFromValue(authorObject)
-			username = firstNonEmptyRemoteText(username, strings.TrimPrefix(credentials.UserName, "@"))
-			author := firstNonEmptyRemoteText(authorName, "@"+username, feed.Name)
-			post := Post{ID: "twitter-tweet-" + tweetID, Source: SourceTwitter, FeedIDs: []string{feed.ID}, Author: author, Avatar: avatar, Caption: cleanRemoteText(firstNonEmptyRemoteText(jsonValueString(tweet["text"]), jsonValueString(tweet["fullText"]), jsonValueString(tweet["full_text"]))), Tags: append([]string(nil), feed.Tags...), OriginalURL: firstNonEmptyRemoteText(jsonValueString(tweet["url"]), "https://x.com/"+url.PathEscape(username)+"/status/"+url.PathEscape(tweetID)), Published: parseTwitterTime(firstNonEmptyRemoteText(jsonValueString(tweet["createdAt"]), jsonValueString(tweet["created_at"])))}
-			for _, item := range twitterMediaItems(tweet) {
-				kind := strings.ToLower(firstNonEmptyRemoteText(jsonValueString(item["type"]), jsonValueString(item["mediaType"])))
-				mediaURL := normalizeRemoteImage(firstNonEmptyRemoteText(jsonValueString(item["media_url_https"]), jsonValueString(item["mediaUrl"]), jsonValueString(item["media_url"]), jsonValueString(item["originalUrl"]), jsonValueString(item["url"])))
-				poster := normalizeRemoteImage(firstNonEmptyRemoteText(jsonValueString(item["thumbnailUrl"]), jsonValueString(item["preview_image_url"]), jsonValueString(item["previewImageUrl"])))
-				if kind == "photo" || (kind == "" && mediaURL != "") {
-					post.Media = append(post.Media, mediaURL)
-					continue
-				}
-				videoInfo := item["video_info"]
-				if videoInfo == nil {
-					videoInfo = item["videoInfo"]
-				}
-				if variants, ok := videoInfo.(map[string]any); ok {
-					if list, ok := variants["variants"].([]any); ok {
-						values := make([]map[string]any, 0, len(list))
-						for _, value := range list {
-							if object, ok := value.(map[string]any); ok {
-								values = append(values, object)
-							}
-						}
-						mediaURL = twitterVideoURL(values)
-					}
-				}
-				if mediaURL != "" {
-					post.Videos = append(post.Videos, PostVideo{URL: mediaURL, Poster: poster})
-				}
-			}
+			post := twitterDetailPost(tweet, tweetID, credentials, feed)
 			posts = append(posts, post)
 			if !full && !feed.LastSyncedAt.IsZero() && !post.Published.After(feed.LastSyncedAt) {
 				reachedBoundary = true
@@ -7961,6 +7805,7 @@ func main() {
 	mux.HandleFunc("/api/logout", logoutHandler(sessions))
 	mux.HandleFunc("/api/settings", settingsHandler(auth))
 	mux.HandleFunc("/api/posts", store.postsHandler)
+	mux.HandleFunc("/api/posts/reset", bilibili.resetPostHandler)
 	mux.HandleFunc("/api/feeds", store.feedsHandler)
 	mux.HandleFunc("/api/sync", bilibili.syncHandler)
 	mux.HandleFunc("/api/bilibili/account", bilibili.accountHandler)
