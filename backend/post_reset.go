@@ -40,7 +40,21 @@ func (b *BilibiliStore) fetchResetPost(stored Post, feed SourceConfig) (Post, er
 	switch stored.Source {
 	case SourceWeibo:
 		credentials := config.Weibo
-		payload, _, err := b.weiboPublicRequest("https://m.weibo.cn/statuses/show?id="+url.QueryEscape(id), &credentials, config.ProxyURL)
+		var payload map[string]any
+		if credentials.Cookie != "" || hasWeiboPassword(credentials) {
+			var status int
+			payload, status, err = b.weiboRawRequest("https://weibo.com/ajax/statuses/show?id="+url.QueryEscape(id), &credentials, config.ProxyURL)
+			if err != nil {
+				if status != http.StatusNotFound && status != http.StatusGone && !isWeiboSessionFailure(err) {
+					log.Printf("event=post_reset_detail_failed platform=weibo route=desktop response_status=%d %s", status, syncLogError(err))
+					return Post{}, err
+				}
+				log.Printf("event=post_reset_detail_fallback platform=weibo from=desktop to=mobile response_status=%d %s", status, syncLogError(err))
+			}
+		}
+		if payload == nil {
+			payload, _, err = b.weiboPublicRequest("https://m.weibo.cn/statuses/show?id="+url.QueryEscape(id), &credentials, config.ProxyURL)
+		}
 		if err != nil {
 			return Post{}, err
 		}
@@ -226,6 +240,10 @@ func (b *BilibiliStore) resetPostHandler(w http.ResponseWriter, r *http.Request)
 		writeAPIError(w, 502, "重新拉取失败：请检查平台连接、访问权限或原动态是否仍可用；原归档已保留")
 		return
 	}
+	// Detail requests can renew the stored session before media archiving.
+	b.RLock()
+	config = b.config
+	b.RUnlock()
 	archiver := &BilibiliStore{config: config}
 	prepared, posts, err := archiver.archiveSourceContent(feed, []Post{updated})
 	if err != nil || prepared.LastSyncWarning != "" {

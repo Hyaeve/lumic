@@ -1407,13 +1407,14 @@ async function saveProxy() {
   } catch (error) { settingsError.value = error.message } finally { settingsBusy.value = false }
 }
 async function testProxy() {
-  if (!proxyForm.value.proxyUrl) { settingsError.value = '请输入完整代理地址后再测试'; return }
-  settingsBusy.value = true; settingsError.value = ''; proxyMessage.value = ''
+  settingsError.value = ''; proxyMessage.value = ''
+  if (!proxyForm.value.proxyUrl) { notify('请输入完整代理地址后再测试', 'error'); return }
+  settingsBusy.value = true
   try {
     const response = await fetch('/api/project/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(proxyForm.value) })
     if (!response.ok) throw new Error(await responseError(response, '代理测试失败'))
     proxyMessage.value = (await response.json()).message
-  } catch (error) { settingsError.value = error.message } finally { settingsBusy.value = false }
+  } catch (error) { notify(error.message, 'error') } finally { settingsBusy.value = false }
 }
 async function saveSettings() {
   settingsError.value = ''
@@ -2943,6 +2944,7 @@ function togglePostSelection(post) {
   selectedPostIds.value = selectedPostIds.value.includes(post.id) ? selectedPostIds.value.filter(id => id !== post.id) : [...selectedPostIds.value, post.id]
 }
 let selectionAnchor = null
+let selectionEpoch = 0
 function selectPostRange(post) {
   const items = filteredPosts.value
   const start = items.findIndex(item => item.id === selectionAnchor)
@@ -2969,7 +2971,15 @@ function handlePostSelectionClick(event, post) {
   if (event.shiftKey) selectPostRange(post)
   else { togglePostSelection(post); selectionAnchor = post.id }
 }
-function stopSelection() { if (selectionBusy.value) return; selectionMode.value = false; selectionAction.value = 'delete'; selectedPostIds.value = []; selectionAnchor = null; clearMasonryPress() }
+function stopSelection() {
+  selectionEpoch++
+  if (selectionBusy.value && confirmDialog.value.open && !postActionBusy.value) closeConfirmDialog(false)
+  selectionMode.value = false
+  selectionAction.value = 'delete'
+  selectedPostIds.value = []
+  selectionAnchor = null
+  clearMasonryPress()
+}
 function dismissSelectionOutside(event) {
   if (!selectionMode.value || performance.now() < masonryLongPressSuppressUntil) return
   if (!event.target.closest('.post-card, .masonry-card, .selection-dock, .confirm-dialog-layer, .timeline-context-menu')) stopSelection()
@@ -3068,14 +3078,16 @@ function toggleSelectAllLoadedPosts() {
 async function resetSelectedPosts() {
   if (!selectedPostCount.value || selectionBusy.value || postActionBusy.value) return
   const ids = [...selectedPostIds.value]
+  const epoch = selectionEpoch
   selectionBusy.value = true
   try {
     const confirmed = await askConfirm({ title: `重新拉取 ${ids.length} 条动态？`, message: '将覆盖手动编辑的正文和图片，保留收藏与来源。', confirmText: '重置', compact: true })
-    if (!confirmed) return
+    if (!confirmed || epoch !== selectionEpoch) return
     postActionBusy.value = 'batch-reset'
     let completed = 0
     const failed = []
     for (const id of ids) {
+      if (epoch !== selectionEpoch) break
       selectionResetProgress.value = `${completed + failed.length + 1} / ${ids.length}`
       try {
         const response = await fetch('/api/posts/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) })
@@ -3089,9 +3101,11 @@ async function resetSelectedPosts() {
         reportTimeline(error.message, 'error')
       }
     }
-    selectedPostIds.value = failed
+    const stillSelecting = epoch === selectionEpoch
+    if (stillSelecting) selectedPostIds.value = failed
     void refreshFeedMetadata()
-    reportTimeline(failed.length ? `已重置 ${completed} 条，${failed.length} 条失败，失败项已保留选中` : `已重新拉取 ${completed} 条动态`, failed.length ? 'error' : 'success')
+    const summary = failed.length ? `已重置 ${completed} 条，${failed.length} 条失败${stillSelecting ? '，失败项已保留选中' : ''}` : `已重新拉取 ${completed} 条动态`
+    reportTimeline(stillSelecting ? summary : `重置已停止：${summary}`, failed.length ? 'error' : 'success')
   } finally {
     postActionBusy.value = ''
     selectionResetProgress.value = ''
@@ -3111,10 +3125,11 @@ async function unfavoriteContextPost() {
 async function deleteSelectedPosts() {
   if (!selectedPostCount.value || selectionBusy.value || postActionBusy.value) return
   const ids = [...selectedPostIds.value]
+  const epoch = selectionEpoch
   selectionBusy.value = true
   try {
     const confirmed = await askConfirm({ title: `删除 ${ids.length} 条动态？`, message: '删除后无法恢复。', confirmText: '删除', compact: true })
-    if (!confirmed) return
+    if (!confirmed || epoch !== selectionEpoch) return
     postActionBusy.value = 'batch-delete'
     const response = await fetch('/api/posts', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) })
     if (!response.ok) throw new Error(await responseError(response, '批量删除失败'))
@@ -3123,7 +3138,7 @@ async function deleteSelectedPosts() {
     void refreshFeedMetadata()
     reportTimeline(`已删除 ${removed.size} 条动态`)
     selectionBusy.value = false
-    stopSelection()
+    if (epoch === selectionEpoch) stopSelection()
   } catch (error) { reportTimeline(error.message, 'error') } finally { postActionBusy.value = ''; selectionBusy.value = false }
 }
 async function unfavoriteSelectedPosts() {
@@ -4870,6 +4885,11 @@ async function checkSession(refreshData = true) {
     sessionChecked.value = true
   }
 }
+watch(() => JSON.stringify([activeNav.value, activeSource.value, selectedAuthor.value?.name, selectedAuthor.value?.feedId, selectedTag.value, showSettings.value]), () => {
+  if (!selectionMode.value) return
+  clearPhoneOverlayHistoryForNavigation()
+  stopSelection()
+})
 watch(feedQueryKey, (key, previousKey) => {
   if (previousKey) queryMasonryAssignments.set(previousKey, { width: masonryColumnWidth.value, count: masonryColumnCount.value, columns: new Map(masonryColumnAssignments) })
   resetTimelineWindow()
@@ -5314,7 +5334,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
         <span v-if="selectionResetProgress" class="selection-progress" role="status">{{ selectionResetProgress }}</span>
         <span class="selection-divider" aria-hidden="true"></span>
         <button type="button" class="selection-select-all-button" :disabled="selectionBusy || !loadedSelectionPosts.length" :aria-pressed="allLoadedPostsSelected" aria-label="全选当前已加载动态" @click="toggleSelectAllLoadedPosts"><ListChecks aria-hidden="true" /><span>全选</span></button>
-        <button type="button" :disabled="selectionBusy" aria-label="清空选择" @click="stopSelection"><X aria-hidden="true" /><span>清空</span></button>
+        <button type="button" aria-label="清空选择" @click="stopSelection"><X aria-hidden="true" /><span>清空</span></button>
         <button type="button" class="selection-reset-button" :disabled="selectionBusy || !selectedPostCount || !!postActionBusy" aria-label="重置所选动态" @click="resetSelectedPosts"><RotateCcw :class="{ spinning: postActionBusy === 'batch-reset' }" aria-hidden="true" /><span>重置</span></button>
         <button type="button" class="selection-delete-button" :disabled="selectionBusy || !selectedPostCount || !!postActionBusy" aria-label="删除所选动态" @click="deleteSelectedPosts"><Trash2 aria-hidden="true" /><span>删除</span></button>
       </div>
