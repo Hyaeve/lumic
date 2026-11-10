@@ -259,7 +259,7 @@ func (b *BilibiliStore) resetPostHandler(w http.ResponseWriter, r *http.Request)
 		writeAPIError(w, 409, err.Error())
 		return
 	}
-	writeJSON(w, map[string]any{"post": updated, "message": "动态已重新拉取"})
+	writeJSON(w, map[string]any{"post": withAvailablePostImages(updated), "message": "动态已重新拉取"})
 }
 
 type bilibiliDynamicItem struct {

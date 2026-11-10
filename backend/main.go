@@ -139,26 +139,27 @@ type PostEmoji struct {
 }
 
 type SourceConfig struct {
-	ID              string    `json:"id"`
-	Source          Source    `json:"source"`
-	Name            string    `json:"name"`
-	Handle          string    `json:"handle"`
-	Avatar          string    `json:"avatar,omitempty"`
-	Enabled         bool      `json:"enabled"`
-	Schedule        string    `json:"schedule"`
-	StartDate       string    `json:"startDate,omitempty"`
-	ContentTypes    []string  `json:"contentTypes,omitempty"`
-	Tags            []string  `json:"tags,omitempty"`
-	OnlyWithImages  bool      `json:"onlyWithImages,omitempty"`
-	IncludeVideos   bool      `json:"includeVideos,omitempty"`
-	IncludeKeywords []string  `json:"includeKeywords,omitempty"`
-	ExcludeKeywords []string  `json:"excludeKeywords,omitempty"`
-	LastSyncedAt    time.Time `json:"lastSyncedAt"`
-	LastSyncStatus  string    `json:"lastSyncStatus,omitempty"`
-	LastSyncMessage string    `json:"lastSyncMessage,omitempty"`
-	LastSyncWarning string    `json:"lastSyncWarning,omitempty"`
-	LastSyncCount   int       `json:"lastSyncCount,omitempty"`
-	StoragePath     string    `json:"storagePath,omitempty"`
+	ID                string    `json:"id"`
+	Source            Source    `json:"source"`
+	Name              string    `json:"name"`
+	Handle            string    `json:"handle"`
+	Avatar            string    `json:"avatar,omitempty"`
+	Enabled           bool      `json:"enabled"`
+	Schedule          string    `json:"schedule"`
+	StartDate         string    `json:"startDate,omitempty"`
+	ContentTypes      []string  `json:"contentTypes,omitempty"`
+	Tags              []string  `json:"tags,omitempty"`
+	OnlyWithImages    bool      `json:"onlyWithImages,omitempty"`
+	IncludeVideos     bool      `json:"includeVideos,omitempty"`
+	IncludeLivePhotos *bool     `json:"includeLivePhotos,omitempty"`
+	IncludeKeywords   []string  `json:"includeKeywords,omitempty"`
+	ExcludeKeywords   []string  `json:"excludeKeywords,omitempty"`
+	LastSyncedAt      time.Time `json:"lastSyncedAt"`
+	LastSyncStatus    string    `json:"lastSyncStatus,omitempty"`
+	LastSyncMessage   string    `json:"lastSyncMessage,omitempty"`
+	LastSyncWarning   string    `json:"lastSyncWarning,omitempty"`
+	LastSyncCount     int       `json:"lastSyncCount,omitempty"`
+	StoragePath       string    `json:"storagePath,omitempty"`
 }
 
 const sourceStartDateLayout = "2006-01-02"
@@ -988,19 +989,20 @@ func prepareSourceStorage(feed SourceConfig) (SourceConfig, error) {
 		return feed, err
 	}
 	metadata, err := json.MarshalIndent(struct {
-		Source          Source   `json:"source"`
-		ID              string   `json:"id"`
-		Name            string   `json:"name"`
-		Handle          string   `json:"handle"`
-		Avatar          string   `json:"avatar,omitempty"`
-		StartDate       string   `json:"startDate,omitempty"`
-		ContentTypes    []string `json:"contentTypes,omitempty"`
-		Tags            []string `json:"tags,omitempty"`
-		OnlyWithImages  bool     `json:"onlyWithImages,omitempty"`
-		IncludeVideos   bool     `json:"includeVideos,omitempty"`
-		IncludeKeywords []string `json:"includeKeywords,omitempty"`
-		ExcludeKeywords []string `json:"excludeKeywords,omitempty"`
-	}{feed.Source, feed.ID, feed.Name, feed.Handle, feed.Avatar, feed.StartDate, feed.ContentTypes, feed.Tags, feed.OnlyWithImages, feed.IncludeVideos, feed.IncludeKeywords, feed.ExcludeKeywords}, "", "  ")
+		Source            Source   `json:"source"`
+		ID                string   `json:"id"`
+		Name              string   `json:"name"`
+		Handle            string   `json:"handle"`
+		Avatar            string   `json:"avatar,omitempty"`
+		StartDate         string   `json:"startDate,omitempty"`
+		ContentTypes      []string `json:"contentTypes,omitempty"`
+		Tags              []string `json:"tags,omitempty"`
+		OnlyWithImages    bool     `json:"onlyWithImages,omitempty"`
+		IncludeVideos     bool     `json:"includeVideos,omitempty"`
+		IncludeLivePhotos *bool    `json:"includeLivePhotos,omitempty"`
+		IncludeKeywords   []string `json:"includeKeywords,omitempty"`
+		ExcludeKeywords   []string `json:"excludeKeywords,omitempty"`
+	}{feed.Source, feed.ID, feed.Name, feed.Handle, feed.Avatar, feed.StartDate, feed.ContentTypes, feed.Tags, feed.OnlyWithImages, feed.IncludeVideos, feed.IncludeLivePhotos, feed.IncludeKeywords, feed.ExcludeKeywords}, "", "  ")
 	if err != nil {
 		return feed, err
 	}
@@ -4289,8 +4291,9 @@ func (b *BilibiliStore) archiveSourceContent(feed SourceConfig, posts []Post) (S
 		}
 		posts[postIndex].Media = localMedia
 		posts[postIndex].LivePhotos = normalizePostLivePhotos(posts[postIndex])
+		// Keep pairing metadata so history can fill motion after it is re-enabled.
 		for index, photo := range posts[postIndex].LivePhotos {
-			if strings.HasPrefix(photo.Video, "/flow/") {
+			if !sourceLivePhotosEnabled(feed) || strings.HasPrefix(photo.Video, "/flow/") {
 				continue
 			}
 			base := availableMediaTargetBase(target.StoragePath, postMediaBaseName(posts[postIndex], index)+"-live")
@@ -4983,6 +4986,10 @@ func localFlowFileAvailable(value string) bool {
 }
 
 func reuseAvailablePostArchive(incoming, stored Post) (Post, bool) {
+	return reuseAvailablePostArchiveWithLivePhotos(incoming, stored, true)
+}
+
+func reuseAvailablePostArchiveWithLivePhotos(incoming, stored Post, includeLivePhotos bool) (Post, bool) {
 	prepared := incoming
 	prepared.LivePhotos = reusePostLivePhotos(incoming, stored)
 	prepared.Media = append([]string(nil), incoming.Media...)
@@ -5028,7 +5035,7 @@ func reuseAvailablePostArchive(incoming, stored Post) (Post, bool) {
 	}
 	prepared.LivePhotos = normalizePostLivePhotos(prepared)
 	for _, photo := range prepared.LivePhotos {
-		if !livePhotoMotionAvailable(photo.Video) {
+		if includeLivePhotos && !livePhotoMotionAvailable(photo.Video) {
 			complete = false
 		}
 	}
@@ -5124,7 +5131,7 @@ func (s *Store) postsForHistoryBackfill(posts []Post, feed SourceConfig) ([]Post
 			pending = append(pending, incoming)
 			continue
 		}
-		prepared, archiveComplete := reuseAvailablePostArchive(incoming, stored)
+		prepared, archiveComplete := reuseAvailablePostArchiveWithLivePhotos(incoming, stored, sourceLivePhotosEnabled(feed))
 		if postBelongsToSource(&stored, feed) && archiveComplete && !historyPostNeedsMetadataUpdate(stored, incoming, feed) {
 			skipped++
 			continue
@@ -5241,7 +5248,7 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 		}
 		trace.stage("store", added, err)
 	}
-	if archiveWarning == "" && b.content != nil {
+	if archiveWarning == "" && b.content != nil && sourceLivePhotosEnabled(feed) {
 		if pending := b.content.pendingLivePhotoCount(feed.ID); pending > 0 {
 			archiveWarning = fmt.Sprintf("仍有 %d 张实况照片的片段未归档，当前仅显示静态原图；请检查账号或网络后重新拉取历史补齐", pending)
 		}
@@ -7191,6 +7198,9 @@ func (b *BilibiliStore) weiboSubscriptionsHandler(w http.ResponseWriter, r *http
 				b.config.WeiboSubscriptions[index].Tags = normalizeTags(input.Tags)
 				b.config.WeiboSubscriptions[index].OnlyWithImages = input.OnlyWithImages
 				b.config.WeiboSubscriptions[index].IncludeVideos = input.IncludeVideos
+				if input.IncludeLivePhotos != nil {
+					b.config.WeiboSubscriptions[index].IncludeLivePhotos = input.IncludeLivePhotos
+				}
 				b.config.WeiboSubscriptions[index].IncludeKeywords = normalizeKeywords(input.IncludeKeywords)
 				b.config.WeiboSubscriptions[index].ExcludeKeywords = normalizeKeywords(input.ExcludeKeywords)
 				input = b.config.WeiboSubscriptions[index]

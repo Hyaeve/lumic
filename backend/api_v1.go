@@ -39,25 +39,26 @@ type apiV1Post struct {
 }
 
 type apiV1Feed struct {
-	ID              string    `json:"id"`
-	Source          Source    `json:"source"`
-	Name            string    `json:"name"`
-	Handle          string    `json:"handle"`
-	Avatar          string    `json:"avatar,omitempty"`
-	Enabled         bool      `json:"enabled"`
-	Schedule        string    `json:"schedule"`
-	StartDate       string    `json:"startDate,omitempty"`
-	ContentTypes    []string  `json:"contentTypes,omitempty"`
-	Tags            []string  `json:"tags,omitempty"`
-	OnlyWithImages  bool      `json:"onlyWithImages,omitempty"`
-	IncludeVideos   bool      `json:"includeVideos,omitempty"`
-	IncludeKeywords []string  `json:"includeKeywords,omitempty"`
-	ExcludeKeywords []string  `json:"excludeKeywords,omitempty"`
-	LastSyncedAt    time.Time `json:"lastSyncedAt"`
-	LastSyncStatus  string    `json:"lastSyncStatus,omitempty"`
-	LastSyncMessage string    `json:"lastSyncMessage,omitempty"`
-	LastSyncWarning string    `json:"lastSyncWarning,omitempty"`
-	LastSyncCount   int       `json:"lastSyncCount,omitempty"`
+	ID                string    `json:"id"`
+	Source            Source    `json:"source"`
+	Name              string    `json:"name"`
+	Handle            string    `json:"handle"`
+	Avatar            string    `json:"avatar,omitempty"`
+	Enabled           bool      `json:"enabled"`
+	Schedule          string    `json:"schedule"`
+	StartDate         string    `json:"startDate,omitempty"`
+	ContentTypes      []string  `json:"contentTypes,omitempty"`
+	Tags              []string  `json:"tags,omitempty"`
+	OnlyWithImages    bool      `json:"onlyWithImages,omitempty"`
+	IncludeVideos     bool      `json:"includeVideos,omitempty"`
+	IncludeLivePhotos *bool     `json:"includeLivePhotos,omitempty"`
+	IncludeKeywords   []string  `json:"includeKeywords,omitempty"`
+	ExcludeKeywords   []string  `json:"excludeKeywords,omitempty"`
+	LastSyncedAt      time.Time `json:"lastSyncedAt"`
+	LastSyncStatus    string    `json:"lastSyncStatus,omitempty"`
+	LastSyncMessage   string    `json:"lastSyncMessage,omitempty"`
+	LastSyncWarning   string    `json:"lastSyncWarning,omitempty"`
+	LastSyncCount     int       `json:"lastSyncCount,omitempty"`
 }
 
 type apiV1PostPage struct {
@@ -771,24 +772,25 @@ func apiV1FeedsHandler(store *Store, platforms *BilibiliStore) http.HandlerFunc 
 
 func toAPIV1Feed(feed SourceConfig) apiV1Feed {
 	return apiV1Feed{
-		ID:              feed.ID,
-		Source:          feed.Source,
-		Name:            feed.Name,
-		Handle:          feed.Handle,
-		Avatar:          feed.Avatar,
-		Enabled:         feed.Enabled,
-		Schedule:        feed.Schedule,
-		StartDate:       feed.StartDate,
-		ContentTypes:    append([]string(nil), feed.ContentTypes...),
-		Tags:            append([]string(nil), feed.Tags...),
-		OnlyWithImages:  feed.OnlyWithImages,
-		IncludeVideos:   feed.IncludeVideos,
-		IncludeKeywords: append([]string(nil), feed.IncludeKeywords...),
-		ExcludeKeywords: append([]string(nil), feed.ExcludeKeywords...),
-		LastSyncedAt:    feed.LastSyncedAt,
-		LastSyncStatus:  feed.LastSyncStatus,
-		LastSyncMessage: feed.LastSyncMessage,
-		LastSyncWarning: feed.LastSyncWarning,
-		LastSyncCount:   feed.LastSyncCount,
+		ID:                feed.ID,
+		Source:            feed.Source,
+		Name:              feed.Name,
+		Handle:            feed.Handle,
+		Avatar:            feed.Avatar,
+		Enabled:           feed.Enabled,
+		Schedule:          feed.Schedule,
+		StartDate:         feed.StartDate,
+		ContentTypes:      append([]string(nil), feed.ContentTypes...),
+		Tags:              append([]string(nil), feed.Tags...),
+		OnlyWithImages:    feed.OnlyWithImages,
+		IncludeVideos:     feed.IncludeVideos,
+		IncludeLivePhotos: feed.IncludeLivePhotos,
+		IncludeKeywords:   append([]string(nil), feed.IncludeKeywords...),
+		ExcludeKeywords:   append([]string(nil), feed.ExcludeKeywords...),
+		LastSyncedAt:      feed.LastSyncedAt,
+		LastSyncStatus:    feed.LastSyncStatus,
+		LastSyncMessage:   feed.LastSyncMessage,
+		LastSyncWarning:   feed.LastSyncWarning,
+		LastSyncCount:     feed.LastSyncCount,
 	}
 }

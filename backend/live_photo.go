@@ -18,6 +18,10 @@ type PostLivePhoto struct {
 	PictureID string `json:"pictureId,omitempty"`
 }
 
+func sourceLivePhotosEnabled(feed SourceConfig) bool {
+	return feed.Source != SourceWeibo || feed.IncludeLivePhotos == nil || *feed.IncludeLivePhotos
+}
+
 func normalizePostLivePhotos(post Post) []PostLivePhoto {
 	byImage := make(map[string]PostLivePhoto, len(post.LivePhotos))
 	for _, photo := range post.LivePhotos {

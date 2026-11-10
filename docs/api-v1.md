@@ -184,6 +184,8 @@ POST /api/v1/sync
 
 路径和请求体与 Lumic 网页端对应接口一致。
 
+微博来源支持可选布尔字段 `includeLivePhotos`，省略时默认开启。使用 `PUT /api/v1/weibo/subscriptions` 传入 `false` 后，后续同步和单条重置只下载静态原图，不请求实况运动片段，也不提示缺失片段；普通视频仍由 `includeVideos` 独立控制。旧客户端更新来源时省略该字段会保留已有设置。关闭不会删除已归档的实况文件，重新开启后可用历史拉取补齐未归档片段。
+
 ## 图片加载
 
 列表优先使用 `previewMedia` 和 `previewVideos[].poster`，进入大图或播放模式后再使用 `media`、`videos` 中的原始资源。所有以 `/flow/` 或 `/preview/` 开头的地址都需要拼接 Lumic 基础地址；外部 `https://` 地址保持原样。

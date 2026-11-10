@@ -677,6 +677,9 @@ body, button, input, textarea, select { font-size: 14px; }
 .feed-toggle-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 14px; padding: 4px 0; }
 .feed-toggle-row label { display: flex; min-width: 0; align-items: center; gap: 8px; color: var(--ink); font-size: 12px; cursor: pointer; }
 .feed-toggle-row input { flex: none; width: 16px; height: 16px; margin: 0; accent-color: #668d73; }
+@media (min-width: 621px) {
+  .feed-toggle-row.has-live-photo-option { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
 .post-foot { min-height: 38px; margin-top: 15px; }
 .post-foot .tag-row { min-width: 0; flex: 1; align-items: center; }
 .post-foot .post-foot-actions { flex: none; align-self: center; }

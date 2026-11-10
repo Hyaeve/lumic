@@ -1756,7 +1756,7 @@ function openFeedSettings(feed) {
   cronEditing.value = false
   showStartDatePicker.value = false
   const contentTypes = feed.source === 'bilibili' && (!feed.contentTypes || feed.contentTypes.length === 0) ? ['DRAW', 'ARTICLE'] : [...(feed.contentTypes || [])]
-  selectedFeed.value = { ...feed, startDate: feed.startDate || '', includeVideos: Boolean(feed.includeVideos), contentTypes, tags: [...(feed.tags || [])], tagInput: formatTagInput(feed.tags), includeKeywordInput: formatKeywordInput(feed.includeKeywords), excludeKeywordInput: formatKeywordInput(feed.excludeKeywords) }
+  selectedFeed.value = { ...feed, startDate: feed.startDate || '', includeVideos: Boolean(feed.includeVideos), includeLivePhotos: feed.includeLivePhotos !== false, contentTypes, tags: [...(feed.tags || [])], tagInput: formatTagInput(feed.tags), includeKeywordInput: formatKeywordInput(feed.includeKeywords), excludeKeywordInput: formatKeywordInput(feed.excludeKeywords) }
   showFeedSettings.value = true
 }
 async function saveFeedSettings() {
@@ -3102,9 +3102,9 @@ async function resetSelectedPosts() {
       }
     }
     const stillSelecting = epoch === selectionEpoch
-    if (stillSelecting) selectedPostIds.value = failed
+    if (stillSelecting) stopSelection()
     void refreshFeedMetadata()
-    const summary = failed.length ? `已重置 ${completed} 条，${failed.length} 条失败${stillSelecting ? '，失败项已保留选中' : ''}` : `已重新拉取 ${completed} 条动态`
+    const summary = failed.length ? `已重置 ${completed} 条，${failed.length} 条失败` : `已重新拉取 ${completed} 条动态`
     reportTimeline(stillSelecting ? summary : `重置已停止：${summary}`, failed.length ? 'error' : 'success')
   } finally {
     postActionBusy.value = ''
@@ -5650,9 +5650,10 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
             <label><span>包含关键词</span><input v-model="selectedFeed.includeKeywordInput" placeholder="插画 绘画" maxlength="240"></label>
             <label><span>排除关键词</span><input v-model="selectedFeed.excludeKeywordInput" placeholder="广告 抽奖" maxlength="240"></label>
           </div>
-          <div class="feed-toggle-row">
+          <div class="feed-toggle-row" :class="{ 'has-live-photo-option': selectedFeed.source === 'weibo' }">
             <label><input v-model="selectedFeed.onlyWithImages" type="checkbox"><span>包含图片</span></label>
             <label v-if="selectedFeed.source === 'weibo' || (selectedFeed.source === 'bilibili' && !selectedFeed.id.startsWith('bili-opus-favorites-'))"><input v-model="selectedFeed.includeVideos" type="checkbox"><span>包含视频</span></label>
+            <label v-if="selectedFeed.source === 'weibo'"><input v-model="selectedFeed.includeLivePhotos" type="checkbox"><span>实况照片</span></label>
             <label><input v-model="selectedFeed.enabled" type="checkbox"><span>启用自动同步</span></label>
           </div>
           <div v-if="selectedFeed.source === 'bilibili' && !selectedFeed.id.startsWith('bili-opus-favorites-')" class="content-scope"><strong>内容范围</strong><label><input v-model="selectedFeed.contentTypes" type="checkbox" value="DRAW"><span>图文动态（DRAW）</span></label><label><input v-model="selectedFeed.contentTypes" type="checkbox" value="ARTICLE"><span>专栏（ARTICLE）</span></label><small>图文动态默认开启；取消勾选后不再拉取图文动态。</small></div>
