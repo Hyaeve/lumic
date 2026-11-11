@@ -118,6 +118,8 @@ func registerAPIV1Routes(mux *http.ServeMux, sessions *SessionStore, auth *AuthC
 	mux.HandleFunc("/api/v1/gallery", apiV1GalleryHandler(store))
 	mux.HandleFunc("/api/v1/feeds", apiV1FeedsHandler(store, platforms))
 	mux.HandleFunc("/api/v1/sync", platforms.syncHandler)
+	mux.HandleFunc("/api/v1/sync/tasks", platforms.syncTasksHandler)
+	mux.HandleFunc("/api/v1/sync/status", platforms.syncStatusHandler)
 
 	// Versioned aliases keep the Android client off the browser-only route namespace.
 	mux.HandleFunc("/api/v1/bilibili/account", platforms.accountHandler)

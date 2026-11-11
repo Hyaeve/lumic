@@ -214,10 +214,7 @@ func (b *BilibiliStore) resetPostHandler(w http.ResponseWriter, r *http.Request)
 	}
 	b.lastPostReset = time.Now()
 	feed := SourceConfig{ID: "reset-" + sessionDigest(stored.Author)[:12], Source: stored.Source, Name: stored.Author, Avatar: stored.Avatar, Tags: stored.Tags}
-	b.RLock()
-	config := b.config
-	b.RUnlock()
-	feeds := append(append(append(append([]SourceConfig{}, config.Subscriptions...), config.WeiboSubscriptions...), config.PixivSubscriptions...), config.TwitterSubscriptions...)
+	feeds := b.allSourceConfigs()
 	for _, candidate := range feeds {
 		if candidate.Source == stored.Source && containsString(stored.FeedIDs, candidate.ID) {
 			feed = candidate
@@ -240,12 +237,10 @@ func (b *BilibiliStore) resetPostHandler(w http.ResponseWriter, r *http.Request)
 		writeAPIError(w, 502, "重新拉取失败：请检查平台连接、访问权限或原动态是否仍可用；原归档已保留")
 		return
 	}
-	// Detail requests can renew the stored session before media archiving.
-	b.RLock()
-	config = b.config
-	b.RUnlock()
-	archiver := &BilibiliStore{config: config}
-	prepared, posts, err := archiver.archiveSourceContent(feed, []Post{updated})
+	unlock := b.lockSourceArchive(feed.Source)
+	defer unlock()
+	// Archiving reads the latest credentials after any detail-request renewal.
+	prepared, posts, err := b.archiveSourceContent(feed, []Post{updated})
 	if err != nil || prepared.LastSyncWarning != "" {
 		log.Printf("event=post_reset_failed platform=%s post=%s stage=archive %s", syncLogPlatform(stored.Source), sessionDigest(stored.ID)[:12], syncLogError(err))
 		writeAPIError(w, 502, "媒体重新归档失败；原动态已保留，请检查网络后重试")

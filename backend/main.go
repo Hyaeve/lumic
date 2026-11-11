@@ -601,18 +601,24 @@ func projectSettingsView(config BilibiliConfig) ProjectSettingsView {
 
 type BilibiliStore struct {
 	sync.RWMutex
-	config          BilibiliConfig
-	key             []byte
-	content         *Store
-	bilibiliQR      map[string]BilibiliQRSession
-	bilibiliClients map[string]*http.Client
-	weiboQR         map[string]WeiboQRSession
-	weiboClients    map[string]*http.Client
-	syncInProgress  bool
-	resetMu         sync.Mutex
-	lastPostReset   time.Time
-	weiboRecoveryMu sync.Mutex
-	weiboRecovery   weiboRecoveryState
+	config            BilibiliConfig
+	key               []byte
+	content           *Store
+	bilibiliQR        map[string]BilibiliQRSession
+	bilibiliClients   map[string]*http.Client
+	weiboQR           map[string]WeiboQRSession
+	weiboClients      map[string]*http.Client
+	syncInProgress    bool
+	syncTasks         syncQueue
+	saveMu            sync.Mutex
+	bilibiliArchiveMu sync.Mutex
+	weiboArchiveMu    sync.Mutex
+	pixivArchiveMu    sync.Mutex
+	otherArchiveMu    sync.Mutex
+	resetMu           sync.Mutex
+	lastPostReset     time.Time
+	weiboRecoveryMu   sync.Mutex
+	weiboRecovery     weiboRecoveryState
 }
 
 type BilibiliUser struct {
@@ -694,7 +700,12 @@ func (b *BilibiliStore) reconcileCollectionArchives() error {
 		if !isCollectionFeed(feed) {
 			continue
 		}
-		if err := b.content.reconcileCollectionMedia(feed, feeds); err != nil {
+		err := func() error {
+			unlock := b.lockSourceArchive(feed.Source)
+			defer unlock()
+			return b.content.reconcileCollectionMedia(feed, feeds)
+		}()
+		if err != nil {
 			return err
 		}
 	}
@@ -1006,12 +1017,11 @@ func prepareSourceStorage(feed SourceConfig) (SourceConfig, error) {
 	if err != nil {
 		return feed, err
 	}
-	temporary := filepath.Join(feed.StoragePath, ".source.json.tmp")
-	if err := os.WriteFile(temporary, metadata, 0644); err != nil {
-		return feed, err
+	metadataPath := filepath.Join(feed.StoragePath, "source.json")
+	if existing, err := os.ReadFile(metadataPath); err == nil && bytes.Equal(existing, metadata) {
+		return feed, nil
 	}
-	if err := os.Rename(temporary, filepath.Join(feed.StoragePath, "source.json")); err != nil {
-		_ = os.Remove(temporary)
+	if err := atomicWriteFile(metadataPath, metadata, 0644); err != nil {
 		return feed, err
 	}
 	return feed, nil
@@ -1130,6 +1140,8 @@ func writeFileViaRename(path string, data []byte, mode os.FileMode, rename func(
 }
 
 func (b *BilibiliStore) save() error {
+	b.saveMu.Lock()
+	defer b.saveMu.Unlock()
 	b.RLock()
 	data, err := encryptJSON(b.key, b.config)
 	b.RUnlock()
@@ -1691,6 +1703,7 @@ func (s *Store) reconcileCollectionMedia(feed SourceConfig, configuredFeeds []So
 		newLocal   string
 	}
 	moves := make([]mediaMove, 0)
+	lastCopiedPost := -1
 	rollback := func() {
 		for index := len(moves) - 1; index >= 0; index-- {
 			move := moves[index]
@@ -1745,6 +1758,14 @@ func (s *Store) reconcileCollectionMedia(feed SourceConfig, configuredFeeds []So
 		targetPath := targetBase + extension
 		if err := os.Rename(localPath, targetPath); err != nil {
 			return err
+		}
+		// Readers can still hold the previous media slices after releasing the store lock.
+		if lastCopiedPost != postIndex {
+			post := &s.posts[postIndex]
+			post.Media = append([]string(nil), post.Media...)
+			post.Videos = append([]PostVideo(nil), post.Videos...)
+			post.LivePhotos = append([]PostLivePhoto(nil), post.LivePhotos...)
+			lastCopiedPost = postIndex
 		}
 		updated := flowPublicPath(feed.Source, targetName, filepath.Base(targetPath))
 		moves = append(moves, mediaMove{postIndex: postIndex, mediaIndex: mediaIndex, mediaKind: mediaKind, oldPublic: media, oldLocal: localPath, newLocal: targetPath})
@@ -3031,12 +3052,7 @@ func (b *BilibiliStore) subscriptionsHandler(w http.ResponseWriter, r *http.Requ
 			writeAPIError(w, http.StatusNotFound, "订阅不存在")
 			return
 		}
-		updated, err := b.syncSource(feed, r.URL.Query().Get("action") == "resync")
-		if err != nil {
-			writeJSON(w, map[string]any{"status": "failed", "message": err.Error(), "source": updated})
-			return
-		}
-		writeJSON(w, map[string]any{"status": "completed", "message": updated.LastSyncMessage, "source": updated})
+		b.respondSourceSync(w, r, feed)
 		return
 	}
 	if r.Method == http.MethodPut {
@@ -4205,6 +4221,10 @@ func availableMediaTargetBase(directory, base string) string {
 }
 
 func (b *BilibiliStore) archiveSourceContent(feed SourceConfig, posts []Post) (SourceConfig, []Post, error) {
+	b.RLock()
+	config := b.config
+	configuredFeeds := sourceConfigsFromConfig(config)
+	b.RUnlock()
 	prepared, err := prepareSourceStorage(feed)
 	if err != nil {
 		return feed, posts, err
@@ -4212,15 +4232,15 @@ func (b *BilibiliStore) archiveSourceContent(feed SourceConfig, posts []Post) (S
 	prepared.LastSyncWarning = ""
 	liveFailures := 0
 	var firstLiveFailure, liveRejected error
-	client, err := externalHTTPClient(b.config.ProxyURL)
+	client, err := externalHTTPClient(config.ProxyURL)
 	if err != nil {
 		return feed, posts, err
 	}
-	referer, cookie := "https://www.bilibili.com/", bilibiliCookie(b.config.Credentials)
+	referer, cookie := "https://www.bilibili.com/", bilibiliCookie(config.Credentials)
 	if feed.Source == SourceWeibo {
-		referer, cookie = "https://weibo.com/", b.config.Weibo.Cookie
+		referer, cookie = "https://weibo.com/", config.Weibo.Cookie
 	} else if feed.Source == SourcePixiv {
-		referer, cookie = "https://www.pixiv.net/", b.config.Pixiv.Cookie
+		referer, cookie = "https://www.pixiv.net/", config.Pixiv.Cookie
 	} else if feed.Source == SourceTwitter {
 		referer, cookie = "https://x.com/", ""
 	}
@@ -4230,11 +4250,6 @@ func (b *BilibiliStore) archiveSourceContent(feed SourceConfig, posts []Post) (S
 			prepared.Avatar = flowPublicPath(prepared.Source, prepared.Name, filepath.Base(avatarPath))
 		}
 	}
-	configuredFeeds := make([]SourceConfig, 0, len(b.config.Subscriptions)+len(b.config.WeiboSubscriptions)+len(b.config.PixivSubscriptions)+len(b.config.TwitterSubscriptions))
-	configuredFeeds = append(configuredFeeds, b.config.Subscriptions...)
-	configuredFeeds = append(configuredFeeds, b.config.WeiboSubscriptions...)
-	configuredFeeds = append(configuredFeeds, b.config.PixivSubscriptions...)
-	configuredFeeds = append(configuredFeeds, b.config.TwitterSubscriptions...)
 	archiveStart, progressAt := time.Now(), time.Now()
 	if len(posts) > 0 {
 		logArchiveProgress(feed, 0, len(posts), archiveStart)
@@ -4847,24 +4862,20 @@ func (b *BilibiliStore) weiboLikesHandler(w http.ResponseWriter, r *http.Request
 	credentials := b.config.Weibo
 	b.RUnlock()
 	feed := SourceConfig{ID: "weibo-likes-" + credentials.UserID, Source: SourceWeibo, Name: weiboLikesName, Handle: credentials.UserName, Avatar: credentials.Avatar}
-	posts, err := b.fetchWeiboLikedPosts(feed, false)
-	if err != nil {
-		writeAPIError(w, http.StatusBadGateway, err.Error())
+	task, compatible := b.syncTasks.submit(feed, false, true, func() syncTaskResult { return b.syncLegacyWeiboLikes(feed) })
+	if !compatible {
+		writeAPIError(w, http.StatusConflict, "我的点赞已有同步任务，请等待完成")
 		return
 	}
-	b.RLock()
-	feed, posts, err = b.archiveSourceContent(feed, posts)
-	b.RUnlock()
-	if err != nil {
-		writeAPIError(w, http.StatusBadGateway, "无法归档微博点赞动态："+err.Error())
+	result, finished := task.wait(r.Context())
+	if !finished {
 		return
 	}
-	added, err := b.content.mergePosts(posts)
-	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "无法保存微博点赞动态")
+	if result.err != nil {
+		writeAPIError(w, result.httpStatus, result.err.Error())
 		return
 	}
-	writeJSON(w, map[string]any{"status": "success", "added": added, "count": len(posts), "warning": feed.LastSyncWarning, "message": fmt.Sprintf("已同步 %d 条微博点赞动态", len(posts))})
+	writeJSON(w, map[string]any{"status": "success", "added": result.added, "count": result.count, "warning": result.source.LastSyncWarning, "message": result.source.LastSyncMessage})
 }
 
 func postsAfter(posts []Post, boundary time.Time) []Post {
@@ -5204,6 +5215,8 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 	archiveWarning := ""
 	added, historyEligible, historyPending, historySkipped := 0, 0, 0, 0
 	if err == nil {
+		unlock := b.lockSourceArchive(feed.Source)
+		defer unlock()
 		if !full {
 			if isBilibiliFavoriteOpusFeed(feed) && b.content != nil {
 				posts = b.content.postsAfterOrSourceMembership(posts, feed.LastSyncedAt, feed.ID)
@@ -5233,9 +5246,7 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 			}
 		}
 		feed.Name = canonicalSourceName(feed)
-		b.RLock()
 		feed, posts, err = b.archiveSourceContent(feed, posts)
-		b.RUnlock()
 		archiveWarning = feed.LastSyncWarning
 		trace.stage("archive", len(posts), err)
 		if err == nil && b.content == nil {
@@ -5323,30 +5334,20 @@ func (b *BilibiliStore) syncHandler(w http.ResponseWriter, r *http.Request) {
 			b.syncInProgress = false
 			b.Unlock()
 		}()
-		b.RLock()
-		feeds := append(append(append(append([]SourceConfig{}, b.config.Subscriptions...), b.config.WeiboSubscriptions...), b.config.PixivSubscriptions...), b.config.TwitterSubscriptions...)
-		b.RUnlock()
-		for _, feed := range feeds {
-			if feed.Enabled {
-				_, _ = b.syncSource(feed, false)
-			}
-		}
+		b.waitForSyncBatch(b.allSourceConfigs())
 	}()
 	writeJSON(w, map[string]any{"status": "started", "message": "已开始在后台拉取最新动态。"})
 }
 
 func (b *BilibiliStore) runScheduledSync(at time.Time) {
-	b.RLock()
-	feeds := append(append(append(append([]SourceConfig{}, b.config.Subscriptions...), b.config.WeiboSubscriptions...), b.config.PixivSubscriptions...), b.config.TwitterSubscriptions...)
-	b.RUnlock()
-	for _, feed := range feeds {
+	for _, feed := range b.allSourceConfigs() {
 		if !feed.Enabled || !cronMatches(normalizeSchedule(feed.Schedule), at) {
 			continue
 		}
 		if !feed.LastSyncedAt.IsZero() && feed.LastSyncedAt.Year() == at.Year() && feed.LastSyncedAt.YearDay() == at.YearDay() && feed.LastSyncedAt.Hour() == at.Hour() && feed.LastSyncedAt.Minute() == at.Minute() {
 			continue
 		}
-		_, _ = b.syncSource(feed, false)
+		b.enqueueSourceSync(feed, false)
 	}
 }
 
@@ -6105,12 +6106,7 @@ func (b *BilibiliStore) twitterSubscriptionsHandler(w http.ResponseWriter, r *ht
 			writeAPIError(w, http.StatusNotFound, "推特来源不存在")
 			return
 		}
-		updated, err := b.syncSource(feed, r.URL.Query().Get("action") == "resync")
-		if err != nil {
-			writeJSON(w, map[string]any{"status": "failed", "message": err.Error(), "source": updated})
-			return
-		}
-		writeJSON(w, map[string]any{"status": "completed", "message": updated.LastSyncMessage, "source": updated})
+		b.respondSourceSync(w, r, feed)
 		return
 	}
 	if r.Method == http.MethodPut {
@@ -6308,12 +6304,7 @@ func (b *BilibiliStore) pixivSubscriptionsHandler(w http.ResponseWriter, r *http
 			writeAPIError(w, http.StatusNotFound, "Pixiv 来源不存在")
 			return
 		}
-		updated, err := b.syncSource(feed, r.URL.Query().Get("action") == "resync")
-		if err != nil {
-			writeJSON(w, map[string]any{"status": "failed", "message": err.Error(), "source": updated})
-			return
-		}
-		writeJSON(w, map[string]any{"status": "completed", "message": updated.LastSyncMessage, "source": updated})
+		b.respondSourceSync(w, r, feed)
 		return
 	}
 	if r.Method == http.MethodPut {
@@ -7163,12 +7154,7 @@ func (b *BilibiliStore) weiboSubscriptionsHandler(w http.ResponseWriter, r *http
 			writeAPIError(w, http.StatusNotFound, "微博订阅不存在")
 			return
 		}
-		updated, err := b.syncSource(feed, r.URL.Query().Get("action") == "resync")
-		if err != nil {
-			writeJSON(w, map[string]any{"status": "failed", "message": err.Error(), "source": updated})
-			return
-		}
-		writeJSON(w, map[string]any{"status": "completed", "message": updated.LastSyncMessage, "source": updated})
+		b.respondSourceSync(w, r, feed)
 		return
 	}
 	if r.Method == http.MethodPut {
@@ -7818,6 +7804,8 @@ func main() {
 	mux.HandleFunc("/api/posts/reset", bilibili.resetPostHandler)
 	mux.HandleFunc("/api/feeds", store.feedsHandler)
 	mux.HandleFunc("/api/sync", bilibili.syncHandler)
+	mux.HandleFunc("/api/sync/tasks", bilibili.syncTasksHandler)
+	mux.HandleFunc("/api/sync/status", bilibili.syncStatusHandler)
 	mux.HandleFunc("/api/bilibili/account", bilibili.accountHandler)
 	mux.HandleFunc("/api/bilibili/qr", bilibili.bilibiliQRHandler)
 	mux.HandleFunc("/api/pixiv/account", bilibili.pixivHandler)

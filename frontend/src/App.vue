@@ -9,7 +9,7 @@ import DetailImage from './components/DetailImage.vue'
 import CredentialField from './components/CredentialField.vue'
 import NotificationToasts from './components/NotificationToasts.vue'
 import { notifications, notify } from './notifications'
-import { ListChecks, RotateCcw, Trash2, ChevronLeft, ChevronRight, Plus, KeyRound, Network, SlidersHorizontal, Archive, UserRound, QrCode, X, Download, Upload, Monitor, Smartphone } from '@lucide/vue'
+import { ListChecks, RotateCcw, Trash2, ChevronLeft, ChevronRight, Plus, KeyRound, Network, SlidersHorizontal, Archive, UserRound, QrCode, X, Download, Upload, Monitor, Smartphone, Clock } from '@lucide/vue'
 import FavoriteHeart from './components/FavoriteHeart.vue'
 import TimelineStats from './components/TimelineStats.vue'
 import QRCode from 'qrcode'
@@ -95,6 +95,12 @@ function pageCredentials(direction) {
 }
 const sourceActionBusy = ref('')
 const sourceActionMessage = ref('')
+const localSourceSyncs = shallowReactive(new Map())
+const activeSourceSyncs = shallowRef(new Map())
+let sourceSyncPollTimer = 0
+let sourceSyncPollRequest = null
+let sourceSyncDisposed = false
+let sourceFeedsVersion = 0
 const confirmDialog = ref({ open: false, title: '', message: '', confirmText: '确认', cancelText: '取消', tone: 'danger' })
 let confirmResolver = null
 const loginBusy = ref(false)
@@ -1203,6 +1209,7 @@ async function loadProjectSettings() {
   } catch {}
 }
 async function loadFeeds(fallbackFeed = null) {
+  const version = ++sourceFeedsVersion
   const endpoints = ['/api/feeds', '/api/bilibili/subscriptions', '/api/weibo/subscriptions', '/api/pixiv/subscriptions', '/api/twitter/subscriptions']
   const responses = await Promise.allSettled(endpoints.map(endpoint => fetch(endpoint, { cache: 'no-store' })))
   const loaded = []
@@ -1219,6 +1226,7 @@ async function loadFeeds(fallbackFeed = null) {
   for (const feed of loaded) {
     if (feed?.id) unique.set(feed.id, feed)
   }
+  if (version !== sourceFeedsVersion) return false
   feeds.value = [...unique.values()]
   return true
 }
@@ -1761,6 +1769,7 @@ function openFeedSettings(feed) {
 }
 async function saveFeedSettings() {
   if (!selectedFeed.value) return
+  if (sourceSyncTask(selectedFeed.value.id)) { reportSource('请等待此订阅同步完成后再保存设置', 'error'); return }
   settingsBusy.value = true; settingsError.value = ''
   try {
     selectedFeed.value.tags = parseTagInput(selectedFeed.value.tagInput)
@@ -1794,7 +1803,7 @@ function sourceOperationEndpoint(feed) {
   return '/api/feeds'
 }
 async function toggleFeedEnabled(feed) {
-  if (!feed || sourceActionBusy.value) return
+  if (!feed || sourceActionBusy.value || sourceSyncTask(feed.id)) return
   const enabled = !feed.enabled
   sourceActionBusy.value = `toggle:${feed.id}`
   sourceActionMessage.value = ''
@@ -1817,23 +1826,136 @@ async function toggleFeedEnabled(feed) {
     sourceActionBusy.value = ''
   }
 }
-async function syncSource(feed, full = false) {
-  const action = full ? 'resync' : 'sync'
-  sourceActionBusy.value = `${action}:${feed.id}`; sourceActionMessage.value = ''; settingsError.value = ''
-  const endpoint = sourceOperationEndpoint(feed)
-  try {
-    const response = await fetch(`${endpoint}?action=${action}&id=${encodeURIComponent(feed.id)}`, { method: 'POST' })
-    const result = await response.json()
-    if (!response.ok && result.status !== 'failed') throw new Error(result.error || '无法启动来源拉取')
-    reportSource(result.message || '拉取任务已完成', !response.ok || result.status === 'failed' ? 'error' : 'success')
-    const updated = result.source; const index = feeds.value.findIndex(item => item.id === feed.id)
-    if (updated && index >= 0) feeds.value[index] = updated
-    if (updated && selectedPlatform.value) {
-      const platformIndex = selectedPlatform.value.feeds.findIndex(item => item.id === feed.id)
-      if (platformIndex >= 0) selectedPlatform.value.feeds[platformIndex] = updated
+const sourceSyncLabels = { submitting: '提交中', queued: '排队中', running: '同步中' }
+function sourceSyncTask(sourceId) {
+  const local = localSourceSyncs.get(sourceId)
+  const active = activeSourceSyncs.value.get(sourceId)
+  return local && active?.id !== local.id ? local : active || local
+}
+function sourceSyncLabel(sourceId) { return sourceSyncLabels[sourceSyncTask(sourceId)?.status] || '' }
+function sourceSyncBlocked(feed) {
+  return Boolean(sourceSyncTask(feed.id) || sourceActionBusy.value === `toggle:${feed.id}` || sourceActionBusy.value === `delete:${feed.id}` ||
+    (settingsBusy.value && selectedFeed.value?.id === feed.id) || postActionBusy.value === `author:${feed.source}:${feed.name}`)
+}
+function applySourceSyncResult(task, local) {
+  const updated = task.source
+  let applied = false
+  if (updated?.id) {
+    const update = list => {
+      const index = list.findIndex(feed => feed.id === task.sourceId || feed.id === updated.id)
+      if (index < 0 || Date.parse(list[index].lastSyncedAt) > Date.parse(updated.lastSyncedAt)) return
+      list[index] = updated
+      applied = true
     }
-    if (result.status !== 'failed') void loadPostsIncrementally()
-  } catch (error) { settingsError.value = error.message } finally { sourceActionBusy.value = '' }
+    update(feeds.value)
+    if (selectedPlatform.value) update(selectedPlatform.value.feeds)
+    if (applied) sourceFeedsVersion++
+  }
+  if (local) {
+    localSourceSyncs.delete(task.sourceId)
+    const failed = task.status === 'failed'
+    reportSource(`“${local.name}”：${task.message || (failed ? '同步失败' : '拉取任务已完成')}`, failed ? 'error' : 'success')
+  }
+  return applied
+}
+async function refreshSourceSyncFeeds() {
+  if (!await loadFeeds()) return
+  const platform = selectedPlatform.value
+  if (platform) platform.feeds = feeds.value.filter(feed => feed.source === platform.key)
+}
+const shouldPollSourceSyncs = computed(() => authenticated.value && (localSourceSyncs.size > 0 || activeNav.value === 'pulls' || Boolean(selectedPlatform.value)))
+function scheduleSourceSyncPoll(delay) {
+  if (sourceSyncDisposed || !shouldPollSourceSyncs.value || sourceSyncPollRequest) return
+  window.clearTimeout(sourceSyncPollTimer)
+  sourceSyncPollTimer = window.setTimeout(pollSourceSyncs, delay)
+}
+function stopSourceSyncPolling() {
+  window.clearTimeout(sourceSyncPollTimer)
+  sourceSyncPollRequest?.abort()
+  sourceSyncPollRequest = null
+  activeSourceSyncs.value = new Map()
+}
+async function pollSourceSyncs() {
+  const controller = new AbortController()
+  sourceSyncPollRequest = controller
+  const timeout = window.setTimeout(() => controller.abort(), 10_000)
+  const previous = activeSourceSyncs.value
+  // Keep one short status request even with many tasks waiting in the queue.
+  const tracked = new Map([...localSourceSyncs.values(), ...previous.values()].filter(task => task.id).map(task => [task.id, task]))
+  const ids = [...tracked.keys()].slice(0, 100)
+  try {
+    const query = ids.length ? `?ids=${encodeURIComponent(ids.join(','))}` : ''
+    const response = await fetch(`/api/sync/status${query}`, { signal: controller.signal, cache: 'no-store' })
+    if (!response.ok) return
+    const { tasks } = await response.json()
+    if (sourceSyncPollRequest !== controller || !Array.isArray(tasks)) return
+    const active = new Map()
+    const seen = new Set()
+    let refreshPosts = false
+    let refreshSources = false
+    for (const task of tasks) {
+      seen.add(task.id)
+      if (task.status === 'queued' || task.status === 'running') {
+        active.set(task.sourceId, task)
+      } else if ((task.status === 'completed' || task.status === 'failed') && tracked.has(task.id)) {
+        const local = localSourceSyncs.get(task.sourceId)
+        const applied = applySourceSyncResult(task, local?.id === task.id ? local : null)
+        refreshPosts ||= task.status === 'completed'
+        refreshSources ||= !applied
+      }
+    }
+    activeSourceSyncs.value = active
+    // Completed background tasks outside this batch are no longer in the active list.
+    if ([...previous.values()].some(task => !seen.has(task.id))) refreshSources = true
+    for (const id of ids) {
+      if (seen.has(id)) continue
+      const task = tracked.get(id)
+      const local = localSourceSyncs.get(task.sourceId)
+      if (local?.id === id) {
+        localSourceSyncs.delete(task.sourceId)
+        reportSource(`“${local.name}”：同步状态已失效，请核对订阅的拉取结果`, 'error')
+      }
+      refreshSources = true
+    }
+    if (refreshSources) void refreshSourceSyncFeeds()
+    if (refreshPosts) void loadPostsIncrementally()
+  } catch {} finally {
+    window.clearTimeout(timeout)
+    if (sourceSyncPollRequest === controller) {
+      sourceSyncPollRequest = null
+      scheduleSourceSyncPoll(localSourceSyncs.size || activeSourceSyncs.value.size ? 1500 : 5000)
+    }
+  }
+}
+watch(shouldPollSourceSyncs, enabled => enabled ? scheduleSourceSyncPoll(0) : stopSourceSyncPolling())
+watch(authenticated, loggedIn => { if (!loggedIn) { sourceFeedsVersion++; localSourceSyncs.clear() } })
+onUnmounted(() => { sourceSyncDisposed = true; sourceFeedsVersion++; localSourceSyncs.clear(); stopSourceSyncPolling() })
+async function syncSource(feed, full = false) {
+  if (sourceSyncBlocked(feed)) return
+  const submission = { sourceId: feed.id, full, name: feed.name, status: 'submitting' }
+  localSourceSyncs.set(feed.id, submission)
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), 10_000)
+  try {
+    const response = await fetch('/api/sync/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sourceId: feed.id, full }), signal: controller.signal })
+    if (!response.ok) throw new Error(await responseError(response, '无法启动来源拉取'))
+    const task = await response.json()
+    if (localSourceSyncs.get(feed.id) !== submission) return
+    if (!task.id || task.sourceId !== feed.id) throw new Error('无法读取同步状态')
+    if (task.status === 'completed' || task.status === 'failed') {
+      if (!applySourceSyncResult(task, submission)) void refreshSourceSyncFeeds()
+      if (task.status === 'completed') void loadPostsIncrementally()
+    } else if (task.status === 'queued' || task.status === 'running') {
+      localSourceSyncs.set(feed.id, { ...submission, ...task })
+    } else throw new Error('无法读取同步状态')
+  } catch (error) {
+    if (localSourceSyncs.get(feed.id) !== submission) return
+    localSourceSyncs.delete(feed.id)
+    reportSource(`“${feed.name}”：${error.name === 'AbortError' ? '提交超时，请核对同步状态' : error.message}`, 'error')
+  } finally {
+    window.clearTimeout(timeout)
+    scheduleSourceSyncPoll(0)
+  }
 }
 async function closeConfirmDialog(result = false) {
   confirmDialog.value.open = false
@@ -2858,12 +2980,13 @@ function handleGlobalKeydown(event) {
   if (event.key === 'Enter') closeConfirmDialog(true)
 }
 async function deleteSource(feed) {
+  if (sourceActionBusy.value || sourceSyncTask(feed.id)) return
   const confirmed = await askConfirm({
     title: '删除订阅',
     message: `确定删除“${feed.name}”的订阅吗？已采集到 /flow 的文件会保留。`,
     confirmText: '删除订阅'
   })
-  if (!confirmed) return
+  if (!confirmed || sourceActionBusy.value || sourceSyncTask(feed.id)) return
   sourceActionBusy.value = `delete:${feed.id}`; sourceActionMessage.value = ''; settingsError.value = ''
   const endpoint = sourceOperationEndpoint(feed)
   try {
@@ -3156,11 +3279,13 @@ async function unfavoriteSelectedPosts() {
     stopSelection()
   } catch (error) { reportTimeline(error.message, 'error') } finally { postActionBusy.value = '' }
 }
-async function deleteAuthorPosts(source, author) {
+async function deleteAuthorPosts(feed) {
+  if (sourceActionBusy.value || postActionBusy.value || sourceSyncTask(feed.id)) return
+  const { source, name: author } = feed
   const count = posts.value.filter(post => post.source === source && post.author === author).length
   const countText = '全部动态记录'
   const confirmed = await askConfirm({ title: '删除作者全部动态', message: `确定永久删除“${author}”的${countText}及其 /flow 内容目录吗？订阅关系会保留，后续同步仍可重新创建目录并拉取。`, confirmText: '删除动态及文件' })
-  if (!confirmed) return
+  if (!confirmed || sourceActionBusy.value || postActionBusy.value || sourceSyncTask(feed.id)) return
   postActionBusy.value = `author:${source}:${author}`
   try {
     const response = await fetch('/api/posts', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source, author }) })
@@ -5155,8 +5280,8 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
         <article v-for="feed in pagedFeeds" :key="feed.id" class="pull-card">
           <button class="pull-avatar-button" type="button" :title="`查看 ${feed.name} 的动态`" :aria-label="`查看 ${feed.name} 的动态`" @click="openFeedAuthor(feed)"><img :key="`${feed.id}:${sourceAvatar(feed, platformCardForSource(feed.source))}`" class="pull-avatar" :src="sourceAvatar(feed, platformCardForSource(feed.source))" data-fallback-index="0" :alt="feed.name" referrerpolicy="no-referrer" @error="handleSourceAvatarError($event, feed, platformCardForSource(feed.source))"></button>
           <div class="pull-info"><div class="pull-title"><strong>{{ feed.name }}</strong><span :class="['source-pill', sourceMeta[feed.source].color]"><img :class="['source-icon', { 'twitter-night-icon': feed.source === 'twitter' && isDark }]" :src="sourceIconFor(feed.source)" :alt="sourceMeta[feed.source].label">{{ sourceMeta[feed.source].label }}</span></div><span class="pull-handle">{{ feed.handle }}</span><small v-if="feed.lastSyncStatus !== 'success' || feed.lastSyncWarning" class="sync-message" :class="{ 'sync-scope-warning': feed.lastSyncWarning }" tabindex="0" :aria-label="feedSyncMessage(feed)"><span class="sync-message-ellipsis">{{ feedSyncMessage(feed) }}</span><span class="sync-message-tooltip" role="tooltip">{{ feedSyncMessage(feed) }}</span></small></div>
-          <div class="pull-status"><i :class="['pull-dot', feed.lastSyncStatus]"></i><span>{{ feed.lastSyncStatus === 'success' ? `新增 ${feed.lastSyncCount || 0} 条` : feed.lastSyncStatus === 'failed' ? '拉取失败' : '待拉取' }}</span></div>
-          <div class="pull-actions"><button class="pull-action" :aria-label="`同步 ${feed.name}`" :disabled="sourceActionBusy !== ''" @click="syncSource(feed)"><svg :class="{ spin: sourceActionBusy === `sync:${feed.id}` }" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 9a7 7 0 0 1 11.4-2.5L20 9M4 15l2.5 2.5A7 7 0 0 0 17.9 15"/></svg><span>{{ sourceActionBusy === `sync:${feed.id}` ? '同步中' : '同步' }}</span></button></div>
+          <div class="pull-status" role="status"><i :class="['pull-dot', sourceSyncTask(feed.id)?.status || feed.lastSyncStatus]" aria-hidden="true"></i><span>{{ sourceSyncLabel(feed.id) || (feed.lastSyncStatus === 'success' ? `新增 ${feed.lastSyncCount || 0} 条` : feed.lastSyncStatus === 'failed' ? '拉取失败' : '待拉取') }}</span></div>
+          <div class="pull-actions"><button class="pull-action source-sync-control" type="button" :aria-label="sourceSyncLabel(feed.id) ? `${feed.name}：${sourceSyncLabel(feed.id)}` : `同步 ${feed.name}`" :aria-busy="Boolean(sourceSyncTask(feed.id))" :disabled="sourceSyncBlocked(feed)" @click="syncSource(feed)"><Clock v-if="sourceSyncTask(feed.id)?.status === 'queued'" aria-hidden="true" /><svg v-else :class="{ spin: sourceSyncTask(feed.id)?.status === 'running' }" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 9a7 7 0 0 1 11.4-2.5L20 9M4 15l2.5 2.5A7 7 0 0 0 17.9 15"/></svg><span>同步</span></button></div>
         </article>
         <div v-if="!feeds.length" class="empty">还没有订阅内容，请先添加 UP 主、博主、画师或账号收藏来源。</div>
       </section>
@@ -5623,13 +5748,13 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
           <article v-for="feed in selectedPlatform.feeds" :key="feed.id">
             <button class="configured-source-avatar-button" type="button" :title="`查看 ${feed.name} 的动态`" :aria-label="`查看 ${feed.name} 的动态`" @click="openFeedAuthor(feed)"><img :key="`${feed.id}:${sourceAvatar(feed, selectedPlatform)}`" class="configured-source-avatar" :src="sourceAvatar(feed, selectedPlatform)" data-fallback-index="0" :alt="`${feed.name}头像`" referrerpolicy="no-referrer" @error="handleSourceAvatarError($event, feed, selectedPlatform)"></button>
             <div><strong>{{ feed.name }}</strong><span>{{ feed.handle }} · {{ feed.schedule }}</span><div v-if="feed.tags?.length" class="source-tag-preview"><b v-for="tag in feed.tags" :key="tag">#{{ tag }}</b></div><small>{{ feed.storagePath || `${selectedPlatform.path}/${feed.name}` }}</small></div>
-            <button :class="['source-enabled-toggle', { disabled: !feed.enabled }]" type="button" data-tooltip-disabled="true" :disabled="sourceActionBusy !== ''" :aria-label="feed.enabled ? '自动同步已启用，点击停用' : '自动同步已停用，点击启用'" @click="toggleFeedEnabled(feed)"><i></i>{{ sourceActionBusy === `toggle:${feed.id}` ? '保存中' : feed.enabled ? '同步中' : '已停用' }}</button>
+            <button :class="['source-enabled-toggle', { disabled: !feed.enabled && !sourceSyncTask(feed.id) }]" type="button" data-tooltip-disabled="true" :disabled="sourceActionBusy !== '' || Boolean(sourceSyncTask(feed.id))" :aria-label="sourceSyncLabel(feed.id) || (feed.enabled ? '自动同步已启用，点击停用' : '自动同步已停用，点击启用')" @click="toggleFeedEnabled(feed)"><i :class="sourceSyncTask(feed.id)?.status" aria-hidden="true"></i>{{ sourceSyncLabel(feed.id) || (sourceActionBusy === `toggle:${feed.id}` ? '保存中' : feed.enabled ? '已启用' : '已停用') }}</button>
             <div class="source-row-actions">
-              <button class="source-icon-action" type="button" data-tooltip-disabled="true" aria-label="立即拉取" @click="syncSource(feed)" :disabled="sourceActionBusy !== ''"><svg :class="{ spin: sourceActionBusy === `sync:${feed.id}` }" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 9a7 7 0 0 1 11.4-2.5L20 9M4 15l2.5 2.5A7 7 0 0 0 17.9 15"/></svg></button>
-              <button class="source-icon-action" title="获取历史动态" aria-label="获取历史动态" @click="syncSource(feed, true)" :disabled="sourceActionBusy !== ''"><svg :class="{ spin: sourceActionBusy === `resync:${feed.id}` }" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg></button>
+              <button class="source-icon-action source-sync-control" type="button" data-tooltip-disabled="true" aria-label="立即拉取" :aria-busy="Boolean(sourceSyncTask(feed.id) && !sourceSyncTask(feed.id).full)" @click="syncSource(feed)" :disabled="sourceSyncBlocked(feed)"><Clock v-if="sourceSyncTask(feed.id)?.status === 'queued' && !sourceSyncTask(feed.id).full" aria-hidden="true" /><svg v-else :class="{ spin: sourceSyncTask(feed.id)?.status === 'running' && !sourceSyncTask(feed.id).full }" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 9a7 7 0 0 1 11.4-2.5L20 9M4 15l2.5 2.5A7 7 0 0 0 17.9 15"/></svg></button>
+              <button class="source-icon-action source-sync-control" type="button" title="获取历史动态" aria-label="获取历史动态" :aria-busy="Boolean(sourceSyncTask(feed.id)?.full)" @click="syncSource(feed, true)" :disabled="sourceSyncBlocked(feed)"><Clock v-if="sourceSyncTask(feed.id)?.status === 'queued' && sourceSyncTask(feed.id).full" aria-hidden="true" /><svg v-else :class="{ spin: sourceSyncTask(feed.id)?.status === 'running' && sourceSyncTask(feed.id).full }" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg></button>
               <button class="source-icon-action" title="订阅设置" aria-label="订阅设置" @click="openFeedSettings(feed)"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg></button>
-              <button class="source-icon-action delete-posts-button" title="删除全部动态" aria-label="删除全部动态" @click="deleteAuthorPosts(feed.source, feed.name)" :disabled="sourceActionBusy !== '' || postActionBusy !== ''"><span class="action-icon-mask" :style="{ '--action-icon-mask': `url(${deleteIcon})` }" aria-hidden="true"></span></button>
-              <button class="source-icon-action delete-source-button" title="删除订阅" aria-label="删除订阅" @click="deleteSource(feed)" :disabled="sourceActionBusy !== ''"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+              <button class="source-icon-action delete-posts-button" title="删除全部动态" aria-label="删除全部动态" @click="deleteAuthorPosts(feed)" :disabled="sourceActionBusy !== '' || postActionBusy !== '' || Boolean(sourceSyncTask(feed.id))"><span class="action-icon-mask" :style="{ '--action-icon-mask': `url(${deleteIcon})` }" aria-hidden="true"></span></button>
+              <button class="source-icon-action delete-source-button" title="删除订阅" aria-label="删除订阅" @click="deleteSource(feed)" :disabled="sourceActionBusy !== '' || Boolean(sourceSyncTask(feed.id))"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
             </div>
           </article>
           <div v-if="!selectedPlatform.feeds.length" class="platform-empty"><span>＋</span><strong>还没有作者来源</strong><p>{{ platformEmptyMessage(selectedPlatform.key) }}</p></div>
@@ -5657,7 +5782,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
             <label><input v-model="selectedFeed.enabled" type="checkbox"><span>启用自动同步</span></label>
           </div>
           <div v-if="selectedFeed.source === 'bilibili' && !selectedFeed.id.startsWith('bili-opus-favorites-')" class="content-scope"><strong>内容范围</strong><label><input v-model="selectedFeed.contentTypes" type="checkbox" value="DRAW"><span>图文动态（DRAW）</span></label><label><input v-model="selectedFeed.contentTypes" type="checkbox" value="ARTICLE"><span>专栏（ARTICLE）</span></label><small>图文动态默认开启；取消勾选后不再拉取图文动态。</small></div>
-          <p v-if="settingsError" class="login-error">{{ settingsError }}</p><button class="login-button" :disabled="settingsBusy">保存来源设置</button>
+          <p v-if="settingsError" class="login-error">{{ settingsError }}</p><button class="login-button" :disabled="settingsBusy || Boolean(sourceSyncTask(selectedFeed.id))">{{ sourceSyncLabel(selectedFeed.id) || '保存来源设置' }}</button>
         </form>
       </div>
     </div>

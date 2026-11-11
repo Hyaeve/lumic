@@ -527,6 +527,11 @@ body, button, input, textarea, select { font-size: 14px; }
 .pull-action.secondary { color: #6f766f; background: transparent; border: 1px solid var(--line); }
 .pull-action { display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 12px; white-space: nowrap; }
 .pull-action svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.pull-dot.running { background: #72a783; }
+.configured-source-list article .source-enabled-toggle i:is(.queued, .submitting) { background: #c49a5d; box-shadow: none; }
+@media (prefers-reduced-motion: reduce) {
+  .source-sync-control .spin { animation: none; }
+}
 
 /* Liked timeline, Twitter source, and larger full-image previews */
 .source-pill.twitter { color: #536e82; background: #e4edf2; }
