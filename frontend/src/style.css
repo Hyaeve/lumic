@@ -495,6 +495,15 @@ button[data-tooltip]:hover > .app-tooltip, button[data-tooltip]:focus-visible > 
 .subscription-pagination span { min-width: 42px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; text-align: center; }
 .dark .subscription-pagination button { color: #b8c4dc; background: #17191e; border-color: #2d3039; }
 .dark .subscription-pagination button:hover:not(:disabled) { color: #f2dfa0; background: #22252d; border-color: #4a4434; }
+@media (min-width: 761px) {
+  .app-shell:has(> .pulls-page) { --subscription-footer-inset: 36px; }
+  .app-shell:not(.phone-ui) > .content.pulls-page { display: flex; flex-direction: column; min-height: 100dvh; padding-bottom: var(--subscription-footer-inset); }
+  .app-shell:not(.phone-ui) > .pulls-page > * { flex-shrink: 0; }
+  .app-shell:not(.phone-ui) > .pulls-page > .pull-list { margin-bottom: 24px; }
+  .app-shell:not(.phone-ui) > .pulls-page > .subscription-pagination { min-height: 44px; margin-top: auto; }
+  .app-shell:not(.phone-ui) > .pulls-page:not(:has(> .subscription-pagination))::after { content: ''; display: block; flex: none; height: 44px; margin-top: auto; }
+  .app-shell:not(.phone-ui):has(> .pulls-page) > .add-fab { bottom: var(--subscription-footer-inset); }
+}
 @media (max-width: 1150px) { .settings-page { padding: 25px 32px 55px; }.settings-page .platform-source-grid, .pulls-page .platform-source-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }.settings-page .platform-auth-grid { overflow-x: auto; grid-template-columns: repeat(4, minmax(250px, 1fr)); padding-bottom: 8px; } }
 @media (max-width: 980px) { .settings-window-grid { grid-template-columns: 1fr; } }
 @media (min-width: 981px) and (max-width: 1320px) { .settings-window-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
