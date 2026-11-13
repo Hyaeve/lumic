@@ -115,6 +115,7 @@ func registerAPIV1Routes(mux *http.ServeMux, sessions *SessionStore, auth *AuthC
 	mux.HandleFunc("/api/v1/auth/logout", apiV1LogoutHandler(sessions))
 	mux.HandleFunc("/api/v1/posts", apiV1PostsHandler(store))
 	mux.HandleFunc("/api/v1/posts/reset", platforms.resetPostHandler)
+	mux.HandleFunc("/api/v1/posts/reset/tasks", platforms.resetTasksHandler)
 	mux.HandleFunc("/api/v1/gallery", apiV1GalleryHandler(store))
 	mux.HandleFunc("/api/v1/feeds", apiV1FeedsHandler(store, platforms))
 	mux.HandleFunc("/api/v1/sync", platforms.syncHandler)

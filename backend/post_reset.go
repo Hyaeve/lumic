@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -180,22 +181,35 @@ func (b *BilibiliStore) resetPostHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	defer b.resetMu.Unlock()
+	updated, status, err := b.resetPost(r.Context(), input.ID)
+	if err != nil {
+		if r.Context().Err() == nil {
+			writeAPIError(w, status, err.Error())
+		}
+		return
+	}
+	writeJSON(w, map[string]any{"post": updated, "message": "动态已重新拉取"})
+}
+
+// The caller holds resetMu for this operation, including background batch items.
+func (b *BilibiliStore) resetPost(ctx context.Context, id string) (Post, int, error) {
+	if err := ctx.Err(); err != nil {
+		return Post{}, 0, err
+	}
 	b.content.RLock()
 	var stored Post
 	for _, post := range b.content.posts {
-		if post.ID == input.ID {
+		if post.ID == id {
 			stored = post
 			break
 		}
 	}
 	b.content.RUnlock()
 	if stored.ID == "" {
-		writeAPIError(w, 404, "动态不存在或已删除")
-		return
+		return Post{}, 404, errors.New("动态不存在或已删除")
 	}
 	if _, err := resetRemoteID(stored); err != nil {
-		writeAPIError(w, 400, err.Error())
-		return
+		return Post{}, 400, err
 	}
 	if !b.lastPostReset.IsZero() {
 		delay := 450 * time.Millisecond
@@ -206,8 +220,8 @@ func (b *BilibiliStore) resetPostHandler(w http.ResponseWriter, r *http.Request)
 			timer := time.NewTimer(wait)
 			defer timer.Stop()
 			select {
-			case <-r.Context().Done():
-				return
+			case <-ctx.Done():
+				return Post{}, 0, ctx.Err()
 			case <-timer.C:
 			}
 		}
@@ -227,15 +241,14 @@ func (b *BilibiliStore) resetPostHandler(w http.ResponseWriter, r *http.Request)
 	requestFeed.IncludeVideos = true
 	requestFeed.ContentTypes = []string{"DRAW", "WORD", "ARTICLE", "AV"}
 	updated, err := b.fetchResetPost(stored, requestFeed)
-	if r.Context().Err() != nil {
-		return
+	if err := ctx.Err(); err != nil {
+		return Post{}, 0, err
 	}
 	if err != nil || updated.ID != stored.ID || updated.Source != stored.Source ||
 		(!stored.Edited && ((len(stored.Media) > 0 && len(updated.Media) == 0) ||
 			(len(stored.Videos) > 0 && len(updated.Videos) == 0) || (len(stored.LivePhotos) > 0 && len(updated.LivePhotos) == 0))) {
 		log.Printf("event=post_reset_failed platform=%s post=%s stage=fetch %s", syncLogPlatform(stored.Source), sessionDigest(stored.ID)[:12], syncLogError(err))
-		writeAPIError(w, 502, "重新拉取失败：请检查平台连接、访问权限或原动态是否仍可用；原归档已保留")
-		return
+		return Post{}, 502, errors.New("重新拉取失败：请检查平台连接、访问权限或原动态是否仍可用；原归档已保留")
 	}
 	unlock := b.lockSourceArchive(feed.Source)
 	defer unlock()
@@ -243,18 +256,16 @@ func (b *BilibiliStore) resetPostHandler(w http.ResponseWriter, r *http.Request)
 	prepared, posts, err := b.archiveSourceContent(feed, []Post{updated})
 	if err != nil || prepared.LastSyncWarning != "" {
 		log.Printf("event=post_reset_failed platform=%s post=%s stage=archive %s", syncLogPlatform(stored.Source), sessionDigest(stored.ID)[:12], syncLogError(err))
-		writeAPIError(w, 502, "媒体重新归档失败；原动态已保留，请检查网络后重试")
-		return
+		return Post{}, 502, errors.New("媒体重新归档失败；原动态已保留，请检查网络后重试")
 	}
-	if r.Context().Err() != nil {
-		return
+	if err := ctx.Err(); err != nil {
+		return Post{}, 0, err
 	}
 	updated, err = b.content.replaceResetPost(stored, posts[0])
 	if err != nil {
-		writeAPIError(w, 409, err.Error())
-		return
+		return Post{}, 409, err
 	}
-	writeJSON(w, map[string]any{"post": withAvailablePostImages(updated), "message": "动态已重新拉取"})
+	return withAvailablePostImages(updated), http.StatusOK, nil
 }
 
 type bilibiliDynamicItem struct {

@@ -616,6 +616,7 @@ type BilibiliStore struct {
 	pixivArchiveMu    sync.Mutex
 	otherArchiveMu    sync.Mutex
 	resetMu           sync.Mutex
+	resetTasks        postResetTasks
 	lastPostReset     time.Time
 	weiboRecoveryMu   sync.Mutex
 	weiboRecovery     weiboRecoveryState
@@ -7802,6 +7803,7 @@ func main() {
 	mux.HandleFunc("/api/settings", settingsHandler(auth))
 	mux.HandleFunc("/api/posts", store.postsHandler)
 	mux.HandleFunc("/api/posts/reset", bilibili.resetPostHandler)
+	mux.HandleFunc("/api/posts/reset/tasks", bilibili.resetTasksHandler)
 	mux.HandleFunc("/api/feeds", store.feedsHandler)
 	mux.HandleFunc("/api/sync", bilibili.syncHandler)
 	mux.HandleFunc("/api/sync/tasks", bilibili.syncTasksHandler)

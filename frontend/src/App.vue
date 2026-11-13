@@ -184,7 +184,23 @@ const selectionMode = ref(false)
 const selectionAction = ref('delete')
 const selectedPostIds = ref([])
 const selectionBusy = ref(false)
-const selectionResetProgress = ref('')
+const postResetNoticeKey = 'lumic-reset-task-notices-v1'
+let postResetPollTimer = 0
+let postResetPollRequest = null
+let postResetPollEpoch = 0
+let postResetSubmission = 0
+let postResetDisposed = false
+let activePostResetTask = null
+let postResetProgress = ''
+let postResetProgressNotice = null
+let postResetRefreshRunning = false
+const pendingPostResetRefresh = new Set()
+const postResetRefreshRequests = new Set()
+const notifiedPostResetTasks = new Set()
+const reconciledPostResetTasks = new Set()
+const postResetPageVersions = new WeakMap()
+const postResetUpdatedVersions = new Map()
+let postResetDataVersion = 0
 const contextMenu = ref({ open: false, x: 0, y: 0, post: null })
 const timelineSort = ref('newest')
 const allTimelineOrder = ref('random')
@@ -713,14 +729,26 @@ const feedQuery = computed(() => {
 const feedQueryKey = computed(() => postQueryKey(feedQuery.value))
 const postPager = createPostPager({
   fetchPage: async (query, cursor) => {
+    const resetVersion = postResetDataVersion
     const params = new URLSearchParams({ ...query, limit: '30', cursor, statsDate: startDateTodayKey(), tzOffset: String(new Date().getTimezoneOffset()) })
     const response = await fetch(`/api/v1/posts?${params}`, { cache: 'no-store' })
     if (!response.ok) throw new Error('动态加载失败，请重试')
-    return response.json()
+    const page = await response.json()
+    postResetPageVersions.set(page, resetVersion)
+    return page
   },
   onPage: page => {
-    if (page.stats) postStats.value = page.stats
-    publishPostPage(page.items, Boolean(postActionBusy.value))
+    const resetVersion = postResetPageVersions.get(page) ?? postResetDataVersion
+    if (resetVersion === postResetDataVersion && page.stats) postStats.value = page.stats
+    const existing = new Map(posts.value.map(post => [String(post.id), post]))
+    const items = page.items.map(post => {
+      if ((postResetUpdatedVersions.get(String(post.id)) || 0) <= resetVersion) return post
+      pendingPostResetRefresh.add(String(post.id))
+      return existing.get(String(post.id)) || post
+    })
+    publishPostPage(items, Boolean(postActionBusy.value))
+    if (resetVersion !== postResetDataVersion) void refreshPostResetMetadata(postResetPollEpoch)
+    void refreshPostResetPosts()
   },
   onChange: () => { pagerRevision.value++; nextTick(scheduleTimelineWindow) }
 })
@@ -3202,39 +3230,207 @@ async function resetSelectedPosts() {
   if (!selectedPostCount.value || selectionBusy.value || postActionBusy.value) return
   const ids = [...selectedPostIds.value]
   const epoch = selectionEpoch
+  let submission = 0
   selectionBusy.value = true
   try {
     const confirmed = await askConfirm({ title: `重新拉取 ${ids.length} 条动态？`, message: '将覆盖手动编辑的正文和图片，保留收藏与来源。', confirmText: '重置', compact: true })
     if (!confirmed || epoch !== selectionEpoch) return
+    submission = ++postResetSubmission
     postActionBusy.value = 'batch-reset'
-    let completed = 0
-    const failed = []
-    for (const id of ids) {
-      if (epoch !== selectionEpoch) break
-      selectionResetProgress.value = `${completed + failed.length + 1} / ${ids.length}`
-      try {
-        const response = await fetch('/api/posts/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) })
-        if (!response.ok) throw new Error(await responseError(response, '重新拉取失败'))
-        const result = await response.json()
-        if (result.post?.id !== id) throw new Error('返回的动态编号不匹配')
-        applyEditedPost(result.post)
-        completed++
-      } catch (error) {
-        failed.push(id)
-        reportTimeline(error.message, 'error')
-      }
-    }
-    const stillSelecting = epoch === selectionEpoch
-    if (stillSelecting) stopSelection()
-    void refreshFeedMetadata()
-    const summary = failed.length ? `已重置 ${completed} 条，${failed.length} 条失败` : `已重新拉取 ${completed} 条动态`
-    reportTimeline(stillSelecting ? summary : `重置已停止：${summary}`, failed.length ? 'error' : 'success')
-  } finally {
-    postActionBusy.value = ''
-    selectionResetProgress.value = ''
+    stopSelection()
     selectionBusy.value = false
+    const sessionEpoch = postResetPollEpoch
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort(), 10_000)
+    try {
+      // The server owns the accepted batch, including after this page closes.
+      const body = JSON.stringify({ ids })
+      const response = await fetch('/api/posts/reset/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, signal: controller.signal, keepalive: new TextEncoder().encode(body).byteLength < 60 * 1024 })
+      if (!response.ok) throw new Error(await responseError(response, '无法启动重新拉取任务'))
+      const task = await response.json()
+      if (!task.id || !['running', 'completed', 'failed'].includes(task.status)) throw new Error('无法读取重新拉取任务状态')
+      if (authenticated.value && sessionEpoch === postResetPollEpoch) acceptPostResetTasks([task])
+    } catch (error) {
+      if (authenticated.value && sessionEpoch === postResetPollEpoch) reportTimeline(error.name === 'AbortError' ? '提交超时，将继续查询后台重置状态' : error.message, 'error')
+    } finally {
+      window.clearTimeout(timeout)
+      schedulePostResetPoll(0)
+    }
+  } finally {
+    if (submission && submission === postResetSubmission && postActionBusy.value === 'batch-reset') postActionBusy.value = ''
+    if (!submission) selectionBusy.value = false
   }
 }
+function readPostResetNotices() {
+  try {
+    const ids = JSON.parse(localStorage.getItem(postResetNoticeKey) || '[]')
+    if (Array.isArray(ids)) for (const id of ids.slice(-128)) if (typeof id === 'string') notifiedPostResetTasks.add(id)
+  } catch {}
+}
+function rememberPostResetNotices(tasks) {
+  for (const task of [...tasks].reverse()) notifiedPostResetTasks.add(task.id)
+  const ids = [...notifiedPostResetTasks].slice(-128)
+  notifiedPostResetTasks.clear()
+  for (const id of ids) notifiedPostResetTasks.add(id)
+  try { localStorage.setItem(postResetNoticeKey, JSON.stringify(ids)) } catch {}
+}
+function acceptPostResetTasks(tasks) {
+  readPostResetNotices()
+  const valid = tasks.filter(task => task && typeof task.id === 'string')
+  const completed = valid.filter(task => task.status === 'completed' || task.status === 'failed')
+  const unseen = completed.filter(task => !notifiedPostResetTasks.has(task.id))
+  const unreconciled = completed.filter(task => !reconciledPostResetTasks.has(task.id))
+  if (unseen.length) {
+    rememberPostResetNotices(completed)
+    if (postResetProgressNotice) notifications.dismiss(postResetProgressNotice)
+    postResetProgressNotice = null
+    const latest = unseen[0]
+    reportTimeline(latest.message || `已重置 ${Math.max(0, latest.completed - latest.failed)} 条动态${latest.failed ? `，${latest.failed} 条失败` : ''}`, latest.failed ? 'error' : 'success')
+  }
+  if (unreconciled.length) {
+    for (const task of [...unreconciled].reverse()) reconciledPostResetTasks.add(task.id)
+    while (reconciledPostResetTasks.size > 128) reconciledPostResetTasks.delete(reconciledPostResetTasks.values().next().value)
+    const changed = new Set(unreconciled.flatMap(task => Array.isArray(task.updatedIds) ? task.updatedIds.map(String) : []))
+    postResetDataVersion++
+    for (const id of changed) {
+      postResetUpdatedVersions.delete(id)
+      postResetUpdatedVersions.set(id, postResetDataVersion)
+    }
+    while (postResetUpdatedVersions.size > 32_000) postResetUpdatedVersions.delete(postResetUpdatedVersions.keys().next().value)
+    for (const post of posts.value) if (changed.has(String(post.id))) pendingPostResetRefresh.add(String(post.id))
+    if (changed.has(String(masonryDetailPost.value?.id))) pendingPostResetRefresh.add(String(masonryDetailPost.value.id))
+    postPager.invalidate(query => postQueryKey(query) !== feedQueryKey.value)
+    void refreshPostResetMetadata(postResetPollEpoch)
+  }
+  activePostResetTask = valid.find(task => task.status === 'running' && !notifiedPostResetTasks.has(task.id)) || null
+  if (activePostResetTask) {
+    const task = activePostResetTask
+    const progress = `${task.id}:${task.completed}:${task.failed}`
+    if (progress !== postResetProgress) {
+      if (postResetProgressNotice) notifications.dismiss(postResetProgressNotice)
+      postResetProgress = progress
+      postResetProgressNotice = notify(`后台重新拉取：${task.completed}/${task.total}${task.failed ? `，${task.failed} 条失败` : ''}`)
+    }
+  } else {
+    postResetProgress = ''
+    if (postResetProgressNotice) notifications.dismiss(postResetProgressNotice)
+    postResetProgressNotice = null
+  }
+  void refreshPostResetPosts()
+}
+async function refreshPostResetMetadata(epoch) {
+  const query = { ...feedQuery.value }
+  const key = postQueryKey(query)
+  const controller = new AbortController()
+  postResetRefreshRequests.add(controller)
+  const timeout = window.setTimeout(() => controller.abort(), 10_000)
+  try {
+    const params = new URLSearchParams({ ...query, limit: '1', statsDate: startDateTodayKey(), tzOffset: String(new Date().getTimezoneOffset()) })
+    const response = await fetch(`/api/v1/posts?${params}`, { signal: controller.signal, cache: 'no-store' })
+    if (!response.ok) return
+    const page = await response.json()
+    if (!authenticated.value || epoch !== postResetPollEpoch || key !== feedQueryKey.value) return
+    if (page.stats) postStats.value = page.stats
+    postPager.entry(query).total = page.total
+    if (page.scopeStats) postPager.entry(query).scopeStats = page.scopeStats
+    pagerRevision.value++
+  } catch {} finally {
+    window.clearTimeout(timeout)
+    postResetRefreshRequests.delete(controller)
+  }
+}
+async function refreshPostResetPosts() {
+  if (postResetRefreshRunning || !authenticated.value || postResetDisposed || postActionBusy.value || postActionOverlay.value) return
+  postResetRefreshRunning = true
+  const epoch = postResetPollEpoch
+  const ids = [...pendingPostResetRefresh]
+  let next = 0
+  const worker = async () => {
+    while (next < ids.length && authenticated.value && epoch === postResetPollEpoch && !postActionBusy.value && !postActionOverlay.value) {
+      const id = ids[next++]
+      pendingPostResetRefresh.delete(id)
+      const targets = [...new Set([...posts.value.filter(post => String(post.id) === id), ...(String(masonryDetailPost.value?.id) === id ? [masonryDetailPost.value] : [])])]
+      if (!targets.length) continue
+      const snapshots = targets.map(post => JSON.stringify(post))
+      const controller = new AbortController()
+      postResetRefreshRequests.add(controller)
+      const timeout = window.setTimeout(() => controller.abort(), 10_000)
+      try {
+        const response = await fetch(`/api/v1/posts?${new URLSearchParams({ id, source: 'all', order: 'newest', limit: '1' })}`, { signal: controller.signal, cache: 'no-store' })
+        if (!response.ok) throw new Error('动态补读失败')
+        const page = await response.json()
+        if (!authenticated.value || epoch !== postResetPollEpoch) return
+        const updated = page.items?.find(post => String(post.id) === id)
+        if (!updated) continue
+        // A save or favorite change after this request must win over its response.
+        if (postActionBusy.value || postActionOverlay.value || targets.some((post, index) => JSON.stringify(post) !== snapshots[index])) {
+          pendingPostResetRefresh.add(id)
+          continue
+        }
+        for (const post of targets) {
+          if (!posts.value.includes(post) && masonryDetailPost.value !== post) continue
+          for (const source of [...(post.media || []), ...(updated.media || [])]) renderedPreviews.delete(source)
+          Object.assign(post, updated)
+        }
+        mobilePageSnapshots.value = new Map()
+        scheduleTimelineWindow()
+      } catch {
+        if (authenticated.value && epoch === postResetPollEpoch) pendingPostResetRefresh.add(id)
+      } finally {
+        window.clearTimeout(timeout)
+        postResetRefreshRequests.delete(controller)
+      }
+    }
+  }
+  try { await Promise.all([worker(), worker()]) } finally {
+    postResetRefreshRunning = false
+    if (authenticated.value && epoch === postResetPollEpoch && pendingPostResetRefresh.size) schedulePostResetPoll(1500)
+  }
+}
+function schedulePostResetPoll(delay) {
+  if (postResetDisposed || !authenticated.value || postResetPollRequest) return
+  window.clearTimeout(postResetPollTimer)
+  postResetPollTimer = window.setTimeout(pollPostResetTasks, delay)
+}
+function stopPostResetPolling() {
+  postResetPollEpoch++
+  postResetSubmission++
+  if (postActionBusy.value === 'batch-reset') postActionBusy.value = ''
+  window.clearTimeout(postResetPollTimer)
+  postResetPollRequest?.abort()
+  postResetPollRequest = null
+  for (const controller of postResetRefreshRequests) controller.abort()
+  postResetRefreshRequests.clear()
+  pendingPostResetRefresh.clear()
+  reconciledPostResetTasks.clear()
+  postResetUpdatedVersions.clear()
+  postResetDataVersion++
+  activePostResetTask = null
+  postResetProgress = ''
+  if (postResetProgressNotice) notifications.dismiss(postResetProgressNotice)
+  postResetProgressNotice = null
+}
+async function pollPostResetTasks() {
+  if (!authenticated.value || postResetDisposed || postResetPollRequest) return
+  const epoch = postResetPollEpoch
+  const controller = new AbortController()
+  postResetPollRequest = controller
+  const timeout = window.setTimeout(() => controller.abort(), 10_000)
+  try {
+    const response = await fetch('/api/posts/reset/tasks', { signal: controller.signal, cache: 'no-store' })
+    if (!response.ok) return
+    const result = await response.json()
+    if (postResetPollRequest === controller && epoch === postResetPollEpoch && authenticated.value && Array.isArray(result.tasks)) acceptPostResetTasks(result.tasks)
+  } catch {} finally {
+    window.clearTimeout(timeout)
+    if (postResetPollRequest === controller) {
+      postResetPollRequest = null
+      schedulePostResetPoll(activePostResetTask || pendingPostResetRefresh.size ? 1500 : 5000)
+    }
+  }
+}
+watch(authenticated, loggedIn => loggedIn ? schedulePostResetPoll(0) : stopPostResetPolling())
+onUnmounted(() => { postResetDisposed = true; stopPostResetPolling() })
 function deleteContextPost() {
   const post = contextMenu.value.post
   closeContextMenu()
@@ -3254,15 +3450,20 @@ async function deleteSelectedPosts() {
     const confirmed = await askConfirm({ title: `删除 ${ids.length} 条动态？`, message: '删除后无法恢复。', confirmText: '删除', compact: true })
     if (!confirmed || epoch !== selectionEpoch) return
     postActionBusy.value = 'batch-delete'
+    stopSelection()
+    selectionBusy.value = false
+    reportTimeline(`正在删除 ${ids.length} 条动态`)
     const response = await fetch('/api/posts', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) })
     if (!response.ok) throw new Error(await responseError(response, '批量删除失败'))
     const removed = new Set(ids)
     posts.value = posts.value.filter(post => !removed.has(post.id))
+    selectedPostIds.value = selectedPostIds.value.filter(id => !removed.has(id))
     void refreshFeedMetadata()
     reportTimeline(`已删除 ${removed.size} 条动态`)
+  } catch (error) { reportTimeline(error.message, 'error') } finally {
+    if (postActionBusy.value === 'batch-delete') postActionBusy.value = ''
     selectionBusy.value = false
-    if (epoch === selectionEpoch) stopSelection()
-  } catch (error) { reportTimeline(error.message, 'error') } finally { postActionBusy.value = ''; selectionBusy.value = false }
+  }
 }
 async function unfavoriteSelectedPosts() {
   if (!selectedPostCount.value) return
@@ -5010,7 +5211,7 @@ async function checkSession(refreshData = true) {
     sessionChecked.value = true
   }
 }
-watch(() => JSON.stringify([activeNav.value, activeSource.value, selectedAuthor.value?.name, selectedAuthor.value?.feedId, selectedTag.value, showSettings.value]), () => {
+watch(() => JSON.stringify([authenticated.value, activeNav.value, activeSource.value, selectedAuthor.value?.name, selectedAuthor.value?.feedId, selectedTag.value, showSettings.value]), () => {
   if (!selectionMode.value) return
   clearPhoneOverlayHistoryForNavigation()
   stopSelection()
@@ -5456,7 +5657,6 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
     <Transition name="selection-toolbar">
       <div v-if="selectionMode" class="selection-dock" role="toolbar" aria-label="所选动态操作" :aria-busy="selectionBusy">
         <span class="selection-count" role="status" aria-live="polite">已选 <strong>{{ selectedPostCount }}</strong> 条</span>
-        <span v-if="selectionResetProgress" class="selection-progress" role="status">{{ selectionResetProgress }}</span>
         <span class="selection-divider" aria-hidden="true"></span>
         <button type="button" class="selection-select-all-button" :disabled="selectionBusy || !loadedSelectionPosts.length" :aria-pressed="allLoadedPostsSelected" aria-label="全选当前已加载动态" @click="toggleSelectAllLoadedPosts"><ListChecks aria-hidden="true" /><span>全选</span></button>
         <button type="button" aria-label="清空选择" @click="stopSelection"><X aria-hidden="true" /><span>清空</span></button>
