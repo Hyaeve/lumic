@@ -46,6 +46,7 @@ type apiV1Feed struct {
 	Avatar            string    `json:"avatar,omitempty"`
 	Enabled           bool      `json:"enabled"`
 	Schedule          string    `json:"schedule"`
+	ScheduleTimeZone  string    `json:"scheduleTimeZone,omitempty"`
 	StartDate         string    `json:"startDate,omitempty"`
 	ContentTypes      []string  `json:"contentTypes,omitempty"`
 	Tags              []string  `json:"tags,omitempty"`
@@ -116,6 +117,8 @@ func registerAPIV1Routes(mux *http.ServeMux, sessions *SessionStore, auth *AuthC
 	mux.HandleFunc("/api/v1/posts", apiV1PostsHandler(store))
 	mux.HandleFunc("/api/v1/posts/reset", platforms.resetPostHandler)
 	mux.HandleFunc("/api/v1/posts/reset/tasks", platforms.resetTasksHandler)
+	mux.HandleFunc("/api/v1/author-subscription", platforms.authorSubscriptionHandler)
+	mux.HandleFunc("/api/v1/telegram-bot", platforms.telegramBotHandler)
 	mux.HandleFunc("/api/v1/gallery", apiV1GalleryHandler(store))
 	mux.HandleFunc("/api/v1/feeds", apiV1FeedsHandler(store, platforms))
 	mux.HandleFunc("/api/v1/sync", platforms.syncHandler)
@@ -782,6 +785,7 @@ func toAPIV1Feed(feed SourceConfig) apiV1Feed {
 		Avatar:            feed.Avatar,
 		Enabled:           feed.Enabled,
 		Schedule:          feed.Schedule,
+		ScheduleTimeZone:  feed.ScheduleTimeZone,
 		StartDate:         feed.StartDate,
 		ContentTypes:      append([]string(nil), feed.ContentTypes...),
 		Tags:              append([]string(nil), feed.Tags...),

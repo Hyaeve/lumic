@@ -132,11 +132,13 @@ func (b *BilibiliStore) syncLegacyWeiboLikes(feed SourceConfig) syncTaskResult {
 	if b.content == nil {
 		return syncTaskResult{source: feed, err: errors.New("动态存储未初始化"), httpStatus: http.StatusInternalServerError}
 	}
-	added, err := b.content.mergePosts(posts)
+	newlyArchived, err := b.content.mergePostsWithAdded(posts)
 	if err != nil {
 		return syncTaskResult{source: feed, err: errors.New("无法保存微博点赞动态"), httpStatus: http.StatusInternalServerError}
 	}
+	added := len(newlyArchived)
 	feed.LastSyncMessage = fmt.Sprintf("已同步 %d 条微博点赞动态", len(posts))
+	b.queueTelegramNotification(feed, newlyArchived)
 	return syncTaskResult{source: feed, added: added, count: len(posts)}
 }
 

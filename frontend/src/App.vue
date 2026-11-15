@@ -9,7 +9,7 @@ import DetailImage from './components/DetailImage.vue'
 import CredentialField from './components/CredentialField.vue'
 import NotificationToasts from './components/NotificationToasts.vue'
 import { notifications, notify } from './notifications'
-import { ListChecks, RotateCcw, Trash2, ChevronLeft, ChevronRight, Plus, KeyRound, Network, SlidersHorizontal, Archive, UserRound, QrCode, X, Download, Upload, Monitor, Smartphone, Clock } from '@lucide/vue'
+import { ListChecks, RotateCcw, Trash2, ChevronLeft, ChevronRight, Plus, KeyRound, Network, SlidersHorizontal, Archive, UserRound, QrCode, X, Download, Upload, Monitor, Smartphone, Clock, Bot, Send, Save } from '@lucide/vue'
 import FavoriteHeart from './components/FavoriteHeart.vue'
 import TimelineStats from './components/TimelineStats.vue'
 import QRCode from 'qrcode'
@@ -58,6 +58,15 @@ const settingsForm = ref({ username: '', newPassword: '' })
 const proxyForm = ref({ proxyUrl: '' })
 const proxyStatus = ref({ proxyEnabled: false, proxyUrl: '' })
 const proxyMessage = ref('')
+const telegramForm = ref({ token: '', chatId: '', enabled: false, notifications: true, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai' })
+const telegramStatus = ref({ tokenConfigured: false, running: false, username: '' })
+const telegramBusy = ref('')
+const telegramLoading = ref(false)
+const telegramLoaded = ref(false)
+const telegramReadError = ref(false)
+let telegramSettingsEpoch = 0
+let telegramSettingsRequest = null
+let telegramStatusTimer = 0
 const previewQuality = ref({ desktop: 2, mobile: 3 })
 const previewQualitySaved = ref({ desktop: 2, mobile: 3 })
 const selectedFeed = ref(null)
@@ -118,6 +127,10 @@ const mobileTimelineIconSwitching = ref(false)
 const showBrandMenu = ref(false)
 const phonePortrait = ref(false)
 const selectedAuthor = ref(null)
+const authorSubscriptionStates = shallowReactive(new Map())
+const authorSubscriptionBusyKey = ref('')
+let authorSubscriptionLookup = null
+let authorSubscriptionEpoch = 0
 const selectedTag = ref('')
 const isDark = ref(false)
 const showAdd = ref(false)
@@ -935,8 +948,140 @@ const authorProfile = computed(() => {
     ? posts.value.filter(post => post.source === selectedAuthor.value.source && post.feedIds?.includes(selectedAuthor.value.feedId))
     : posts.value.filter(post => post.source === selectedAuthor.value.source && post.author === selectedAuthor.value.name)
   const latest = authorPosts[0]
-  return { ...selectedAuthor.value, avatar: selectedAuthor.value.feedId ? selectedAuthor.value.avatar : (latest?.avatar || selectedAuthor.value.avatar), count: activePostPage.value.loaded ? activePostPage.value.total : authorPosts.length }
+  const anchor = authorPosts.find(post => String(post.id) === selectedAuthor.value.postId)
+  const avatar = selectedAuthor.value.avatar || anchor?.avatar || (!selectedAuthor.value.feedId ? latest?.avatar : '')
+  return { ...selectedAuthor.value, avatar, count: activePostPage.value.loaded ? activePostPage.value.total : authorPosts.length }
 })
+function authorSubscriptionTarget(author) {
+  if (!author || author.feedId) return null
+  const target = { source: author.source, author: author.name ?? author.author }
+  if (author.subscriptionFeedId) target.feedId = author.subscriptionFeedId
+  if (author.postId || author.id) target.postId = String(author.postId || author.id)
+  return target
+}
+const currentAuthorSubscription = computed(() => authorSubscriptionTarget(selectedAuthor.value))
+const previewAuthorSubscription = computed(() => phonePortrait.value ? authorSubscriptionTarget(mobileAuthorPreviewDisplayPost.value) : null)
+const visibleAuthorSubscription = computed(() => masonryDetailPost.value ? previewAuthorSubscription.value : currentAuthorSubscription.value)
+function authorSubscriptionKey(target) { return target ? JSON.stringify(target) : '' }
+function authorSubscriptionState(target) {
+  return target ? authorSubscriptionStates.get(authorSubscriptionKey(target)) || 'loading' : ''
+}
+function setAuthorSubscriptionState(key, state) {
+  authorSubscriptionStates.delete(key)
+  authorSubscriptionStates.set(key, state)
+  if (authorSubscriptionStates.size > 64) authorSubscriptionStates.delete(authorSubscriptionStates.keys().next().value)
+}
+function applyAuthorSubscriptionState(key, result) {
+  if (typeof result.available !== 'boolean' || typeof result.subscribed !== 'boolean') throw new Error('无法读取订阅状态')
+  setAuthorSubscriptionState(key, result.subscribed ? 'subscribed' : result.available ? 'unsubscribed' : 'unavailable')
+}
+async function readAuthorSubscription(target) {
+  if (!target || !authenticated.value) return
+  const key = authorSubscriptionKey(target)
+  if (authorSubscriptionBusyKey.value === key) return
+  authorSubscriptionLookup?.abort()
+  const controller = new AbortController()
+  authorSubscriptionLookup = controller
+  const timeout = window.setTimeout(() => controller.abort(), 10_000)
+  try {
+    const response = await fetch(`/api/author-subscription?${new URLSearchParams(target)}`, { cache: 'no-store', signal: controller.signal })
+    if (!response.ok) throw new Error('无法读取订阅状态')
+    const result = await response.json()
+    if (authorSubscriptionLookup === controller && authenticated.value) applyAuthorSubscriptionState(key, result)
+  } catch {
+    if (authorSubscriptionLookup === controller && authenticated.value && authorSubscriptionState(target) === 'loading') {
+      setAuthorSubscriptionState(key, 'error')
+    }
+  } finally {
+    window.clearTimeout(timeout)
+    if (authorSubscriptionLookup === controller) authorSubscriptionLookup = null
+  }
+}
+watch(
+  () => authenticated.value ? authorSubscriptionKey(visibleAuthorSubscription.value) : '',
+  key => {
+    const previous = authorSubscriptionLookup
+    authorSubscriptionLookup = null
+    previous?.abort()
+    if (key) void readAuthorSubscription(JSON.parse(key))
+  }
+)
+function resetAuthorSubscriptionState() {
+  authorSubscriptionEpoch++
+  authorSubscriptionLookup?.abort()
+  authorSubscriptionLookup = null
+  authorSubscriptionStates.clear()
+  authorSubscriptionBusyKey.value = ''
+}
+watch(authenticated, loggedIn => { if (!loggedIn) resetAuthorSubscriptionState() })
+onUnmounted(resetAuthorSubscriptionState)
+async function toggleAuthorSubscription() {
+  const target = currentAuthorSubscription.value
+  const key = authorSubscriptionKey(target)
+  if (!target || authorSubscriptionBusyKey.value) return
+  const state = authorSubscriptionState(target)
+  if (state === 'error') {
+    setAuthorSubscriptionState(key, 'loading')
+    await readAuthorSubscription(target)
+    return
+  }
+  if (state !== 'subscribed' && state !== 'unsubscribed') return
+  const epoch = authorSubscriptionEpoch
+  const removing = state === 'subscribed'
+  authorSubscriptionBusyKey.value = key
+  try {
+    if (removing) {
+      const confirmed = await askConfirm({ title: `取消订阅“${target.author}”？`, message: '已归档的动态会保留。', confirmText: '取消订阅', cancelText: '保留订阅', compact: true })
+      if (!confirmed || key !== authorSubscriptionKey(currentAuthorSubscription.value)) return
+    }
+    if (!authenticated.value || epoch !== authorSubscriptionEpoch) return
+    const previous = authorSubscriptionLookup
+    authorSubscriptionLookup = null
+    previous?.abort()
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort(), 10_000)
+    try {
+      const response = removing
+        ? await fetch(`/api/author-subscription?${new URLSearchParams(target)}`, { method: 'DELETE', signal: controller.signal })
+        : await fetch('/api/author-subscription', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
+          body: JSON.stringify({ ...target, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone })
+        })
+      if (!response.ok) throw new Error(await responseError(response, removing ? '取消订阅失败' : '订阅失败'))
+      const result = await response.json()
+      if (!authenticated.value || epoch !== authorSubscriptionEpoch) return
+      // Other author entry points may refer to this same platform account.
+      authorSubscriptionStates.clear()
+      applyAuthorSubscriptionState(key, result)
+      const feed = result.feed
+      const task = result.task
+      if (task?.id && ['queued', 'running', 'completed', 'failed'].includes(task.status)) {
+        localSourceSyncs.set(task.sourceId, { ...task, name: feed?.name || target.author })
+        scheduleSourceSyncPoll(0)
+      }
+      if (feed?.id && result.subscribed) {
+        feeds.value = [...feeds.value.filter(item => item.id !== feed.id), feed]
+      } else if (feed?.id) {
+        feeds.value = feeds.value.filter(item => item.id !== feed.id)
+      }
+      sourceFeedsVersion++
+      void refreshSourceSyncFeeds()
+      notify(result.message || (removing ? '已取消订阅' : task?.id ? '已订阅，正在拉取最近三天的动态' : '已订阅'))
+    } finally {
+      window.clearTimeout(timeout)
+    }
+  } catch (error) {
+    if (epoch === authorSubscriptionEpoch && authenticated.value) {
+      notify(error.name === 'AbortError' ? '请求超时，正在重新查询订阅状态' : error.message, 'error')
+    }
+  } finally {
+    if (epoch === authorSubscriptionEpoch) {
+      authorSubscriptionBusyKey.value = ''
+      const visible = visibleAuthorSubscription.value
+      if (visible && authenticated.value) void readAuthorSubscription(visible)
+    }
+  }
+}
 const mobileTimelineCanReturn = computed(() => Boolean(phonePortrait.value && mobileForwardPageAvailable.value && !authorProfile.value && !selectedTag.value && !masonryDetailPost.value))
 const mobilePagedTransitionActive = computed(() => Boolean(phonePortrait.value && ((mobileAuthorDetailState.value && (authorProfile.value || selectedTag.value)) || mobileTimelineCanReturn.value)))
 const mobilePagedDetailActive = computed(() => Boolean(phonePortrait.value && mobileAuthorDetailState.value && (authorProfile.value || selectedTag.value)))
@@ -1370,6 +1515,7 @@ async function openSettings(_section = 'settings', updateHistory = true) {
   showBrandMenu.value = false
   settingsTab.value = 'settings'; showSettings.value = true; activeNav.value = 'settings'; settingsError.value = ''; proxyMessage.value = ''; pixivError.value = ''; weiboError.value = ''; twitterError.value = ''
   if (updateHistory) updateRoute('/settings')
+  void loadTelegramSettings()
   try {
     const [projectResponse, settingsResponse, biliResponse, pixivResponse, weiboResponse, twitterResponse] = await Promise.all([fetch('/api/project/settings'), fetch('/api/settings'), fetch('/api/bilibili/account'), fetch('/api/pixiv/account'), fetch('/api/weibo/account'), fetch('/api/twitter/account')])
     if (projectResponse.ok) {
@@ -1392,6 +1538,113 @@ async function openSettings(_section = 'settings', updateHistory = true) {
     if (twitterResponse.ok) twitterAccount.value = await twitterResponse.json()
   } catch { settingsError.value = '无法读取项目设置' }
 }
+async function loadTelegramSettings() {
+  if (telegramBusy.value) return
+  const epoch = ++telegramSettingsEpoch
+  telegramSettingsRequest?.abort()
+  const controller = new AbortController()
+  telegramSettingsRequest = controller
+  telegramLoading.value = true
+  telegramLoaded.value = false
+  telegramReadError.value = false
+  const timeout = window.setTimeout(() => controller.abort(), 10_000)
+  try {
+    const response = await fetch('/api/telegram-bot', { cache: 'no-store', signal: controller.signal })
+    if (!response.ok) throw new Error(await responseError(response, '无法读取 Tg Bot 设置'))
+    const settings = await response.json()
+    if (typeof settings.tokenConfigured !== 'boolean') throw new Error('无法读取 Tg Bot 设置')
+    if (epoch !== telegramSettingsEpoch || !authenticated.value) return
+    applyTelegramSettings(settings)
+    if (settings.error) notify(settings.error, 'error')
+    telegramLoaded.value = true
+  } catch (error) {
+    if (epoch === telegramSettingsEpoch && authenticated.value) {
+      telegramReadError.value = true
+      notify(error.name === 'AbortError' ? '读取 Tg Bot 设置超时' : error.message, 'error')
+    }
+  } finally {
+    window.clearTimeout(timeout)
+    if (epoch === telegramSettingsEpoch) telegramLoading.value = false
+    if (telegramSettingsRequest === controller) telegramSettingsRequest = null
+    scheduleTelegramStatus()
+  }
+}
+function scheduleTelegramStatus() {
+  window.clearTimeout(telegramStatusTimer)
+  if (authenticated.value && showSettings.value && telegramLoaded.value) telegramStatusTimer = window.setTimeout(refreshTelegramStatus, 5000)
+}
+async function refreshTelegramStatus() {
+  if (!authenticated.value || !showSettings.value || !telegramLoaded.value) return
+  if (telegramSettingsRequest || telegramBusy.value) { scheduleTelegramStatus(); return }
+  const epoch = telegramSettingsEpoch
+  const controller = new AbortController()
+  telegramSettingsRequest = controller
+  const timeout = window.setTimeout(() => controller.abort(), 10_000)
+  try {
+    const response = await fetch('/api/telegram-bot', { cache: 'no-store', signal: controller.signal })
+    if (!response.ok) return
+    const status = await response.json()
+    if (epoch === telegramSettingsEpoch && authenticated.value && showSettings.value && typeof status.tokenConfigured === 'boolean') {
+      if (status.error && status.error !== telegramStatus.value.error) notify(status.error, 'error')
+      telegramStatus.value = status
+    }
+  } catch {} finally {
+    window.clearTimeout(timeout)
+    if (telegramSettingsRequest === controller) telegramSettingsRequest = null
+    scheduleTelegramStatus()
+  }
+}
+function applyTelegramSettings(settings) {
+  telegramStatus.value = settings
+  telegramForm.value = {
+    token: '', chatId: settings.chatId || '', enabled: Boolean(settings.enabled),
+    notifications: settings.notifications !== false,
+    timeZone: settings.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai'
+  }
+}
+async function saveTelegramSettings(test = false) {
+  if (telegramBusy.value || telegramLoading.value || !telegramLoaded.value) return
+  telegramSettingsRequest?.abort()
+  const epoch = ++telegramSettingsEpoch
+  const controller = new AbortController()
+  telegramSettingsRequest = controller
+  telegramBusy.value = test ? 'test' : 'save'
+  const timeout = window.setTimeout(() => controller.abort(), 20_000)
+  try {
+    const form = { ...telegramForm.value, token: telegramForm.value.token.trim(), chatId: telegramForm.value.chatId.trim() }
+    const response = await fetch('/api/telegram-bot', {
+      method: test ? 'POST' : 'PUT', headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal, body: JSON.stringify(test ? { ...form, action: 'test' } : form)
+    })
+    if (!response.ok) throw new Error(await responseError(response, test ? 'Tg Bot 测试失败' : 'Tg Bot 保存失败'))
+    const result = await response.json()
+    if (!authenticated.value || epoch !== telegramSettingsEpoch) return
+    if (!test) applyTelegramSettings(result)
+    notify(test ? 'Tg Bot 测试消息已发送' : 'Tg Bot 设置已保存')
+  } catch (error) {
+    if (authenticated.value && epoch === telegramSettingsEpoch) notify(error.name === 'AbortError' ? 'Tg Bot 请求超时，请核对连接后重试' : error.message, 'error')
+  } finally {
+    window.clearTimeout(timeout)
+    if (epoch === telegramSettingsEpoch) telegramBusy.value = ''
+    if (telegramSettingsRequest === controller) telegramSettingsRequest = null
+    scheduleTelegramStatus()
+  }
+}
+function clearTelegramSettingsState() {
+  telegramSettingsEpoch++
+  telegramSettingsRequest?.abort()
+  telegramSettingsRequest = null
+  window.clearTimeout(telegramStatusTimer)
+  telegramForm.value.token = ''
+  telegramBusy.value = ''
+  telegramLoading.value = false
+}
+watch(authenticated, loggedIn => {
+  if (!loggedIn) clearTelegramSettingsState()
+  else if (showSettings.value) void loadTelegramSettings()
+})
+watch(showSettings, open => { if (!open) clearTelegramSettingsState() })
+onUnmounted(clearTelegramSettingsState)
 function normalizePreviewQualityLevel(value, fallback) {
   const numeric = Number(value)
   return Number.isInteger(numeric) && numeric >= 0 && numeric <= 5 ? numeric : fallback
@@ -1658,9 +1911,12 @@ function cronFieldMatches(field, value, min, max) {
     return start >= min && end <= max && start <= end && value >= start && value <= end && (value - start) % step === 0
   })
 }
-function nextCronExecution(expression) {
+function nextCronExecution(expression, scheduleTimeZone) {
   const fields = String(expression || '').trim().split(/\s+/)
   if (fields.length !== 5) return 'Cron 表达式无效，双击修改'
+  if (scheduleTimeZone && scheduleTimeZone !== Intl.DateTimeFormat().resolvedOptions().timeZone) {
+    return `计划时区：${scheduleTimeZone}`
+  }
   const next = new Date(); next.setSeconds(0, 0); next.setMinutes(next.getMinutes() + 1)
   for (let minutes = 0; minutes < 366 * 24 * 60; minutes++, next.setMinutes(next.getMinutes() + 1)) {
     if (cronFieldMatches(fields[0], next.getMinutes(), 0, 59) && cronFieldMatches(fields[1], next.getHours(), 0, 23) && cronFieldMatches(fields[2], next.getDate(), 1, 31) && cronFieldMatches(fields[3], next.getMonth() + 1, 1, 12) && cronFieldMatches(fields[4], next.getDay(), 0, 6)) return `下次执行：${next.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short', hour: '2-digit', minute: '2-digit' })}`
@@ -3901,8 +4157,7 @@ function startMobileTimelineReturnHandoff(post) {
 }
 function openMobileDetailAuthor(post) {
   if (!post) return
-  const query = ''
-  const authorPath = `/author/${post.source}/${encodeURIComponent(post.author)}${query}`
+  const authorPath = authorPagePath(post.author, post.source, { postId: post.id })
   const previous = mobileAuthorDetailState.value
   const state = previous?.post?.id === post.id
     ? previous
@@ -3913,7 +4168,7 @@ function openMobileDetailAuthor(post) {
   mobileAuthorScrollY = state.authorScrollY
   captureMobileAuthorPreviewSnapshot(state.authorScrollY)
   startMobileAuthorPreviewHandoff(post)
-  openAuthorPage(post.author, post.source, post.avatar, '', true)
+  openAuthorPage(post.author, post.source, post.avatar, { postId: post.id }, true)
   restoreMobileScroll(state.authorScrollY)
 }
 function openMobileDetailFromAuthor() {
@@ -4926,7 +5181,15 @@ function openPhoneDefaultTimeline() {
   mobileForwardPageState.value = null
   updateRoute('/', true)
 }
-function openAuthorPage(name, source, avatar = '', feedId = '', fromMobileDetail = false) {
+function authorPagePath(name, source, { feedId, postId, subscriptionFeedId } = {}) {
+  const query = new URLSearchParams()
+  if (feedId) query.set('feed', feedId)
+  if (postId) query.set('post', postId)
+  if (subscriptionFeedId) query.set('subscription', subscriptionFeedId)
+  const search = query.toString()
+  return `/author/${source}/${encodeURIComponent(name)}${search ? `?${search}` : ''}`
+}
+function openAuthorPage(name, source, avatar = '', anchors = {}, fromMobileDetail = false) {
   clearPhoneOverlayHistoryForNavigation()
   pendingPostId.value = ''
   mobileSourcesOpen.value = false
@@ -4941,10 +5204,9 @@ function openAuthorPage(name, source, avatar = '', feedId = '', fromMobileDetail
   showSettings.value = false
   activeNav.value = 'author'
   activeSource.value = source
-  selectedAuthor.value = { name, source, avatar, feedId }
-  const query = feedId ? `?feed=${encodeURIComponent(feedId)}` : ''
+  selectedAuthor.value = { name, source, avatar, ...anchors }
   const routeState = fromMobileDetail ? { lumicMobileAuthor: true, lumicParentPost: `/post/${encodeURIComponent(mobileAuthorDetailState.value?.post?.id || '')}` } : {}
-  updateRoute(`/author/${source}/${encodeURIComponent(name)}${query}`, false, routeState)
+  updateRoute(authorPagePath(name, source, anchors), false, routeState)
   window.scrollTo({ top: 0, behavior: 'auto' })
 }
 function openAuthor(post) {
@@ -4956,7 +5218,7 @@ function openAuthor(post) {
     const returnPath = window.location.pathname + window.location.search
     mobileAuthorDetailState.value = {
       post,
-      authorPath: '/author/' + post.source + '/' + encodeURIComponent(post.author),
+      authorPath: authorPagePath(post.author, post.source, { postId: post.id }),
       authorScrollY: 0,
       detailScrollY: window.scrollY,
       returnPath,
@@ -4968,14 +5230,15 @@ function openAuthor(post) {
     mobileAuthorPreviewPost.value = post
     captureMobileAuthorPreviewSnapshot(0)
     startMobileAuthorPreviewHandoff(post)
-    openAuthorPage(post.author, post.source, post.avatar, '', true)
+    openAuthorPage(post.author, post.source, post.avatar, { postId: post.id }, true)
     restoreMobileScroll(0)
     return
   }
-  openAuthorPage(post.author, post.source, post.avatar)
+  openAuthorPage(post.author, post.source, post.avatar, { postId: post.id })
 }
 function openFeedAuthor(feed) {
-  openAuthorPage(feed.name, feed.source, sourceAvatar(feed, platformCardForSource(feed.source)), isAccountCollectionFeed(feed) ? feed.id : '')
+  const anchors = isAccountCollectionFeed(feed) ? { feedId: feed.id } : { subscriptionFeedId: feed.id }
+  openAuthorPage(feed.name, feed.source, sourceAvatar(feed, platformCardForSource(feed.source)), anchors)
 }
 function closeSettingsPage() { navigateTo(activeSource.value === 'all' ? 'all' : 'source') }
 function updateRoute(path, replace = false, state = {}) {
@@ -5164,7 +5427,10 @@ function applyRoute() {
     return
   }
   if (segments[0] === 'author' && validSources.has(segments[1]) && segments[2]) {
-    activeNav.value = 'author'; activeSource.value = segments[1]; selectedAuthor.value = { source: segments[1], name: segments.slice(2).join('/'), avatar: '', feedId: new URLSearchParams(window.location.search).get('feed') || '' }
+    const query = new URLSearchParams(window.location.search)
+    activeNav.value = 'author'
+    activeSource.value = segments[1]
+    selectedAuthor.value = { source: segments[1], name: segments.slice(2).join('/'), avatar: '', feedId: query.get('feed') || '', postId: query.get('post') || '', subscriptionFeedId: query.get('subscription') || '' }
     return
   }
   activeNav.value = 'all'; activeSource.value = 'all'
@@ -5372,7 +5638,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
         <template v-else><i class="winter-haze"></i><i class="winter-branch"></i><i class="winter-plum plum-one"></i><i class="winter-plum plum-two"></i><i class="winter-plum plum-three"></i><i class="winter-snowman"></i><i class="winter-ice"></i><i class="winter-snowflake flake-one"></i><i class="winter-snowflake flake-two"></i><i class="winter-snowflake flake-three"></i><i class="winter-snowflake flake-four"></i><i class="winter-snowflake flake-five"></i></template>
       </div>
       <GalleryBackdrop v-if="isScopedTimeline" ref="galleryBackdropControl" :images="headerGallery" :load-images="loadGalleryImages" :scope-key="feedQueryKey" interactive :mobile="phonePortrait" :dark="isDark" @present="galleryPresenting = $event" @image="prefetchGalleryPost" @open-post="openGalleryPost" />
-      <ScopedTimelineHeader v-if="isScopedTimeline" :title="authorProfile ? authorProfile.name : selectedTag ? `#${selectedTag}` : '收藏'" :avatar="authorProfile ? postAvatar(authorProfile) : ''" :source-label="authorProfile ? sourceMeta[authorProfile.source].label : ''" :stats="scopedTimelineStats" :favorites-only="activeNav === 'liked' && !authorProfile && !selectedTag" @avatar-load="handlePostAvatarLoad($event, authorProfile)" @avatar-error="handlePostAvatarError($event, authorProfile)" />
+      <ScopedTimelineHeader v-if="isScopedTimeline" :title="authorProfile ? authorProfile.name : selectedTag ? `#${selectedTag}` : '收藏'" :avatar="authorProfile ? postAvatar(authorProfile) : ''" :source-label="authorProfile ? sourceMeta[authorProfile.source].label : ''" :stats="scopedTimelineStats" :favorites-only="activeNav === 'liked' && !authorProfile && !selectedTag" :subscription-state="authorSubscriptionState(currentAuthorSubscription)" :subscription-busy="Boolean(authorSubscriptionBusyKey)" @subscription-click="toggleAuthorSubscription" @avatar-load="handlePostAvatarLoad($event, authorProfile)" @avatar-error="handlePostAvatarError($event, authorProfile)" />
       <header v-else class="topbar timeline-hero">
 <div class="timeline-hero-copy">
 <p class="eyebrow">SAVED MOMENTS · {{ new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' }) }}</p>
@@ -5509,7 +5775,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
     <aside v-if="phonePortrait && mobileAuthorPreviewDisplayPost && !mobileTimelineCanReturn && !mobileDetailForwardHandoff && (mobileAuthorPreviewHandoff || mobileDetailPageDragging || mobileDetailPageAnimating || (mobileTimelineCanReturn && (mobileAuthorPageDragging || mobileAuthorPageAnimating)))" class="mobile-author-swipe-preview" :style="mobileAuthorPreviewStyle" aria-hidden="true">
       <div class="mobile-transition-page-content" :style="mobileAuthorPreviewContentStyle">
       <GalleryBackdrop :images="mobilePreviewGallery.media" />
-      <ScopedTimelineHeader :title="mobileAuthorPreviewDisplayPost.author" :avatar="postAvatar(mobileAuthorPreviewDisplayPost)" :source-label="sourceMeta[mobileAuthorPreviewDisplayPost.source].label" :stats="mobilePreviewGallery.stats" @avatar-load="handlePostAvatarLoad($event, mobileAuthorPreviewDisplayPost)" @avatar-error="handlePostAvatarError($event, mobileAuthorPreviewDisplayPost)" />
+      <ScopedTimelineHeader :title="mobileAuthorPreviewDisplayPost.author" :avatar="postAvatar(mobileAuthorPreviewDisplayPost)" :source-label="sourceMeta[mobileAuthorPreviewDisplayPost.source].label" :stats="mobilePreviewGallery.stats" :subscription-state="authorSubscriptionState(previewAuthorSubscription)" preview @avatar-load="handlePostAvatarLoad($event, mobileAuthorPreviewDisplayPost)" @avatar-error="handlePostAvatarError($event, mobileAuthorPreviewDisplayPost)" />
       <div class="section-heading mobile-author-preview-heading"><div class="filters"><button class="timeline-sort-button" type="button" tabindex="-1"><span class="timeline-sort-symbol" :style="{ '--nav-mask': `url(${timelineSort === 'newest' ? newestSortIcon : oldestSortIcon})` }"></span></button><button class="timeline-view-button timeline-toolbar-button" type="button" tabindex="-1"><span :class="['timeline-view-symbol', { 'list-view-symbol': !isMasonryView }]" :style="{ '--nav-mask': `url(${isMasonryView ? masonryViewIcon : listViewIcon})` }"></span></button><button class="timeline-refresh-button timeline-toolbar-button" type="button" tabindex="-1"><span class="timeline-refresh-symbol" :style="{ '--nav-mask': `url(${refreshIcon})` }"></span></button></div><div class="timeline-tools"><label class="timeline-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><input type="search" value="" placeholder="搜索" tabindex="-1" readonly></label></div></div>
       <section class="mobile-author-preview-feed feed-list masonry-feed" :style="mobileAuthorPreviewFeedStyle">
         <article v-for="item in mobileAuthorPreviewItems" :key="item.post.id" :class="['masonry-card', { 'text-only': !masonryCover(item.post) && !item.post.videos?.length }]" :style="mobilePreviewMasonryItemStyle(item)">
@@ -5845,6 +6111,24 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
           </section>
           <section class="settings-pane compact-settings-pane"><div class="pane-heading"><div class="settings-section-title"><UserRound aria-hidden="true" /><h3>账号管理</h3></div></div><form class="settings-form account-settings-form" @submit.prevent="saveSettings" autocomplete="off"><label for="settings-username">账号</label><input id="settings-username" v-model="settingsForm.username" required minlength="3" autocomplete="username"><label for="settings-password">密码</label><input id="settings-password" v-model="settingsForm.newPassword" type="password" required minlength="8" autocomplete="new-password"><button class="login-button" type="submit" :disabled="settingsBusy">{{ settingsBusy ? '保存中…' : '保存' }}</button></form></section>
         </div>
+        <section class="settings-pane telegram-settings-pane" aria-labelledby="telegram-settings-title" :aria-busy="telegramLoading || Boolean(telegramBusy)">
+          <div class="pane-heading"><div class="settings-section-title"><Bot aria-hidden="true" /><h3 id="telegram-settings-title">Tg Bot</h3></div><button v-if="telegramReadError" type="button" class="telegram-retry-button" @click="loadTelegramSettings"><RotateCcw :size="16" aria-hidden="true" /><span>重试</span></button><span v-else class="telegram-runtime-status" role="status">{{ telegramLoading ? '读取中' : !telegramStatus.enabled ? '已停用' : telegramStatus.error ? '连接异常' : telegramStatus.running ? '运行中' : '待连接' }}</span></div>
+          <form class="telegram-settings-form" @submit.prevent="saveTelegramSettings()" autocomplete="off">
+            <fieldset :disabled="telegramLoading || !telegramLoaded || Boolean(telegramBusy)">
+            <div class="telegram-fields">
+              <CredentialField v-model="telegramForm.token" label="Bot Token" :placeholder="telegramStatus.tokenConfigured ? '已保存，留空保持不变' : 'Bot Token'" :disabled="telegramLoading || Boolean(telegramBusy)" autocomplete="new-password" />
+              <label class="telegram-chat-field" for="telegram-chat-id"><span>Chat ID</span><input id="telegram-chat-id" v-model="telegramForm.chatId" inputmode="numeric" pattern="[1-9][0-9]*" maxlength="20" placeholder="私聊 Chat ID" :required="telegramForm.enabled" :disabled="telegramLoading || Boolean(telegramBusy)"></label>
+              <label class="telegram-zone-field" for="telegram-time-zone"><span>计划时区</span><input id="telegram-time-zone" v-model="telegramForm.timeZone" maxlength="100" placeholder="Asia/Shanghai" :disabled="telegramLoading || Boolean(telegramBusy)"></label>
+            </div>
+            <div class="telegram-options">
+              <label><input v-model="telegramForm.enabled" type="checkbox" :disabled="telegramLoading || Boolean(telegramBusy)"><span>启用机器人</span></label>
+              <label><input v-model="telegramForm.notifications" type="checkbox" :disabled="telegramLoading || Boolean(telegramBusy)"><span>动态更新通知</span></label>
+              <span v-if="telegramStatus.username" class="telegram-bot-name">@{{ telegramStatus.username }}</span>
+              <div class="telegram-settings-actions"><button type="button" class="secondary-button" :disabled="telegramLoading || Boolean(telegramBusy)" @click="saveTelegramSettings(true)"><Send :size="16" aria-hidden="true" /><span>{{ telegramBusy === 'test' ? '测试中' : '测试' }}</span></button><button type="submit" class="login-button" :disabled="telegramLoading || Boolean(telegramBusy)"><Save :size="16" aria-hidden="true" /><span>{{ telegramBusy === 'save' ? '保存中' : '保存' }}</span></button></div>
+            </div>
+            </fieldset>
+          </form>
+        </section>
         <p v-if="settingsError" class="login-error settings-page-error">{{ settingsError }}</p>
       </div>
     </main>
@@ -5967,7 +6251,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
         <p class="eyebrow">SOURCE DETAILS</p><h2>{{ selectedFeed.name }}</h2><p>{{ sourceMeta[selectedFeed.source]?.label }} · {{ selectedFeed.handle }}</p>
         <form class="settings-form feed-settings-form" @submit.prevent="saveFeedSettings">
           <div class="feed-field-row feed-primary-fields">
-            <label><span>Cron</span><input v-model="selectedFeed.schedule" class="cron-input" :readonly="!cronEditing" :title="nextCronExecution(selectedFeed.schedule)" required placeholder="0 6 * * *" maxlength="80" @dblclick="cronEditing = true" @blur="cronEditing = false"></label>
+            <label><span>Cron</span><input v-model="selectedFeed.schedule" class="cron-input" :readonly="!cronEditing" :title="nextCronExecution(selectedFeed.schedule, selectedFeed.scheduleTimeZone)" required placeholder="0 6 * * *" maxlength="80" @dblclick="cronEditing = true" @blur="cronEditing = false"></label>
             <label><span>作者标签</span><input v-model="selectedFeed.tagInput" placeholder="#绘画 #日常" maxlength="120"></label>
             <div class="feed-date-field"><span>订阅起始日期</span><button class="source-start-date-button" type="button" :class="{ empty: !selectedFeed.startDate }" :aria-expanded="showStartDatePicker" title="留空表示不限制起始日期" @click.stop="showStartDatePicker ? showStartDatePicker = false : openStartDatePicker()"><time>{{ formatStartDate(selectedFeed.startDate) || '选择日期' }}</time><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="5.5" width="15" height="14" rx="2"/><path d="M8 3.5v4M16 3.5v4M4.5 10h15"/></svg></button><div v-if="showStartDatePicker" class="start-date-picker" role="dialog" aria-label="选择订阅起始日期" @click.stop><header><button type="button" title="上个月" aria-label="上个月" @click="changeStartDatePickerMonth(-1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 5-7 7 7 7"/></svg></button><strong>{{ startDatePickerLabel }}</strong><button type="button" title="下个月" aria-label="下个月" @click="changeStartDatePickerMonth(1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"/></svg></button></header><div class="start-date-weekdays"><span v-for="day in startDatePickerWeekdays" :key="day">{{ day }}</span></div><div class="start-date-days"><button v-for="date in startDatePickerDays" :key="date.key" type="button" :class="{ outside: !date.current, selected: selectedFeed.startDate === date.key, today: startDateTodayKey() === date.key }" :aria-label="date.key" @click="selectStartDate(date)">{{ date.day }}</button></div><footer><button type="button" @click="clearStartDate">清除</button><button type="button" @click="selectStartDateToday">今天</button></footer></div></div>
           </div>

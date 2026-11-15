@@ -78,20 +78,11 @@ func (b *BilibiliStore) fetchResetPost(stored Post, feed SourceConfig) (Post, er
 			post, err := fetchBilibiliOpusPage(client, config.Credentials, id, feed)
 			return post, err
 		}
-		var payload struct {
-			Code int `json:"code"`
-			Data struct {
-				Item json.RawMessage `json:"item"`
-			} `json:"data"`
-		}
-		err := bilibiliRequest("https://api.bilibili.com/x/polymer/web-dynamic/v1/detail?id="+url.QueryEscape(id)+"&features="+url.QueryEscape(bilibiliDynamicFeatures), config.Credentials, config.ProxyURL, &payload)
+		raw, err := fetchBilibiliDynamicDetail(id, config.Credentials, config.ProxyURL)
 		if err != nil {
 			return Post{}, err
 		}
-		if payload.Code != 0 {
-			return Post{}, fmt.Errorf("B站详情接口返回 %d", payload.Code)
-		}
-		return b.parseBilibiliDynamicPost(payload.Data.Item, feed, config.Credentials, config.ProxyURL)
+		return b.parseBilibiliDynamicPost(raw, feed, config.Credentials, config.ProxyURL)
 	case SourcePixiv:
 		if config.Pixiv.Cookie == "" {
 			return Post{}, errors.New("Pixiv 未连接")
@@ -130,6 +121,23 @@ func (b *BilibiliStore) fetchResetPost(stored Post, feed SourceConfig) (Post, er
 	return Post{}, errors.New("平台未返回该动态")
 }
 
+func fetchBilibiliDynamicDetail(id string, credentials BilibiliCredentials, proxyURL string) (json.RawMessage, error) {
+	var payload struct {
+		Code int `json:"code"`
+		Data struct {
+			Item json.RawMessage `json:"item"`
+		} `json:"data"`
+	}
+	err := bilibiliRequest("https://api.bilibili.com/x/polymer/web-dynamic/v1/detail?id="+url.QueryEscape(id)+"&features="+url.QueryEscape(bilibiliDynamicFeatures), credentials, proxyURL, &payload)
+	if err != nil {
+		return nil, err
+	}
+	if payload.Code != 0 {
+		return nil, fmt.Errorf("B站详情接口返回 %d", payload.Code)
+	}
+	return payload.Data.Item, nil
+}
+
 func (s *Store) replaceResetPost(previous, updated Post) (Post, error) {
 	s.Lock()
 	defer s.Unlock()
@@ -141,6 +149,9 @@ func (s *Store) replaceResetPost(previous, updated Post) (Post, error) {
 			return Post{}, errors.New("动态已更改，请刷新后重试")
 		}
 		updated.Liked, updated.FavoriteExplicit = post.Liked, post.FavoriteExplicit
+		if updated.AuthorID == "" {
+			updated.AuthorID = post.AuthorID
+		}
 		updated.FeedIDs = append([]string(nil), post.FeedIDs...)
 		updated.Tags = mergeUniqueStrings(post.Tags, updated.Tags)
 		updated.Edited = false
@@ -275,6 +286,7 @@ type bilibiliDynamicItem struct {
 		Author struct {
 			Name  string          `json:"name"`
 			Face  string          `json:"face"`
+			Mid   json.RawMessage `json:"mid"`
 			PubTs json.RawMessage `json:"pub_ts"`
 		} `json:"module_author"`
 		Dynamic struct {
@@ -384,7 +396,7 @@ func (b *BilibiliStore) parseBilibiliDynamicPost(rawItem json.RawMessage, feed S
 	if avatar == "" {
 		avatar = feed.Avatar
 	}
-	return Post{ID: "bili-dynamic-" + item.ID, Source: SourceBilibili, FeedIDs: []string{feed.ID}, Author: name, Avatar: avatar, Caption: caption, Tags: append([]string(nil), feed.Tags...), Media: media, Videos: videos, OriginalURL: "https://t.bilibili.com/" + url.PathEscape(item.ID), Published: published}, nil
+	return Post{ID: "bili-dynamic-" + item.ID, Source: SourceBilibili, FeedIDs: []string{feed.ID}, Author: name, AuthorID: normalizeSubscriptionAuthorID(SourceBilibili, jsonScalarString(item.Modules.Author.Mid)), Avatar: avatar, Caption: caption, Tags: append([]string(nil), feed.Tags...), Media: media, Videos: videos, OriginalURL: "https://t.bilibili.com/" + url.PathEscape(item.ID), Published: published}, nil
 }
 
 func pixivDetailPost(client *http.Client, credentials PixivCredentials, id string, detail map[string]any, feed SourceConfig) (Post, error) {
@@ -405,15 +417,16 @@ func pixivDetailPost(client *http.Client, credentials PixivCredentials, id strin
 		return Post{}, errors.New("Pixiv 未返回原图")
 	}
 	published := parsePixivTime(jsonValueString(body["createDate"]))
-	return Post{ID: "pixiv-illust-" + id, Source: SourcePixiv, FeedIDs: []string{feed.ID}, Author: author, Avatar: avatar, Caption: caption, Tags: append([]string(nil), feed.Tags...), Media: media, OriginalURL: "https://www.pixiv.net/artworks/" + id, Published: published}, nil
+	return Post{ID: "pixiv-illust-" + id, Source: SourcePixiv, FeedIDs: []string{feed.ID}, Author: author, AuthorID: pixivPostAuthorID(body), Avatar: avatar, Caption: caption, Tags: append([]string(nil), feed.Tags...), Media: media, OriginalURL: "https://www.pixiv.net/artworks/" + id, Published: published}, nil
 }
 
 func twitterDetailPost(tweet map[string]any, tweetID string, credentials TwitterCredentials, feed SourceConfig) Post {
 	authorObject, _ := tweet["author"].(map[string]any)
 	_, username, authorName, avatar := twitterUserFromValue(authorObject)
+	authorID := normalizeSubscriptionAuthorID(SourceTwitter, username)
 	username = firstNonEmptyRemoteText(username, strings.TrimPrefix(credentials.UserName, "@"))
 	author := firstNonEmptyRemoteText(authorName, "@"+username, feed.Name)
-	post := Post{ID: "twitter-tweet-" + tweetID, Source: SourceTwitter, FeedIDs: []string{feed.ID}, Author: author, Avatar: avatar, Caption: cleanRemoteText(firstNonEmptyRemoteText(jsonValueString(tweet["text"]), jsonValueString(tweet["fullText"]), jsonValueString(tweet["full_text"]))), Tags: append([]string(nil), feed.Tags...), OriginalURL: firstNonEmptyRemoteText(jsonValueString(tweet["url"]), "https://x.com/"+url.PathEscape(username)+"/status/"+url.PathEscape(tweetID)), Published: parseTwitterTime(firstNonEmptyRemoteText(jsonValueString(tweet["createdAt"]), jsonValueString(tweet["created_at"])))}
+	post := Post{ID: "twitter-tweet-" + tweetID, Source: SourceTwitter, FeedIDs: []string{feed.ID}, Author: author, AuthorID: authorID, Avatar: avatar, Caption: cleanRemoteText(firstNonEmptyRemoteText(jsonValueString(tweet["text"]), jsonValueString(tweet["fullText"]), jsonValueString(tweet["full_text"]))), Tags: append([]string(nil), feed.Tags...), OriginalURL: firstNonEmptyRemoteText(jsonValueString(tweet["url"]), "https://x.com/"+url.PathEscape(username)+"/status/"+url.PathEscape(tweetID)), Published: parseTwitterTime(firstNonEmptyRemoteText(jsonValueString(tweet["createdAt"]), jsonValueString(tweet["created_at"])))}
 	for _, item := range twitterMediaItems(tweet) {
 		kind := strings.ToLower(firstNonEmptyRemoteText(jsonValueString(item["type"]), jsonValueString(item["mediaType"])))
 		mediaURL := normalizeRemoteImage(firstNonEmptyRemoteText(jsonValueString(item["media_url_https"]), jsonValueString(item["mediaUrl"]), jsonValueString(item["media_url"]), jsonValueString(item["originalUrl"]), jsonValueString(item["url"])))

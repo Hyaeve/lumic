@@ -113,6 +113,7 @@ type Post struct {
 	Source           Source          `json:"source"`
 	FeedIDs          []string        `json:"feedIds,omitempty"`
 	Author           string          `json:"author"`
+	AuthorID         string          `json:"authorId,omitempty"`
 	Avatar           string          `json:"avatar"`
 	Caption          string          `json:"caption"`
 	Emojis           []PostEmoji     `json:"emojis,omitempty"` // Legacy image metadata, removed while loading.
@@ -139,27 +140,29 @@ type PostEmoji struct {
 }
 
 type SourceConfig struct {
-	ID                string    `json:"id"`
-	Source            Source    `json:"source"`
-	Name              string    `json:"name"`
-	Handle            string    `json:"handle"`
-	Avatar            string    `json:"avatar,omitempty"`
-	Enabled           bool      `json:"enabled"`
-	Schedule          string    `json:"schedule"`
-	StartDate         string    `json:"startDate,omitempty"`
-	ContentTypes      []string  `json:"contentTypes,omitempty"`
-	Tags              []string  `json:"tags,omitempty"`
-	OnlyWithImages    bool      `json:"onlyWithImages,omitempty"`
-	IncludeVideos     bool      `json:"includeVideos,omitempty"`
-	IncludeLivePhotos *bool     `json:"includeLivePhotos,omitempty"`
-	IncludeKeywords   []string  `json:"includeKeywords,omitempty"`
-	ExcludeKeywords   []string  `json:"excludeKeywords,omitempty"`
-	LastSyncedAt      time.Time `json:"lastSyncedAt"`
-	LastSyncStatus    string    `json:"lastSyncStatus,omitempty"`
-	LastSyncMessage   string    `json:"lastSyncMessage,omitempty"`
-	LastSyncWarning   string    `json:"lastSyncWarning,omitempty"`
-	LastSyncCount     int       `json:"lastSyncCount,omitempty"`
-	StoragePath       string    `json:"storagePath,omitempty"`
+	ID                string            `json:"id"`
+	Source            Source            `json:"source"`
+	Name              string            `json:"name"`
+	Handle            string            `json:"handle"`
+	Avatar            string            `json:"avatar,omitempty"`
+	Enabled           bool              `json:"enabled"`
+	Schedule          string            `json:"schedule"`
+	ScheduleTimeZone  string            `json:"scheduleTimeZone,omitempty"`
+	StartDate         string            `json:"startDate,omitempty"`
+	ContentTypes      []string          `json:"contentTypes,omitempty"`
+	Tags              []string          `json:"tags,omitempty"`
+	OnlyWithImages    bool              `json:"onlyWithImages,omitempty"`
+	IncludeVideos     bool              `json:"includeVideos,omitempty"`
+	IncludeLivePhotos *bool             `json:"includeLivePhotos,omitempty"`
+	IncludeKeywords   []string          `json:"includeKeywords,omitempty"`
+	ExcludeKeywords   []string          `json:"excludeKeywords,omitempty"`
+	LastSyncedAt      time.Time         `json:"lastSyncedAt"`
+	LastSyncStatus    string            `json:"lastSyncStatus,omitempty"`
+	LastSyncMessage   string            `json:"lastSyncMessage,omitempty"`
+	LastSyncWarning   string            `json:"lastSyncWarning,omitempty"`
+	LastSyncCount     int               `json:"lastSyncCount,omitempty"`
+	StoragePath       string            `json:"storagePath,omitempty"`
+	AuthorSync        *authorSyncWindow `json:"authorSync,omitempty"`
 }
 
 const sourceStartDateLayout = "2006-01-02"
@@ -312,13 +315,24 @@ func isCollectionFeed(feed SourceConfig) bool {
 // Collection posts retain their collection feed ID for browsing, but share the
 // subscribed author's archive whenever that author is also configured directly.
 func collectionAuthorSubscription(post Post, feeds []SourceConfig) (SourceConfig, bool) {
+	authorID := archivedPostAuthorID(post)
+	var legacy SourceConfig
+	var legacyFound bool
 	for _, feed := range feeds {
-		if feed.Source != post.Source || isCollectionFeed(feed) || !sameSourceAuthor(post.Author, feed.Name) {
+		if feed.Source != post.Source || isCollectionFeed(feed) {
 			continue
 		}
-		return feed, true
+		if feed.AuthorSync != nil {
+			if authorID != "" && sourceAuthorIDFromFeedID(feed.Source, feed.ID) == authorID {
+				return feed, true
+			}
+			continue
+		}
+		if !legacyFound && sameSourceAuthor(post.Author, feed.Name) {
+			legacy, legacyFound = feed, true
+		}
 	}
-	return SourceConfig{}, false
+	return legacy, legacyFound
 }
 
 func postUsesAuthorArchive(post Post) bool {
@@ -563,6 +577,7 @@ type WeiboQRSession struct {
 }
 
 type BilibiliConfig struct {
+	Telegram             TGBotConfig         `json:"telegram"`
 	Credentials          BilibiliCredentials `json:"credentials"`
 	Pixiv                PixivCredentials    `json:"pixiv"`
 	Weibo                WeiboCredentials    `json:"weibo"`
@@ -620,6 +635,12 @@ type BilibiliStore struct {
 	lastPostReset     time.Time
 	weiboRecoveryMu   sync.Mutex
 	weiboRecovery     weiboRecoveryState
+	tgMu              sync.Mutex
+	tgRuntime         *tgBot
+	tgManagerOnce     sync.Once
+	tgRefresh         chan struct{}
+	tgManagerCancel   context.CancelFunc
+	tgManagerDone     chan struct{}
 }
 
 type BilibiliUser struct {
@@ -1573,8 +1594,15 @@ func (s *Store) saveLocked() error {
 }
 
 func (s *Store) mergePosts(incoming []Post) (int, error) {
+	added, err := s.mergePostsWithAdded(incoming)
+	return len(added), err
+}
+
+// Capture the actual inserted posts in the same transaction as the merge. A
+// pre-merge snapshot could double-report a post inserted by another source.
+func (s *Store) mergePostsWithAdded(incoming []Post) ([]Post, error) {
 	if len(incoming) == 0 {
-		return 0, nil
+		return nil, nil
 	}
 	s.Lock()
 	defer s.Unlock()
@@ -1584,7 +1612,8 @@ func (s *Store) mergePosts(incoming []Post) (int, error) {
 	}
 	previous := append([]Post(nil), s.posts...)
 	affectedArchives := make(map[textArchiveKey]bool)
-	added, changed := 0, false
+	added := make(map[string]Post)
+	changed := false
 	for _, post := range incoming {
 		post.Videos = normalizePostVideos(post.Videos)
 		if post.ID == "" {
@@ -1597,6 +1626,9 @@ func (s *Store) mergePosts(incoming []Post) (int, error) {
 			affectedArchives[textArchiveKeyForPost(stored)] = true
 			if post.TextFile == "" {
 				post.TextFile = stored.TextFile
+			}
+			if post.AuthorID == "" {
+				post.AuthorID = stored.AuthorID
 			}
 			post.FeedIDs = mergeUniqueStrings(stored.FeedIDs, post.FeedIDs)
 			post.Tags = mergeUniqueStrings(stored.Tags, post.Tags)
@@ -1618,15 +1650,18 @@ func (s *Store) mergePosts(incoming []Post) (int, error) {
 				s.posts[index] = post
 				changed = true
 			}
+			if _, inserted := added[post.ID]; inserted {
+				added[post.ID] = post
+			}
 			continue
 		}
 		indexes[post.ID] = len(s.posts)
 		s.posts = append(s.posts, post)
-		added++
+		added[post.ID] = post
 		changed = true
 	}
 	if !changed {
-		return 0, nil
+		return nil, nil
 	}
 	sort.SliceStable(s.posts, func(i, j int) bool {
 		if s.posts[i].Published.Equal(s.posts[j].Published) {
@@ -1636,13 +1671,24 @@ func (s *Store) mergePosts(incoming []Post) (int, error) {
 	})
 	if _, err := s.reconcileTextArchivesFor(affectedArchives); err != nil {
 		s.posts = previous
-		return 0, err
+		return nil, err
 	}
 	if err := s.saveLocked(); err != nil {
 		s.posts = previous
-		return 0, err
+		return nil, err
 	}
-	return added, nil
+	inserted := make([]Post, 0, len(added))
+	for _, post := range added {
+		post.Media = append([]string(nil), post.Media...)
+		inserted = append(inserted, post)
+	}
+	sort.Slice(inserted, func(i, j int) bool {
+		if inserted[i].Published.Equal(inserted[j].Published) {
+			return inserted[i].ID < inserted[j].ID
+		}
+		return inserted[i].Published.After(inserted[j].Published)
+	})
+	return inserted, nil
 }
 
 func (s *Store) rewriteMediaPrefix(oldPrefix, newPrefix string) error {
@@ -3620,7 +3666,7 @@ func bilibiliOpusPost(opusID string, state map[string]any, feed SourceConfig) (P
 	captionParts := make([]string, 0)
 	media := make([]string, 0)
 	seenMedia := make(map[string]bool)
-	author, avatar := "", ""
+	author, authorID, avatar := "", "", ""
 	var published time.Time
 	for _, rawModule := range modules {
 		module, _ := rawModule.(map[string]any)
@@ -3629,6 +3675,7 @@ func bilibiliOpusPost(opusID string, state map[string]any, feed SourceConfig) (P
 		}
 		if moduleAuthor, ok := module["module_author"].(map[string]any); ok {
 			author = firstNonEmptyRemoteText(author, jsonValueString(moduleAuthor["name"]))
+			authorID = firstNonEmptyRemoteText(authorID, normalizeSubscriptionAuthorID(SourceBilibili, firstNonEmptyRemoteText(jsonValueString(moduleAuthor["mid"]), jsonValueString(moduleAuthor["uid"]))))
 			avatar = firstNonEmptyRemoteText(avatar, normalizeRemoteImage(jsonValueString(moduleAuthor["face"])))
 			if timestamp, err := strconv.ParseInt(jsonValueString(moduleAuthor["pub_ts"]), 10, 64); err == nil && timestamp > 0 {
 				published = time.Unix(timestamp, 0)
@@ -3659,6 +3706,7 @@ func bilibiliOpusPost(opusID string, state map[string]any, feed SourceConfig) (P
 		Source:      SourceBilibili,
 		FeedIDs:     []string{feed.ID},
 		Author:      author,
+		AuthorID:    authorID,
 		Avatar:      avatar,
 		Caption:     combineRemoteText(captionParts...),
 		Tags:        append([]string(nil), feed.Tags...),
@@ -4499,6 +4547,8 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 		} `json:"data"`
 	}
 	posts := make([]Post, 0)
+	boundary := sourceIncrementalBoundary(feed)
+	boundedAuthor := !full && feed.AuthorSync != nil
 	offset := ""
 	for page := 0; page < 100; page++ {
 		query := url.Values{}
@@ -4517,21 +4567,43 @@ func (b *BilibiliStore) fetchBilibiliPosts(feed SourceConfig, full bool) ([]Post
 			return nil, fmt.Errorf("B 站接口拒绝拉取: %s", payload.Message)
 		}
 		reachedBoundary := false
+		allOlder := len(payload.Data.Items) > 0
 		for _, rawItem := range payload.Data.Items {
+			if boundedAuthor {
+				var stamp struct {
+					Modules struct {
+						Author struct {
+							PubTs json.RawMessage `json:"pub_ts"`
+						} `json:"module_author"`
+					} `json:"modules"`
+				}
+				if json.Unmarshal(rawItem, &stamp) == nil {
+					if timestamp := parseRemoteTimestamp(stamp.Modules.Author.PubTs); timestamp > 0 && !time.Unix(timestamp, 0).After(boundary) {
+						continue
+					}
+				}
+				allOlder = false
+			}
 			post, err := b.parseBilibiliDynamicPost(rawItem, feed, credentials, proxyURL)
 			if err != nil {
 				continue
 			}
 			posts = append(posts, post)
 			published := post.Published
-			if !full && !feed.LastSyncedAt.IsZero() && !published.After(feed.LastSyncedAt) {
+			if !full && !boundedAuthor && !boundary.IsZero() && !published.After(boundary) {
 				reachedBoundary = true
 			}
 		}
-		if len(payload.Data.Items) == 0 || !payload.Data.HasMore || payload.Data.Offset == "" || payload.Data.Offset == offset || reachedBoundary {
+		if len(payload.Data.Items) == 0 || !payload.Data.HasMore || reachedBoundary || (boundedAuthor && allOlder) {
 			break
 		}
-		if !full && feed.LastSyncedAt.IsZero() {
+		if payload.Data.Offset == "" || payload.Data.Offset == offset || page == 99 {
+			if boundedAuthor {
+				return nil, errors.New("B 站分页未返回完整的增量动态，请重试")
+			}
+			break
+		}
+		if !full && boundary.IsZero() {
 			break
 		}
 		offset = payload.Data.Offset
@@ -4780,7 +4852,7 @@ func collectWeiboPosts(value any, feed SourceConfig, posts *[]Post, seen map[str
 			if profileID != "" {
 				originalURL = "https://weibo.com/" + url.PathEscape(profileID) + "/" + url.PathEscape(id)
 			}
-			*posts = append(*posts, Post{ID: "weibo-status-" + id, Source: SourceWeibo, FeedIDs: []string{feed.ID}, Author: name, Avatar: avatar, Caption: caption, Tags: append([]string(nil), feed.Tags...), Media: media, LivePhotos: livePhotos, Videos: videos, OriginalURL: originalURL, Published: published})
+			*posts = append(*posts, Post{ID: "weibo-status-" + id, Source: SourceWeibo, FeedIDs: []string{feed.ID}, Author: name, AuthorID: normalizeSubscriptionAuthorID(SourceWeibo, profileID), Avatar: avatar, Caption: caption, Tags: append([]string(nil), feed.Tags...), Media: media, LivePhotos: livePhotos, Videos: videos, OriginalURL: originalURL, Published: published})
 		}
 		for _, child := range object {
 			collectWeiboPosts(child, feed, posts, seen)
@@ -4959,7 +5031,7 @@ func (s *Store) postsAfterOrSourceMembership(posts []Post, boundary time.Time, f
 		if containsString(stored.FeedIDs, feedID) {
 			// Collection syncs also repair legacy remote author avatars. Reuse all
 			// already archived media so this does not trigger a full redownload.
-			if !needsLivePhotoArchive(post, stored) && (strings.TrimSpace(post.Avatar) == "" || localFlowFileAvailable(stored.Avatar)) {
+			if !needsLivePhotoArchive(post, stored) && (post.AuthorID == "" || stored.AuthorID != "") && (strings.TrimSpace(post.Avatar) == "" || localFlowFileAvailable(stored.Avatar)) {
 				continue
 			}
 			prepared, _ := reuseAvailablePostArchive(post, stored)
@@ -5116,6 +5188,9 @@ func historyPostNeedsMetadataUpdate(stored, incoming Post, feed SourceConfig) bo
 	if stored.OriginalURL == "" && incoming.OriginalURL != "" {
 		return true
 	}
+	if stored.AuthorID == "" && incoming.AuthorID != "" {
+		return true
+	}
 	if incoming.Avatar != "" && !localFlowFileAvailable(stored.Avatar) {
 		return true
 	}
@@ -5154,6 +5229,7 @@ func (s *Store) postsForHistoryBackfill(posts []Post, feed SourceConfig) ([]Post
 }
 
 func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, error) {
+	startedAt := time.Now()
 	trace := startSyncTrace(feed, full)
 	originalID := feed.ID
 	b.RLock()
@@ -5161,7 +5237,7 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 	b.RUnlock()
 	if feed.Source == SourceBilibili && !isBilibiliFavoriteOpusFeed(feed) {
 		userID := strings.TrimPrefix(feed.ID, "bili-")
-		if _, err := strconv.ParseUint(userID, 10, 64); err != nil || len(userID) > 15 || strings.TrimSpace(feed.Avatar) == "" {
+		if _, err := strconv.ParseUint(userID, 10, 64); feed.AuthorSync == nil && (err != nil || len(userID) > 15 || strings.TrimSpace(feed.Avatar) == "") {
 			if repaired, repairErr := b.findBilibiliUser(feed.Name); repairErr == nil {
 				feed.ID = "bili-" + repaired.UserID
 				feed.Handle = "UID " + repaired.UserID
@@ -5215,10 +5291,20 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 	trace.stage("fetch", len(posts), err)
 	archiveWarning := ""
 	added, historyEligible, historyPending, historySkipped := 0, 0, 0, 0
+	var newlyArchived []Post
 	if err == nil {
 		unlock := b.lockSourceArchive(feed.Source)
 		defer unlock()
-		if !full {
+		if feed.AuthorSync != nil {
+			if current, found := b.findSyncSource(feed.ID, feed.Source); !found || !sameAuthorSyncGeneration(current, feed) {
+				err = errors.New("作者订阅已取消，未归档本次拉取")
+				trace.finish(0, false, err)
+				return feed, err
+			}
+		}
+		if !full && feed.AuthorSync != nil {
+			posts = postsAfter(posts, sourceIncrementalBoundary(feed))
+		} else if !full {
 			if isBilibiliFavoriteOpusFeed(feed) && b.content != nil {
 				posts = b.content.postsAfterOrSourceMembership(posts, feed.LastSyncedAt, feed.ID)
 			} else if feed.Source == SourceBilibili && b.content != nil {
@@ -5253,7 +5339,8 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 		if err == nil && b.content == nil {
 			err = errors.New("动态存储未初始化")
 		} else if err == nil {
-			added, err = b.content.mergePosts(posts)
+			newlyArchived, err = b.content.mergePostsWithAdded(posts)
+			added = len(newlyArchived)
 			if err == nil && isCollectionFeed(feed) {
 				err = b.content.reconcileCollectionMedia(feed, b.allSourceConfigs())
 			}
@@ -5273,6 +5360,9 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 			if (*list)[index].ID != feed.ID && (*list)[index].ID != originalID {
 				continue
 			}
+			if !sameAuthorSyncGeneration((*list)[index], feed) {
+				continue
+			}
 			(*list)[index].ID = feed.ID
 			(*list)[index].Name = feed.Name
 			(*list)[index].Handle = feed.Handle
@@ -5280,6 +5370,13 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 				(*list)[index].Avatar = feed.Avatar
 			}
 			(*list)[index].LastSyncedAt = now
+			if !full && feed.AuthorSync != nil && err == nil && !weiboReport.PageLimited {
+				window := *feed.AuthorSync
+				if startedAt.After(window.PulledThrough) {
+					window.PulledThrough = startedAt
+				}
+				(*list)[index].AuthorSync = &window
+			}
 			(*list)[index].LastSyncCount = added
 			(*list)[index].LastSyncWarning = strings.Join(mergeUniqueStrings([]string{weiboReport.warning(full)}, []string{archiveWarning}), "；")
 			if err != nil {
@@ -5310,6 +5407,9 @@ func (b *BilibiliStore) syncSource(feed SourceConfig, full bool) (SourceConfig, 
 	b.Unlock()
 	if saveErr := b.save(); saveErr != nil && err == nil {
 		err = saveErr
+	}
+	if err == nil {
+		b.queueTelegramNotification(feed, newlyArchived)
 	}
 	trace.finish(added, archiveWarning != "" || weiboReport.warning(full) != "", err)
 	return feed, err
@@ -5342,10 +5442,11 @@ func (b *BilibiliStore) syncHandler(w http.ResponseWriter, r *http.Request) {
 
 func (b *BilibiliStore) runScheduledSync(at time.Time) {
 	for _, feed := range b.allSourceConfigs() {
-		if !feed.Enabled || !cronMatches(normalizeSchedule(feed.Schedule), at) {
+		if !feed.Enabled || !sourceScheduleMatches(feed, at) {
 			continue
 		}
-		if !feed.LastSyncedAt.IsZero() && feed.LastSyncedAt.Year() == at.Year() && feed.LastSyncedAt.YearDay() == at.YearDay() && feed.LastSyncedAt.Hour() == at.Hour() && feed.LastSyncedAt.Minute() == at.Minute() {
+		if feed.LastSyncedAt.Truncate(time.Minute).Equal(at.Truncate(time.Minute)) ||
+			(feed.AuthorSync != nil && feed.AuthorSync.SubscribedAt.Truncate(time.Minute).Equal(at.Truncate(time.Minute))) {
 			continue
 		}
 		b.enqueueSourceSync(feed, false)
@@ -5574,12 +5675,19 @@ func collectPixivIDs(value any, ids *[]string, seen map[string]bool) {
 	}
 }
 
-func parsePixivTime(value string) time.Time {
+func pixivPublishedTime(value string) time.Time {
 	value = strings.TrimSpace(value)
 	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05-07:00", "2006-01-02 15:04:05"} {
 		if parsed, err := time.Parse(layout, value); err == nil {
 			return parsed
 		}
+	}
+	return time.Time{}
+}
+
+func parsePixivTime(value string) time.Time {
+	if parsed := pixivPublishedTime(value); !parsed.IsZero() {
+		return parsed
 	}
 	return time.Now()
 }
@@ -5680,20 +5788,38 @@ func (b *BilibiliStore) fetchPixivPosts(feed SourceConfig, full bool) ([]Post, e
 		right, _ := strconv.ParseUint(ids[j], 10, 64)
 		return left > right
 	})
-	if !full && len(ids) > 24 {
+	boundedAuthor := !full && feed.AuthorSync != nil
+	boundary := sourceIncrementalBoundary(feed)
+	if !full && !boundedAuthor && len(ids) > 24 {
 		ids = ids[:24]
 	}
 	posts := make([]Post, 0, len(ids))
 	for index, id := range ids {
 		var detail map[string]any
 		if err := pixivRequestJSON(client, "https://www.pixiv.net/ajax/illust/"+url.PathEscape(id)+"?lang=zh", credentials, &detail); err != nil {
+			if boundedAuthor {
+				return nil, errors.New("Pixiv 作品详情未完整返回，请重试")
+			}
 			if index+1 < len(ids) {
 				time.Sleep(pixivRequestDelay(index))
 			}
 			continue
 		}
+		if boundedAuthor {
+			body, _ := detail["body"].(map[string]any)
+			published := pixivPublishedTime(jsonValueString(body["createDate"]))
+			if pixivPayloadFailed(detail) || published.IsZero() {
+				return nil, errors.New("Pixiv 作品发布日期不可用，请重试")
+			}
+			// The profile's work IDs are already consumed newest first.
+			if !published.After(boundary) {
+				break
+			}
+		}
 		if post, err := pixivDetailPost(client, credentials, id, detail, feed); err == nil {
 			posts = append(posts, post)
+		} else if boundedAuthor {
+			return nil, errors.New("Pixiv 作品原图未完整返回，请重试")
 		}
 		if index+1 < len(ids) {
 			time.Sleep(pixivRequestDelay(index))
@@ -5943,7 +6069,9 @@ func (b *BilibiliStore) fetchTwitterPostsFromAPI(feed SourceConfig, full bool, e
 	posts := make([]Post, 0)
 	seen := make(map[string]bool)
 	pageLimit := 1
-	if full {
+	boundedAuthor := !full && feed.AuthorSync != nil
+	boundary := sourceIncrementalBoundary(feed)
+	if full || boundedAuthor {
 		pageLimit = 30
 	}
 	cursor := ""
@@ -5958,6 +6086,7 @@ func (b *BilibiliStore) fetchTwitterPostsFromAPI(feed SourceConfig, full bool, e
 			return nil, fmt.Errorf("推特动态拉取失败：%w", err)
 		}
 		reachedBoundary := false
+		first := len(posts)
 		for _, tweet := range twitterTweetItems(payload) {
 			tweetID := firstNonEmptyRemoteText(jsonValueString(tweet["id"]), jsonValueString(tweet["tweetId"]))
 			if tweetID == "" || seen[tweetID] {
@@ -5966,7 +6095,7 @@ func (b *BilibiliStore) fetchTwitterPostsFromAPI(feed SourceConfig, full bool, e
 			seen[tweetID] = true
 			post := twitterDetailPost(tweet, tweetID, credentials, feed)
 			posts = append(posts, post)
-			if !full && !feed.LastSyncedAt.IsZero() && !post.Published.After(feed.LastSyncedAt) {
+			if !full && !boundedAuthor && !boundary.IsZero() && !post.Published.After(boundary) {
 				reachedBoundary = true
 			}
 		}
@@ -5974,11 +6103,18 @@ func (b *BilibiliStore) fetchTwitterPostsFromAPI(feed SourceConfig, full bool, e
 		if len(items) == 0 {
 			break
 		}
-		cursor = firstNonEmptyRemoteText(jsonValueString(payload["next_cursor"]), jsonValueString(payload["nextCursor"]))
+		nextCursor := firstNonEmptyRemoteText(jsonValueString(payload["next_cursor"]), jsonValueString(payload["nextCursor"]))
 		hasNext, _ := payload["has_next_page"].(bool)
-		if (!full && reachedBoundary) || !hasNext || cursor == "" {
+		if reachedBoundary || !hasNext || (boundedAuthor && sourcePageBeforeBoundary(posts[first:], boundary)) {
 			break
 		}
+		if nextCursor == "" || (boundedAuthor && (nextCursor == cursor || page+1 == pageLimit)) {
+			if boundedAuthor {
+				return nil, errors.New("推特分页未返回完整的增量动态，请重试")
+			}
+			break
+		}
+		cursor = nextCursor
 	}
 	return posts, nil
 }
@@ -7796,6 +7932,7 @@ func main() {
 		log.Fatal("unable to persist source storage paths: ", err)
 	}
 	bilibili.startScheduler()
+	bilibili.startTelegramBot()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/login", loginHandler(sessions))
 	mux.HandleFunc("/api/session", sessionHandler(sessions))
@@ -7804,6 +7941,8 @@ func main() {
 	mux.HandleFunc("/api/posts", store.postsHandler)
 	mux.HandleFunc("/api/posts/reset", bilibili.resetPostHandler)
 	mux.HandleFunc("/api/posts/reset/tasks", bilibili.resetTasksHandler)
+	mux.HandleFunc("/api/author-subscription", bilibili.authorSubscriptionHandler)
+	mux.HandleFunc("/api/telegram-bot", bilibili.telegramBotHandler)
 	mux.HandleFunc("/api/feeds", store.feedsHandler)
 	mux.HandleFunc("/api/sync", bilibili.syncHandler)
 	mux.HandleFunc("/api/sync/tasks", bilibili.syncTasksHandler)

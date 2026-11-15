@@ -74,6 +74,17 @@ type syncQueue struct {
 	runningByPlatform map[Source]int
 }
 
+func (q *syncQueue) hasActiveAuthor(target authorSubscriptionTarget) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for key := range q.active {
+		if key.source == target.Source && sourceAuthorIDFromFeedID(key.source, key.id) == target.ID {
+			return true
+		}
+	}
+	return false
+}
+
 func syncPlatform(source Source) (Source, int) {
 	switch source {
 	case SourceWeibo, SourcePixiv, SourceBilibili:

@@ -89,6 +89,7 @@ func (b *BilibiliStore) fetchWeiboTimeline(feed SourceConfig, full bool, credent
 		}
 	}
 	report := weiboFetchReport{Anonymous: anonymous}
+	boundary := sourceIncrementalBoundary(feed)
 	var lastErr error
 	for index, endpoint := range endpoints {
 		posts := make([]Post, 0)
@@ -104,6 +105,9 @@ func (b *BilibiliStore) fetchWeiboTimeline(feed SourceConfig, full bool, credent
 			}
 			if err != nil {
 				if anonymous && isWeiboSessionFailure(err) && len(posts) > 0 {
+					if feed.AuthorSync != nil {
+						report.PageLimited = true
+					}
 					return posts, report, nil
 				}
 				if weiboErrorKind(err) == "restricted" || weiboErrorKind(err) == "limited" || isWeiboSessionFailure(err) || len(posts) > 0 {
@@ -122,12 +126,16 @@ func (b *BilibiliStore) fetchWeiboTimeline(feed SourceConfig, full bool, credent
 			}
 			posts = append(posts, pagePosts...)
 			report.Fetched = len(posts)
-			if !full && feed.LastSyncedAt.IsZero() {
+			if !full && boundary.IsZero() {
 				return posts, report, nil
 			}
-			if !full && !feed.LastSyncedAt.IsZero() {
+			if !full && feed.AuthorSync != nil {
+				if sourcePageBeforeBoundary(pagePosts, boundary) {
+					return posts, report, nil
+				}
+			} else if !full && !boundary.IsZero() {
 				for _, post := range pagePosts {
-					if !post.Published.After(feed.LastSyncedAt) {
+					if !post.Published.After(boundary) {
 						return posts, report, nil
 					}
 				}

@@ -181,6 +181,27 @@ GET /api/v1/posts/reset/tasks
 
 ## 来源与同步
 
+### 从作者动态页订阅
+
+网页及 API 客户端可按已归档动态的作者身份或明确的直接订阅查询状态：
+
+```http
+GET /api/v1/author-subscription?source=weibo&author=作者名称&postId=weibo-status-123456
+```
+
+`source` 和 `author` 必填。推荐传入打开作者页的归档动态 `postId`；从已有订阅打开时可传直接 `feedId`。缺少两种锚点时，只能识别本地归档中可确定为同一账号的同平台同名作者。点赞、收藏等合集不是作者订阅，明示合集 `feedId` 时不可操作。无确定账号的旧归档在有可信动态锚点时，可尝试从原动态详情补充身份；不会按显示名猜测要订阅或取消哪个账号。
+
+```http
+POST /api/v1/author-subscription
+Content-Type: application/json
+
+{"source":"weibo","author":"作者名称","postId":"weibo-status-123456","timeZone":"Asia/Shanghai"}
+```
+
+创建返回 `202` 和 `{ "available": true, "subscribed": true, "feed": ..., "task": ..., "message": ... }`，已有直接订阅返回 `200` 与原设置，不重复启动首次同步。新订阅沿用平台表单默认选项，立即进入既有同步队列，首次增量归档窗口从订阅时刻向前 72 小时；成功后以后只增量拉取新动态，不设置永久的三天起始日期。上游公开范围、访问限制或分页上限可能影响可获取的数量。订阅时按 `timeZone` 指定的本地星期与小时保存五段式每周整点 Cron，例如周一 12:30 创建得到 `0 12 * * 1`；`feed.scheduleTimeZone` 用于定时作业，未指定则使用服务端时区。客户端可供 `/api/v1/sync/status?ids=<taskId>` 查询首次拉取结果。
+
+`DELETE /api/v1/author-subscription` 使用与 GET 相同的查询参数。取消只移除直接订阅与其未来计划，不清除已归档的动态、收藏或文件；已经进入归档阶段的任务可能完成当前拉取。GET/DELETE 返回 `{available, subscribed, feed?, message?}`。无法确认作者时 GET 返回 `available: false`（或可尝试在 POST 中解析），其他方法返回 `422`；旧的同步仍运行时重新添加可能返回 `409`。接口需登录且不缓存，也可走网页兼容路径 `/api/author-subscription`。
+
 统一读取所有平台来源：
 
 ```http
@@ -225,6 +246,25 @@ GET /api/v1/sync/status?ids=<任务ID1>,<任务ID2>
 订阅同步任务总并发最多5个；微博、Pixiv、哔哩哔哩分别最多2个，推特最多1个，超限按可执行顺序排队，一个平台满额不阻塞其他平台。平台原有请求间隔及访问限制不变；同平台共享目录的媒体归档串行，避免作者订阅和收藏来源相互覆盖。旧同步等待接口、全部同步、定时同步和旧微博点赞接口使用相同队列。旧等待请求断开只结束等待，不取消已提交任务。
 
 微博来源支持可选布尔字段 `includeLivePhotos`，省略时默认开启。使用 `PUT /api/v1/weibo/subscriptions` 传入 `false` 后，后续同步和单条重置只下载静态原图，不请求实况运动片段，也不提示缺失片段；普通视频仍由 `includeVideos` 独立控制。旧客户端更新来源时省略该字段会保留已有设置。关闭不会删除已归档的实况文件，重新开启后可用历史拉取补齐未归档片段。
+
+## Telegram 机器人设置
+
+认证接口 `GET /api/v1/telegram-bot` 返回：
+
+```json
+{"enabled":false,"tokenConfigured":true,"chatId":"123456789","notifications":true,"timeZone":"Asia/Shanghai","running":false,"username":"example_bot","error":""}
+```
+
+不返回 Token。`PUT /api/v1/telegram-bot` 保存 `{enabled,token?,clearToken?,chatId,notifications,timeZone}`，
+Token 省略或空字符串保留旧值；`clearToken:true` 清空（须同时停用机器人）。
+Chat ID 仅支持正整数私人会话编号，启用时必填；timeZone 为 IANA 时区。配置存入既有加密平台文件。
+返回新的脱敏视图，配置或代理变化时串行取消旧轮询后启动新机器人。
+
+`POST /api/v1/telegram-bot` 使用相同草稿字段并传 `action:"test"`，执行 getMe 和发送测试消息，
+不保存草稿、不切换运行中的机器人；草稿 Token 留空时使用已存 Token。成功返回 `{message,username}`。
+无效配置400、并发配置更新409、Telegram或网络测试失败502；GET/PUT/POST均需登录并禁止缓存。
+网页兼容路径为 `/api/telegram-bot`。不开放 Token/Chat ID 以外可定制的 Bot API 地址。
+命令、翻页、序号快照、订阅和通知规则见 README 的“Telegram 机器人”一节。
 
 ## 图片加载
 
