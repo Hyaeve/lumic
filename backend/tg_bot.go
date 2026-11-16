@@ -17,22 +17,24 @@ import (
 const telegramAPI = "https://api.telegram.org"
 
 type TGBotConfig struct {
-	Enabled       bool   `json:"enabled"`
-	Token         string `json:"token,omitempty"`
-	ChatID        string `json:"chatId"`
-	Notifications bool   `json:"notifications"`
-	TimeZone      string `json:"timeZone"`
+	Enabled          bool   `json:"enabled"`
+	Token            string `json:"token,omitempty"`
+	ChatID           string `json:"chatId"`
+	AuthorizedUserID string `json:"authorizedUserId"`
+	Notifications    bool   `json:"notifications"`
+	TimeZone         string `json:"timeZone"`
 }
 
 type tgBotView struct {
-	Enabled         bool   `json:"enabled"`
-	TokenConfigured bool   `json:"tokenConfigured"`
-	ChatID          string `json:"chatId"`
-	Notifications   bool   `json:"notifications"`
-	TimeZone        string `json:"timeZone"`
-	Username        string `json:"username,omitempty"`
-	Running         bool   `json:"running"`
-	Error           string `json:"error,omitempty"`
+	Enabled          bool   `json:"enabled"`
+	TokenConfigured  bool   `json:"tokenConfigured"`
+	ChatID           string `json:"chatId"`
+	AuthorizedUserID string `json:"authorizedUserId"`
+	Notifications    bool   `json:"notifications"`
+	TimeZone         string `json:"timeZone"`
+	Username         string `json:"username,omitempty"`
+	Running          bool   `json:"running"`
+	Error            string `json:"error,omitempty"`
 }
 
 type tgChat struct {
@@ -40,9 +42,14 @@ type tgChat struct {
 	Type string `json:"type"`
 }
 
+type tgUser struct {
+	ID int64 `json:"id"`
+}
+
 type tgMessage struct {
 	MessageID int64  `json:"message_id"`
 	Chat      tgChat `json:"chat"`
+	From      tgUser `json:"from"`
 	Text      string `json:"text"`
 }
 
@@ -50,9 +57,7 @@ type tgCallbackQuery struct {
 	ID      string     `json:"id"`
 	Data    string     `json:"data"`
 	Message *tgMessage `json:"message"`
-	From    struct {
-		ID int64 `json:"id"`
-	} `json:"from"`
+	From    tgUser     `json:"from"`
 }
 
 type tgUpdate struct {
@@ -245,14 +250,14 @@ func (bot *tgBot) authorized(update tgUpdate) bool {
 	if !bot.currentGeneration() {
 		return false
 	}
-	id, err := validTGChatID(bot.config.ChatID)
+	id, err := validTGChatID(bot.config.AuthorizedUserID)
 	if err != nil {
 		return false
 	}
 	if callback := update.CallbackQuery; callback != nil {
 		return callback.Message != nil && callback.Message.Chat.ID == id && callback.Message.Chat.Type == "private" && callback.From.ID == id
 	}
-	return update.Message != nil && update.Message.Chat.ID == id && update.Message.Chat.Type == "private"
+	return update.Message != nil && update.Message.Chat.ID == id && update.Message.Chat.Type == "private" && update.Message.From.ID == id
 }
 
 func (bot *tgBot) setStatus(running bool, message string) {
@@ -280,6 +285,7 @@ func (bot *tgBot) poll(ctx context.Context) {
 	bot.statusMu.Unlock()
 	_ = bot.call(ctx, "setMyCommands", map[string]any{"commands": []map[string]string{
 		{"command": "start", "description": "Lumic 简介与命令"}, {"command": "sh", "description": "搜索作者"},
+		{"command": "qr", "description": "扫码授权平台凭证"},
 		{"command": "subscriptions", "description": "查看订阅"}, {"command": "update", "description": "更新指定订阅"},
 		{"command": "unsubscribe", "description": "取消指定订阅"},
 	}}, nil)
@@ -371,13 +377,14 @@ func (bot *tgBot) run(ctx context.Context) {
 	bot.poll(ctx)
 	bot.cancel()
 	workers.Wait()
+	bot.commands.qrWorkers.Wait()
 }
 
 func (b *BilibiliStore) tgView() tgBotView {
 	b.RLock()
 	config := b.config.Telegram
 	b.RUnlock()
-	view := tgBotView{Enabled: config.Enabled, TokenConfigured: config.Token != "", ChatID: config.ChatID, Notifications: config.Notifications, TimeZone: config.TimeZone}
+	view := tgBotView{Enabled: config.Enabled, TokenConfigured: config.Token != "", ChatID: config.ChatID, AuthorizedUserID: config.AuthorizedUserID, Notifications: config.Notifications, TimeZone: config.TimeZone}
 	b.tgMu.Lock()
 	bot := b.tgRuntime
 	b.tgMu.Unlock()
@@ -483,13 +490,14 @@ func (b *BilibiliStore) telegramBotHandler(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var input struct {
-		Enabled       bool   `json:"enabled"`
-		Token         string `json:"token"`
-		ClearToken    bool   `json:"clearToken"`
-		ChatID        string `json:"chatId"`
-		Notifications bool   `json:"notifications"`
-		TimeZone      string `json:"timeZone"`
-		Action        string `json:"action"`
+		Enabled          bool    `json:"enabled"`
+		Token            string  `json:"token"`
+		ClearToken       bool    `json:"clearToken"`
+		ChatID           string  `json:"chatId"`
+		AuthorizedUserID string  `json:"authorizedUserId"`
+		Notifications    *bool   `json:"notifications"`
+		TimeZone         *string `json:"timeZone"`
+		Action           string  `json:"action"`
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
 	if decoder.Decode(&input) != nil || decoder.Decode(new(any)) != io.EOF {
@@ -499,7 +507,16 @@ func (b *BilibiliStore) telegramBotHandler(w http.ResponseWriter, r *http.Reques
 	b.RLock()
 	current, proxy := b.config.Telegram, b.config.ProxyURL
 	b.RUnlock()
-	config := TGBotConfig{Enabled: input.Enabled, Token: current.Token, ChatID: strings.TrimSpace(input.ChatID), Notifications: input.Notifications, TimeZone: strings.TrimSpace(input.TimeZone)}
+	config := TGBotConfig{Enabled: input.Enabled, Token: current.Token, ChatID: strings.TrimSpace(input.ChatID), AuthorizedUserID: strings.TrimSpace(input.AuthorizedUserID), Notifications: true, TimeZone: current.TimeZone}
+	if input.Notifications != nil {
+		config.Notifications = *input.Notifications
+	}
+	if input.TimeZone != nil {
+		config.TimeZone = strings.TrimSpace(*input.TimeZone)
+	}
+	if config.TimeZone == "" {
+		config.TimeZone = "UTC"
+	}
 	if input.ClearToken {
 		config.Token = ""
 	} else if strings.TrimSpace(input.Token) != "" {
@@ -518,6 +535,12 @@ func (b *BilibiliStore) telegramBotHandler(w http.ResponseWriter, r *http.Reques
 	if config.ChatID != "" || config.Enabled || r.Method == http.MethodPost {
 		if _, err := validTGChatID(config.ChatID); err != nil {
 			writeAPIError(w, 400, err.Error())
+			return
+		}
+	}
+	if config.AuthorizedUserID != "" {
+		if _, err := validTGChatID(config.AuthorizedUserID); err != nil {
+			writeAPIError(w, 400, "授权 ID 必须为正整数用户编号")
 			return
 		}
 	}

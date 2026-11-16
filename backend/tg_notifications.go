@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -129,90 +130,60 @@ func telegramTextUnits(text string) int {
 	return units
 }
 
-func splitTelegramText(text string, limit int) []string {
-	if text == "" || limit < 2 {
-		return nil
+func telegramNotificationText(text string, limit int) string {
+	if telegramTextUnits(text) <= limit {
+		return text
 	}
-	parts := make([]string, 0, telegramTextUnits(text)/limit+1)
-	start, units := 0, 0
-	for index, r := range text {
-		width := 1
-		if r > 0xffff {
-			width++
-		}
-		if units+width > limit {
-			parts = append(parts, text[start:index])
-			start, units = index, 0
-		}
-		units += width
-	}
-	return append(parts, text[start:])
-}
-
-func telegramNotificationTextParts(text string) []string {
 	index := strings.LastIndex(text, "\n\n\n本次更新：")
 	if index < 0 {
-		return splitTelegramText(text, 4096)
+		return tgClip(text, limit)
 	}
 	footer := text[index:]
-	parts := splitTelegramText(text[:index], 4096-telegramTextUnits(footer))
-	if len(parts) == 0 {
-		return []string{footer}
-	}
-	parts[len(parts)-1] += footer
-	return parts
+	return strings.TrimRight(tgClip(text[:index], limit-telegramTextUnits(footer)), "\r\n ") + footer
 }
 
 func deliverTelegramSyncNotification(ctx context.Context, notification tgSyncNotification, photos func([]string, string) error, message func(string) error) error {
 	if notification.Added <= 0 || len(notification.Posts) == 0 {
 		return nil
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	text := telegramSyncText(notification)
 	images := notification.Posts[0].Media
-	captionFits := telegramTextUnits(text) <= 1024
-	for index := 0; index < len(images); index += 10 {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		end := index + 10
-		if end > len(images) {
-			end = len(images)
-		}
-		caption := ""
-		if captionFits && end == len(images) {
-			caption = text
-		}
-		if err := photos(images[index:end], caption); err != nil {
-			// Preserve the update and its totals even when a photo was removed
-			// after archiving or Telegram declines an otherwise valid original.
-			for _, part := range telegramNotificationTextParts("图片暂未发送成功。\n\n" + text) {
-				if sendErr := message(part); sendErr != nil {
-					return sendErr
-				}
-			}
-			return err
-		}
+	if len(images) == 0 {
+		return message(telegramNotificationText(text, 4096))
 	}
-	if !captionFits || len(images) == 0 {
-		for _, part := range telegramNotificationTextParts(text) {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			if err := message(part); err != nil {
-				return err
-			}
+	// An album creates multiple Telegram messages. Send one preview with its
+	// caption so the update and aggregate result always stay together.
+	if err := photos(images[:1], telegramNotificationText(text, 1024)); err != nil {
+		var uncertain tgPhotoDeliveryUncertainError
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.As(err, &uncertain) {
+			return err
+		}
+		// Only preparation failures or an explicit API rejection permit a text
+		// fallback; an ambiguous network failure might already have delivered.
+		if sendErr := message(telegramNotificationText("图片暂未发送成功。\n\n"+text, 4096)); sendErr != nil {
+			return sendErr
+		}
+		return err
 	}
 	return nil
 }
 
 func (bot *tgBot) sendSyncNotification(ctx context.Context, notification tgSyncNotification) error {
+	if !bot.currentGeneration() {
+		return context.Canceled
+	}
 	chatID, err := strconv.ParseInt(bot.config.ChatID, 10, 64)
 	if err != nil || chatID <= 0 || !bot.config.Notifications {
 		return nil
 	}
 	return deliverTelegramSyncNotification(ctx, notification, func(images []string, caption string) error {
-		_, err := bot.sendPhotos(ctx, chatID, images, caption)
+		_, err := bot.sendPreviewPhoto(ctx, chatID, images[0], caption)
 		return err
 	}, func(text string) error {
 		_, err := bot.sendText(ctx, chatID, text, nil)

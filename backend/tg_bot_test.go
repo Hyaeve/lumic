@@ -46,12 +46,16 @@ func stopTGTestManager(t *testing.T, store *BilibiliStore) {
 	}
 }
 
-func tgRuntimeProxy(t *testing.T, handler http.HandlerFunc) string {
+func tgRuntimeProxy(t *testing.T, handler http.HandlerFunc, extraHosts ...string) string {
 	t.Helper()
 	api := httptest.NewTLSServer(handler)
 	t.Cleanup(api.Close)
+	hosts := map[string]bool{"api.telegram.org:443": true}
+	for _, host := range extraHosts {
+		hosts[host] = true
+	}
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodConnect || r.Host != "api.telegram.org:443" {
+		if r.Method != http.MethodConnect || !hosts[r.Host] {
 			http.Error(w, "fixture rejects external destinations", http.StatusForbidden)
 			return
 		}
@@ -80,14 +84,14 @@ func tgRuntimeProxy(t *testing.T, handler http.HandlerFunc) string {
 
 func TestTGBotConfigProtectsSecretsPreservesTokenAndRollsBack(t *testing.T) {
 	store := newWeiboAuthTestStore(t, WeiboCredentials{})
-	store.config.Telegram = TGBotConfig{Token: tgTestToken, ChatID: "42", Notifications: true}
+	store.config.Telegram = TGBotConfig{Token: tgTestToken, ChatID: "42", AuthorizedUserID: "77", Notifications: true}
 	t.Cleanup(func() { stopTGTestManager(t, store) })
 	view := tgConfigRequest(store, http.MethodGet, "")
-	if view.Code != 200 || view.Header().Get("Cache-Control") != "no-store" || strings.Contains(view.Body.String(), tgTestToken) || strings.Contains(view.Body.String(), `"token":`) || !strings.Contains(view.Body.String(), `"tokenConfigured":true`) {
+	if view.Code != 200 || view.Header().Get("Cache-Control") != "no-store" || strings.Contains(view.Body.String(), tgTestToken) || strings.Contains(view.Body.String(), `"token":`) || !strings.Contains(view.Body.String(), `"tokenConfigured":true`) || !strings.Contains(view.Body.String(), `"authorizedUserId":"77"`) {
 		t.Fatalf("unsafe config view: %d %s", view.Code, view.Body.String())
 	}
-	response := tgConfigRequest(store, http.MethodPut, `{"enabled":false,"token":"","chatId":"42","notifications":false,"timeZone":"Asia/Shanghai"}`)
-	if response.Code != 200 || store.config.Telegram.Token != tgTestToken || store.config.Telegram.Notifications {
+	response := tgConfigRequest(store, http.MethodPut, `{"enabled":false,"token":"","chatId":"42","authorizedUserId":" 77 ","notifications":false,"timeZone":"Asia/Shanghai"}`)
+	if response.Code != 200 || store.config.Telegram.Token != tgTestToken || store.config.Telegram.Notifications || store.config.Telegram.AuthorizedUserID != "77" {
 		t.Fatalf("blank token did not preserve saved secret: %d", response.Code)
 	}
 	data, err := os.ReadFile(bilibiliFile)
@@ -102,6 +106,7 @@ func TestTGBotConfigProtectsSecretsPreservesTokenAndRollsBack(t *testing.T) {
 	for _, input := range []string{
 		`{`, `{} {}`, `{"token":"bad"}`, `{"chatId":"-1"}`, `{"chatId":"0"}`, `{"chatId":"042"}`,
 		`{"timeZone":"not/a/timezone"}`, `{"enabled":true,"clearToken":true,"chatId":"42"}`,
+		`{"authorizedUserId":"-1"}`, `{"authorizedUserId":"0"}`, `{"authorizedUserId":"077"}`, `{"authorizedUserId":"user"}`, `{"authorizedUserId":"9223372036854775808"}`,
 	} {
 		response = tgConfigRequest(store, http.MethodPut, input)
 		if response.Code != 400 || store.config.Telegram != previous {
@@ -121,6 +126,103 @@ func TestTGBotConfigProtectsSecretsPreservesTokenAndRollsBack(t *testing.T) {
 	response = tgConfigRequest(store, http.MethodPut, `{"clearToken":true}`)
 	if response.Code != 200 || store.config.Telegram.Token != "" {
 		t.Fatal("explicit token clear failed", response.Code)
+	}
+}
+
+func TestTGBotConfigDefaultsAndEmptyAuthorization(t *testing.T) {
+	store := newWeiboAuthTestStore(t, WeiboCredentials{})
+	store.config.Telegram = TGBotConfig{Token: tgTestToken, ChatID: "42", AuthorizedUserID: "77", Notifications: false, TimeZone: "Asia/Shanghai"}
+	t.Cleanup(func() { stopTGTestManager(t, store) })
+	response := tgConfigRequest(store, http.MethodPut, `{"chatId":"42"}`)
+	if response.Code != 200 || !store.config.Telegram.Notifications || store.config.Telegram.TimeZone != "Asia/Shanghai" || store.config.Telegram.AuthorizedUserID != "" {
+		t.Fatalf("omitted settings did not use secure defaults: %d %+v", response.Code, store.config.Telegram)
+	}
+	bot := &tgBot{config: store.config.Telegram}
+	if bot.authorized(tgUpdate{Message: &tgMessage{Chat: tgChat{ID: 42, Type: "private"}, From: tgUser{ID: 42}}}) {
+		t.Fatal("empty authorization incorrectly fell back to notification Chat ID")
+	}
+	response = tgConfigRequest(store, http.MethodPut, `{"chatId":"42","authorizedUserId":"77","notifications":false}`)
+	if response.Code != 200 || store.config.Telegram.Notifications || store.config.Telegram.AuthorizedUserID != "77" {
+		t.Fatal("legacy explicit notification setting was not retained")
+	}
+	response = tgConfigRequest(store, http.MethodPut, `{"chatId":"42","authorizedUserId":"  "}`)
+	if response.Code != 200 || store.config.Telegram.AuthorizedUserID != "" {
+		t.Fatal("blank authorization did not clear permission")
+	}
+	store.Lock()
+	store.config.Telegram.TimeZone = ""
+	store.Unlock()
+	response = tgConfigRequest(store, http.MethodPut, `{"chatId":"42"}`)
+	if response.Code != 200 || store.config.Telegram.TimeZone != "UTC" {
+		t.Fatal("missing legacy timezone did not get a stable default")
+	}
+	var legacy TGBotConfig
+	if err := json.Unmarshal([]byte(`{"token":"fixture","chatId":"42"}`), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	bot.config = legacy
+	if bot.authorized(tgUpdate{Message: &tgMessage{Chat: tgChat{ID: 42, Type: "private"}, From: tgUser{ID: 42}}}) {
+		t.Fatal("legacy config without authorization allowed a command")
+	}
+}
+
+func TestTGBotAuthorizationChecksIdentityAndGeneration(t *testing.T) {
+	bot := &tgBot{config: TGBotConfig{ChatID: "42", AuthorizedUserID: "77"}}
+	message := func(chatID, senderID int64, chatType string) tgUpdate {
+		return tgUpdate{Message: &tgMessage{Chat: tgChat{ID: chatID, Type: chatType}, From: tgUser{ID: senderID}}}
+	}
+	callback := func(chatID, senderID int64, chatType string) tgUpdate {
+		return tgUpdate{CallbackQuery: &tgCallbackQuery{Message: &tgMessage{Chat: tgChat{ID: chatID, Type: chatType}}, From: tgUser{ID: senderID}}}
+	}
+	for _, test := range []struct {
+		name   string
+		update tgUpdate
+		allow  bool
+	}{
+		{"authorized private sender", message(77, 77, "private"), true},
+		{"notification recipient is not authorized", message(42, 42, "private"), false},
+		{"missing sender", message(77, 0, "private"), false},
+		{"different sender", message(77, 42, "private"), false},
+		{"different private chat", message(42, 77, "private"), false},
+		{"group message", message(77, 77, "group"), false},
+		{"authorized callback", callback(77, 77, "private"), true},
+		{"callback missing sender", callback(77, 0, "private"), false},
+		{"callback different sender", callback(77, 42, "private"), false},
+		{"callback different private chat", callback(42, 77, "private"), false},
+		{"group callback", callback(77, 77, "supergroup"), false},
+		{"inline callback without chat", tgUpdate{CallbackQuery: &tgCallbackQuery{From: tgUser{ID: 77}}}, false},
+		{"empty update", tgUpdate{}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if bot.authorized(test.update) != test.allow {
+				t.Fatal("authorization result differs from expected", test.allow)
+			}
+		})
+	}
+	for _, invalid := range []string{"", "-77", "077", "not-an-id"} {
+		bot.config.AuthorizedUserID = invalid
+		if bot.authorized(message(77, 77, "private")) || bot.authorized(callback(77, 77, "private")) {
+			t.Fatal("invalid or missing authorization accepted", invalid)
+		}
+	}
+	store := newWeiboAuthTestStore(t, WeiboCredentials{})
+	store.config.Telegram = TGBotConfig{ChatID: "42", AuthorizedUserID: "77"}
+	bot.config, bot.store, bot.managed = store.config.Telegram, store, true
+	if !bot.authorized(message(77, 77, "private")) {
+		t.Fatal("current configured generation was rejected")
+	}
+	var requests atomic.Int32
+	bot.client = &http.Client{Transport: tgTestRoundTripper(func(_ *http.Request) (*http.Response, error) {
+		requests.Add(1)
+		return nil, errors.New("unexpected network request")
+	})}
+	bot.apiBase = telegramAPI
+	store.config.Telegram.AuthorizedUserID = "88"
+	if bot.currentGeneration() || bot.authorized(message(77, 77, "private")) || bot.authorized(callback(77, 77, "private")) {
+		t.Fatal("authorization edit did not invalidate the old generation")
+	}
+	if _, err := bot.sendText(context.Background(), 77, "stale", nil); !errors.Is(err, context.Canceled) || requests.Load() != 0 {
+		t.Fatal("old generation sent after authorization changed", err)
 	}
 }
 
@@ -149,7 +251,7 @@ func TestTGBotDraftTestUsesProjectProxyWithoutSaving(t *testing.T) {
 	})
 	store := newWeiboAuthTestStore(t, WeiboCredentials{})
 	store.config.ProxyURL = proxy
-	store.config.Telegram = TGBotConfig{Token: tgTestToken, ChatID: "42"}
+	store.config.Telegram = TGBotConfig{Token: tgTestToken, ChatID: "42", AuthorizedUserID: "55"}
 	previous := store.config.Telegram
 	response := tgConfigRequest(store, http.MethodPost, fmt.Sprintf(`{"action":"test","token":%q,"chatId":"77"}`, draftToken))
 	if response.Code != 200 || calls.Load() != 2 || store.config.Telegram != previous || store.tgManagerCancel != nil || store.tgRuntime != nil {
@@ -231,9 +333,9 @@ func TestTGBotPollSkipsPendingRestrictsPrivateChatAndCancels(t *testing.T) {
 		case "getUpdates":
 			switch input["offset"] {
 			case float64(-1):
-				fmt.Fprint(w, `{"ok":true,"result":[{"update_id":100,"message":{"message_id":1,"chat":{"id":42,"type":"private"},"text":"/start"}}]}`)
+				fmt.Fprint(w, `{"ok":true,"result":[{"update_id":100,"message":{"message_id":1,"chat":{"id":42,"type":"private"},"from":{"id":42},"text":"/start"}}]}`)
 			case float64(101):
-				fmt.Fprint(w, `{"ok":true,"result":[{"update_id":101,"message":{"message_id":2,"chat":{"id":99,"type":"private"},"text":"/start"}},{"update_id":102,"message":{"message_id":3,"chat":{"id":42,"type":"group"},"text":"/start"}},{"update_id":103,"message":{"message_id":4,"chat":{"id":42,"type":"private"},"text":"/start"}}]}`)
+				fmt.Fprint(w, `{"ok":true,"result":[{"update_id":101,"message":{"message_id":2,"chat":{"id":99,"type":"private"},"from":{"id":99},"text":"/start"}},{"update_id":102,"message":{"message_id":3,"chat":{"id":42,"type":"group"},"from":{"id":42},"text":"/start"}},{"update_id":103,"message":{"message_id":4,"chat":{"id":42,"type":"private"},"from":{"id":42},"text":"/start"}}]}`)
 			case float64(104):
 				select {
 				case blocked <- struct{}{}:
@@ -253,7 +355,7 @@ func TestTGBotPollSkipsPendingRestrictsPrivateChatAndCancels(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	ctx, cancel := context.WithCancel(context.Background())
-	bot := &tgBot{store: newWeiboAuthTestStore(t, WeiboCredentials{}), config: TGBotConfig{Token: tgTestToken, ChatID: "42"}, client: server.Client(), apiBase: server.URL, cancel: cancel, done: make(chan struct{}), notifications: make(chan tgSyncNotification, 1)}
+	bot := &tgBot{store: newWeiboAuthTestStore(t, WeiboCredentials{}), config: TGBotConfig{Token: tgTestToken, ChatID: "42", AuthorizedUserID: "42"}, client: server.Client(), apiBase: server.URL, cancel: cancel, done: make(chan struct{}), notifications: make(chan tgSyncNotification, 1)}
 	go bot.run(ctx)
 	t.Cleanup(func() {
 		cancel()
@@ -337,6 +439,7 @@ func TestTGBotManagerRechecksGenerationAfterShutdown(t *testing.T) {
 	}
 	store.Lock()
 	store.config.Telegram.ChatID = "77"
+	store.config.Telegram.AuthorizedUserID = "77"
 	store.Unlock()
 	close(release)
 	released = true
@@ -356,7 +459,7 @@ func TestTGBotManagerRechecksGenerationAfterShutdown(t *testing.T) {
 	store.tgMu.Lock()
 	current := store.tgRuntime
 	store.tgMu.Unlock()
-	if current == nil || current.config.ChatID != "77" || !current.managed {
+	if current == nil || current.config.ChatID != "77" || current.config.AuthorizedUserID != "77" || !current.managed {
 		t.Fatal("manager did not re-read latest configuration")
 	}
 	before := requests.Load()

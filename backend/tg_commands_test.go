@@ -41,12 +41,12 @@ func commandTestBot(t *testing.T, store *BilibiliStore) (*tgBot, func() []tgComm
 		writeJSON(w, map[string]any{"ok": true, "result": result})
 	}))
 	t.Cleanup(server.Close)
-	bot := &tgBot{store: store, config: TGBotConfig{ChatID: "42", TimeZone: "Asia/Shanghai"}, client: server.Client(), apiBase: server.URL}
+	bot := &tgBot{store: store, config: TGBotConfig{ChatID: "42", AuthorizedUserID: "42", TimeZone: "Asia/Shanghai"}, client: server.Client(), apiBase: server.URL}
 	return bot, func() []tgCommandCall { mu.Lock(); defer mu.Unlock(); return append([]tgCommandCall(nil), calls...) }
 }
 
 func commandMessage(text string) tgUpdate {
-	return tgUpdate{Message: &tgMessage{MessageID: 7, Chat: tgChat{ID: 42, Type: "private"}, Text: text}}
+	return tgUpdate{Message: &tgMessage{MessageID: 7, Chat: tgChat{ID: 42, Type: "private"}, From: tgUser{ID: 42}, Text: text}}
 }
 func commandCallback(bot *tgBot, data string) tgUpdate {
 	query := &tgCallbackQuery{ID: "fixture", Data: data, Message: &tgMessage{MessageID: bot.commands.messageID, Chat: tgChat{ID: 42, Type: "private"}}}
@@ -386,6 +386,64 @@ func TestTGChangedGenerationCannotEnterOrMutateCommands(t *testing.T) {
 	bot.handleUpdate(canceled, commandMessage("/start"))
 	if len(calls()) != before {
 		t.Fatal("canceled runtime processed commands")
+	}
+}
+
+func TestTGCommandsRequireExplicitAuthorizedUser(t *testing.T) {
+	store := newWeiboAuthTestStore(t, WeiboCredentials{})
+	store.config.WeiboSubscriptions = []SourceConfig{{ID: "weibo-2", Source: SourceWeibo, Name: "作者"}}
+	bot, calls := commandTestBot(t, store)
+	bot.config.ChatID = "99"
+	ctx := context.Background()
+	bot.handleUpdate(ctx, commandMessage("取消订阅 作者"))
+	confirmation := commandButton(t, calls(), "确认取消")
+	nonce, rootID := bot.commands.nonce, bot.commands.messageID
+	for _, call := range calls() {
+		if call.Method == "sendMessage" || call.Method == "editMessageText" {
+			if call.Payload["chat_id"] != float64(42) {
+				t.Fatal("command reply was sent to the notification chat")
+			}
+		}
+	}
+	bot.commands.mediaIDs = []int64{501}
+	waitCanceled := false
+	bot.commands.waitCancel = func() { waitCanceled = true }
+	before := len(calls())
+	for _, authorization := range []string{"", "0", "-42", "invalid"} {
+		bot.config.AuthorizedUserID = authorization
+		bot.handleUpdate(ctx, commandMessage("/start"))
+		bot.handleUpdate(ctx, commandCallback(bot, confirmation))
+	}
+	bot.config.AuthorizedUserID = "42"
+	for _, mutate := range []func(*tgUpdate){
+		func(u *tgUpdate) { u.Message.From.ID = 0 },
+		func(u *tgUpdate) { u.Message.From.ID = 99 },
+		func(u *tgUpdate) { u.Message.Chat.ID, u.Message.From.ID = 99, 99 },
+		func(u *tgUpdate) { u.Message.Chat.Type = "group" },
+	} {
+		update := commandMessage("/start")
+		mutate(&update)
+		bot.handleUpdate(ctx, update)
+	}
+	for _, mutate := range []func(*tgUpdate){
+		func(u *tgUpdate) { u.CallbackQuery.From.ID = 0 },
+		func(u *tgUpdate) { u.CallbackQuery.From.ID = 99 },
+		func(u *tgUpdate) { u.CallbackQuery.Message.Chat.ID, u.CallbackQuery.From.ID = 99, 99 },
+		func(u *tgUpdate) { u.CallbackQuery.Message.Chat.Type = "supergroup" },
+	} {
+		update := commandCallback(bot, confirmation)
+		mutate(&update)
+		bot.handleUpdate(ctx, update)
+	}
+	if len(calls()) != before || waitCanceled || bot.commands.nonce != nonce || bot.commands.messageID != rootID || !reflect.DeepEqual(bot.commands.mediaIDs, []int64{501}) {
+		t.Fatal("unauthorized update altered the active flow or emitted a response")
+	}
+	if _, ok := store.findSyncSource("weibo-2", SourceWeibo); !ok {
+		t.Fatal("unauthorized callback removed a subscription")
+	}
+	bot.handleUpdate(ctx, commandCallback(bot, confirmation))
+	if _, ok := store.findSyncSource("weibo-2", SourceWeibo); ok || !waitCanceled {
+		t.Fatal("authorized user could not confirm with a different notification chat")
 	}
 }
 

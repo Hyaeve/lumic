@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -106,7 +107,11 @@ func mergeWeiboResponseCookies(original string, response *http.Response) string 
 }
 
 func weiboSessionRequest(endpoint string, credentials *WeiboCredentials, proxyURL string) (map[string]any, int, error) {
-	request, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	return weiboSessionRequestContext(context.Background(), endpoint, credentials, proxyURL)
+}
+
+func weiboSessionRequestContext(ctx context.Context, endpoint string, credentials *WeiboCredentials, proxyURL string) (map[string]any, int, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, 0, err
 	}

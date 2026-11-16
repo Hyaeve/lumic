@@ -3,10 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"image"
 	"image/color"
+	"image/gif"
 	"image/png"
 	"io"
 	"net/http"
@@ -23,6 +25,23 @@ func tgImageFixture(t *testing.T) []byte {
 	t.Helper()
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
 	img.Set(0, 0, color.RGBA{R: 128, G: 64, B: 30, A: 255})
+	var data bytes.Buffer
+	if err := png.Encode(&data, img); err != nil {
+		t.Fatal(err)
+	}
+	return data.Bytes()
+}
+
+func tgDetailedImageFixture(t *testing.T, width, height int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	state := uint32(42)
+	for index := 0; index < len(img.Pix); index += 4 {
+		state ^= state << 13
+		state ^= state >> 17
+		state ^= state << 5
+		img.Pix[index], img.Pix[index+1], img.Pix[index+2], img.Pix[index+3] = byte(state), byte(state>>8), byte(state>>16), 255
+	}
 	var data bytes.Buffer
 	if err := png.Encode(&data, img); err != nil {
 		t.Fatal(err)
@@ -166,5 +185,55 @@ func TestTGMediaCancellationStopsBatchBeforeUpload(t *testing.T) {
 	_, err := bot.sendPhotos(ctx, 42, []string{"https://i.pximg.net/one.png", "https://i.pximg.net/two.png"}, "")
 	if !errors.Is(err, context.DeadlineExceeded) || downloads.Load() != 1 {
 		t.Fatal("canceled batch continued downloading or attempted an upload")
+	}
+}
+
+func TestTGNotificationPreviewBoundsAndCancellation(t *testing.T) {
+	previous := flowRoot
+	flowRoot = t.TempDir()
+	t.Cleanup(func() { flowRoot = previous })
+	if err := os.WriteFile(filepath.Join(flowRoot, "photo.png"), tgImageFixture(t), 0600); err != nil {
+		t.Fatal(err)
+	}
+	bot := &tgBot{}
+	for _, source := range []string{"/flow/../photo.png", "/flow/photo.png?private=1", "https://i.pximg.net/photo.png"} {
+		if _, err := bot.notificationPhotoData(context.Background(), source); err == nil {
+			t.Fatal("notification accepted unsafe or remote photo source", source)
+		}
+	}
+	outside := filepath.Join(t.TempDir(), "private.png")
+	if err := os.WriteFile(outside, tgImageFixture(t), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(flowRoot, "linked.png")); err == nil {
+		if _, err := bot.notificationPhotoData(context.Background(), "/flow/linked.png"); err == nil {
+			t.Fatal("notification preview read an escaped symlink")
+		}
+	}
+	var imageHeader bytes.Buffer
+	if err := gif.Encode(&imageHeader, image.NewPaletted(image.Rect(0, 0, 2, 2), color.Palette{color.Black, color.White}), nil); err != nil {
+		t.Fatal(err)
+	}
+	data := imageHeader.Bytes()
+	binary.LittleEndian.PutUint16(data[6:8], 9000)
+	binary.LittleEndian.PutUint16(data[8:10], 9000)
+	if err := os.WriteFile(filepath.Join(flowRoot, "huge.gif"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bot.notificationPhotoData(context.Background(), "/flow/huge.gif"); err == nil || !strings.Contains(err.Error(), "尺寸") {
+		t.Fatal("notification preview did not reject a decompression-sized image before decode", err)
+	}
+	for index := 0; index < cap(mediaPreviewGenerationSlots); index++ {
+		mediaPreviewGenerationSlots <- struct{}{}
+	}
+	defer func() {
+		for index := 0; index < cap(mediaPreviewGenerationSlots); index++ {
+			<-mediaPreviewGenerationSlots
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := bot.notificationPhotoData(ctx, "/flow/photo.png"); !errors.Is(err, context.DeadlineExceeded) || len(mediaPreviewGenerationSlots) != cap(mediaPreviewGenerationSlots) {
+		t.Fatal("preview cancellation ignored the shared slot limit or leaked a slot", err)
 	}
 }

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/jpeg"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -18,6 +20,12 @@ import (
 
 const tgPhotoMaxBytes = 10 << 20
 const tgAlbumMaxBytes = 32 << 20
+const tgPreviewMaxPixels = 40_000_000
+
+type tgPhotoDeliveryUncertainError struct{ err error }
+
+func (err tgPhotoDeliveryUncertainError) Error() string { return err.err.Error() }
+func (err tgPhotoDeliveryUncertainError) Unwrap() error { return err.err }
 
 func tgMediaHost(host string) bool {
 	host = strings.ToLower(host)
@@ -175,4 +183,85 @@ func (bot *tgBot) sendPhotos(ctx context.Context, chatID int64, sources []string
 		ids = append(ids, message.MessageID)
 	}
 	return ids, nil
+}
+
+func (bot *tgBot) notificationPhotoData(ctx context.Context, source string) ([]byte, error) {
+	if !strings.HasPrefix(source, "/flow/") {
+		return nil, errors.New("通知图片必须来自本地归档")
+	}
+	data, err := bot.photoData(ctx, source)
+	if err != nil {
+		return nil, err
+	}
+	config, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil || config.Width <= 0 || config.Height <= 0 || config.Width > 30000 || config.Height > 30000 || int64(config.Width)*int64(config.Height) > tgPreviewMaxPixels {
+		return nil, errors.New("通知图片格式或尺寸不受支持")
+	}
+	select {
+	case mediaPreviewGenerationSlots <- struct{}{}:
+		defer func() { <-mediaPreviewGenerationSlots }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	decoded, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, errors.New("无法生成通知图片预览")
+	}
+	width, height := config.Width, config.Height
+	if width > mediaPreviewMobileMaxDimension || height > mediaPreviewMobileMaxDimension {
+		if width >= height {
+			height = max(1, height*mediaPreviewMobileMaxDimension/width)
+			width = mediaPreviewMobileMaxDimension
+		} else {
+			width = max(1, width*mediaPreviewMobileMaxDimension/height)
+			height = mediaPreviewMobileMaxDimension
+		}
+	}
+	var preview bytes.Buffer
+	if err := jpeg.Encode(&preview, resizeMediaPreview(decoded, width, height), &jpeg.Options{Quality: mediaPreviewMobileJPEGQuality}); err != nil {
+		return nil, errors.New("无法生成通知图片预览")
+	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	return preview.Bytes(), nil
+}
+
+func (bot *tgBot) sendPreviewPhoto(ctx context.Context, chatID int64, source, caption string) (int64, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if !bot.currentGeneration() {
+		return 0, context.Canceled
+	}
+	data, err := bot.notificationPhotoData(ctx, source)
+	if err != nil {
+		return 0, err
+	}
+	var buffer bytes.Buffer
+	writer := multipart.NewWriter(&buffer)
+	_ = writer.WriteField("chat_id", fmt.Sprint(chatID))
+	_ = writer.WriteField("photo", "attach://preview")
+	_ = writer.WriteField("caption", caption)
+	part, err := writer.CreateFormFile("preview", "preview.jpg")
+	if err != nil {
+		return 0, errors.New("无法准备通知图片预览")
+	}
+	if _, err := part.Write(data); err != nil {
+		return 0, errors.New("无法准备通知图片预览")
+	}
+	if writer.Close() != nil {
+		return 0, errors.New("无法准备通知图片预览")
+	}
+	var message tgMessage
+	if err := bot.request(ctx, "sendPhoto", writer.FormDataContentType(), buffer.Bytes(), &message); err != nil {
+		var rejected tgAPIError
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return 0, err
+		}
+		if errors.As(err, &rejected) && rejected.code >= 400 && rejected.code < 500 && rejected.code != http.StatusRequestTimeout {
+			return 0, err
+		}
+		return 0, tgPhotoDeliveryUncertainError{err: err}
+	}
+	return message.MessageID, nil
 }

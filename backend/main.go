@@ -2844,7 +2844,11 @@ func maskedProxyURL(rawURL string) string {
 }
 
 func bilibiliRequest(endpoint string, credentials BilibiliCredentials, proxyURL string, target any) error {
-	request, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	return bilibiliRequestContext(context.Background(), endpoint, credentials, proxyURL, target)
+}
+
+func bilibiliRequestContext(ctx context.Context, endpoint string, credentials BilibiliCredentials, proxyURL string, target any) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return err
 	}
@@ -2919,6 +2923,10 @@ func verifyBilibiliCredentials(credentials BilibiliCredentials, proxyURL string)
 }
 
 func bilibiliAccountProfile(credentials BilibiliCredentials, proxyURL string) BilibiliAccount {
+	return bilibiliAccountProfileContext(context.Background(), credentials, proxyURL)
+}
+
+func bilibiliAccountProfileContext(ctx context.Context, credentials BilibiliCredentials, proxyURL string) BilibiliAccount {
 	account := BilibiliAccount{Configured: credentials.SESSDATA != "", UserID: credentials.DedeUserID, UserName: credentials.UserName, Avatar: credentials.Avatar}
 	var payload struct {
 		Code int `json:"code"`
@@ -2928,7 +2936,7 @@ func bilibiliAccountProfile(credentials BilibiliCredentials, proxyURL string) Bi
 			Face  string `json:"face"`
 		} `json:"data"`
 	}
-	if err := bilibiliRequest("https://api.bilibili.com/x/web-interface/nav", credentials, proxyURL, &payload); err != nil || payload.Code != 0 {
+	if err := bilibiliRequestContext(ctx, "https://api.bilibili.com/x/web-interface/nav", credentials, proxyURL, &payload); err != nil || payload.Code != 0 {
 		return account
 	}
 	if payload.Data.Mid > 0 {
@@ -6651,108 +6659,127 @@ func mergeBilibiliCookies(credentials BilibiliCredentials, client *http.Client) 
 }
 
 func (b *BilibiliStore) bilibiliQRHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	switch r.Method {
+	case http.MethodPost:
+		session, err := b.startBilibiliQR(r.Context())
+		if err != nil {
+			writeAPIError(w, err.status, err.message)
+			return
+		}
+		writeJSON(w, session)
+	case http.MethodGet:
+		result, err := b.pollBilibiliQR(r.Context(), strings.TrimSpace(r.URL.Query().Get("id")), nil)
+		if err != nil {
+			writeAPIError(w, err.status, err.message)
+			return
+		}
+		writeJSON(w, result)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (b *BilibiliStore) startBilibiliQR(ctx context.Context) (BilibiliQRSession, *platformQRError) {
 	b.RLock()
 	proxyURL := b.config.ProxyURL
 	b.RUnlock()
-	if r.Method == http.MethodPost {
-		client, err := browserClient(proxyURL)
-		if err != nil {
-			writeAPIError(w, http.StatusBadGateway, err.Error())
-			return
-		}
-		homeRequest, _ := http.NewRequest(http.MethodGet, "https://www.bilibili.com/", nil)
-		homeRequest.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
-		if response, requestErr := client.Do(homeRequest); requestErr == nil {
-			response.Body.Close()
-		}
-		request, _ := http.NewRequest(http.MethodGet, "https://passport.bilibili.com/x/passport-login/web/qrcode/generate", nil)
-		setBilibiliAPIHeaders(request)
-		response, err := client.Do(request)
-		if err != nil {
-			writeAPIError(w, http.StatusBadGateway, "无法连接 B 站二维码服务")
-			return
-		}
-		defer response.Body.Close()
-		var payload struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-			Data    struct {
-				URL string `json:"url"`
-				Key string `json:"qrcode_key"`
-			} `json:"data"`
-		}
-		if json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(&payload) != nil || payload.Code != 0 || payload.Data.URL == "" || payload.Data.Key == "" {
-			writeAPIError(w, http.StatusBadGateway, "B 站二维码接口响应异常："+payload.Message)
-			return
-		}
-		now := time.Now()
-		session := BilibiliQRSession{ID: randomSessionID(), Key: payload.Data.Key, URL: payload.Data.URL, CreatedAt: now, ExpiresAt: now.Add(3 * time.Minute)}
-		b.Lock()
-		b.bilibiliQR[session.ID] = session
-		b.bilibiliClients[session.ID] = client
-		b.Unlock()
-		writeJSON(w, session)
-		return
+	client, err := browserClient(proxyURL)
+	if err != nil {
+		return BilibiliQRSession{}, &platformQRError{status: http.StatusBadGateway, message: err.Error()}
 	}
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
+	homeRequest, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.bilibili.com/", nil)
+	homeRequest.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
+	if response, requestErr := client.Do(homeRequest); requestErr == nil {
+		response.Body.Close()
 	}
-	id := strings.TrimSpace(r.URL.Query().Get("id"))
-	b.RLock()
-	session, ok := b.bilibiliQR[id]
-	client := b.bilibiliClients[id]
-	b.RUnlock()
-	if !ok || client == nil {
-		writeAPIError(w, http.StatusNotFound, "B 站扫码会话不存在")
-		return
-	}
-	if time.Now().After(session.ExpiresAt) {
-		b.Lock()
-		delete(b.bilibiliQR, id)
-		delete(b.bilibiliClients, id)
-		b.Unlock()
-		writeAPIError(w, http.StatusGone, "B 站二维码已过期")
-		return
-	}
-	endpoint := "https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key=" + url.QueryEscape(session.Key)
-	request, _ := http.NewRequest(http.MethodGet, endpoint, nil)
+	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://passport.bilibili.com/x/passport-login/web/qrcode/generate", nil)
 	setBilibiliAPIHeaders(request)
 	response, err := client.Do(request)
 	if err != nil {
-		writeAPIError(w, http.StatusBadGateway, "无法查询 B 站扫码状态")
-		return
+		return BilibiliQRSession{}, &platformQRError{status: http.StatusBadGateway, message: "无法连接 B 站二维码服务"}
 	}
 	defer response.Body.Close()
 	var payload struct {
 		Code    int    `json:"code"`
 		Message string `json:"message"`
 		Data    struct {
-			Code         int    `json:"code"`
+			URL string `json:"url"`
+			Key string `json:"qrcode_key"`
+		} `json:"data"`
+	}
+	if json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(&payload) != nil || response.StatusCode != http.StatusOK || payload.Code != 0 || payload.Data.URL == "" || payload.Data.Key == "" {
+		return BilibiliQRSession{}, &platformQRError{status: http.StatusBadGateway, message: "B 站二维码接口响应异常：" + payload.Message}
+	}
+	now := time.Now()
+	session := BilibiliQRSession{ID: randomSessionID(), Key: payload.Data.Key, URL: payload.Data.URL, CreatedAt: now, ExpiresAt: now.Add(3 * time.Minute)}
+	b.Lock()
+	defer b.Unlock()
+	if ctx.Err() != nil {
+		return BilibiliQRSession{}, &platformQRError{status: http.StatusConflict, message: "B 站扫码会话已取消"}
+	}
+	if b.bilibiliQR == nil {
+		b.bilibiliQR = make(map[string]BilibiliQRSession)
+	}
+	if b.bilibiliClients == nil {
+		b.bilibiliClients = make(map[string]*http.Client)
+	}
+	for id, previous := range b.bilibiliQR {
+		if !now.Before(previous.ExpiresAt) {
+			delete(b.bilibiliQR, id)
+			delete(b.bilibiliClients, id)
+		}
+	}
+	b.bilibiliQR[session.ID], b.bilibiliClients[session.ID] = session, client
+	return session, nil
+}
+
+func (b *BilibiliStore) pollBilibiliQR(ctx context.Context, id string, guard platformQRGuard) (map[string]any, *platformQRError) {
+	b.RLock()
+	session, ok := b.bilibiliQR[id]
+	client := b.bilibiliClients[id]
+	previous, proxyURL := b.config.Credentials, b.config.ProxyURL
+	b.RUnlock()
+	if !ok || client == nil {
+		return nil, &platformQRError{status: http.StatusNotFound, message: "B 站扫码会话不存在"}
+	}
+	if !time.Now().Before(session.ExpiresAt) {
+		b.discardPlatformQR(SourceBilibili, id)
+		return nil, &platformQRError{status: http.StatusGone, message: "B 站二维码已过期"}
+	}
+	endpoint := "https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key=" + url.QueryEscape(session.Key)
+	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	setBilibiliAPIHeaders(request)
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, &platformQRError{status: http.StatusBadGateway, message: "无法查询 B 站扫码状态"}
+	}
+	defer response.Body.Close()
+	var payload struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+		Data    struct {
+			Code         *int   `json:"code"`
 			Message      string `json:"message"`
 			RefreshToken string `json:"refresh_token"`
 		} `json:"data"`
 	}
-	if json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(&payload) != nil || payload.Code != 0 {
-		writeAPIError(w, http.StatusBadGateway, "B 站扫码状态响应异常："+payload.Message)
-		return
+	if json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(&payload) != nil || response.StatusCode != http.StatusOK || payload.Code != 0 || payload.Data.Code == nil {
+		return nil, &platformQRError{status: http.StatusBadGateway, message: "B 站扫码状态响应异常：" + payload.Message}
 	}
-	switch payload.Data.Code {
+	switch *payload.Data.Code {
 	case 86101:
-		writeJSON(w, map[string]string{"status": "waiting", "message": "等待扫码"})
-		return
+		return map[string]any{"status": "waiting", "message": "等待扫码"}, nil
 	case 86090:
-		writeJSON(w, map[string]string{"status": "scanned", "message": "已扫码，请在手机上确认"})
-		return
+		return map[string]any{"status": "scanned", "message": "已扫码，请在手机上确认"}, nil
 	case 86038:
-		writeAPIError(w, http.StatusGone, "B 站二维码已过期")
-		return
+		b.discardPlatformQR(SourceBilibili, id)
+		return nil, &platformQRError{status: http.StatusGone, message: "B 站二维码已过期"}
 	case 0:
 		credentials := mergeBilibiliCookies(cookiesFromResponse(response), client)
 		credentials.AccessTimeValue = payload.Data.RefreshToken
 		if credentials.SESSDATA == "" || credentials.BiliJCT == "" || credentials.DedeUserID == "" {
-			writeAPIError(w, http.StatusBadGateway, "B 站登录成功但响应缺少必要 Cookie")
-			return
+			return nil, &platformQRError{status: http.StatusBadGateway, message: "B 站登录成功但响应缺少必要 Cookie"}
 		}
 		if credentials.Buvid3 == "" {
 			var spi struct {
@@ -6762,26 +6789,39 @@ func (b *BilibiliStore) bilibiliQRHandler(w http.ResponseWriter, r *http.Request
 					B4 string `json:"b_4"`
 				} `json:"data"`
 			}
-			if err := bilibiliRequest("https://api.bilibili.com/x/frontend/finger/spi", credentials, proxyURL, &spi); err == nil {
+			if err := bilibiliRequestContext(ctx, "https://api.bilibili.com/x/frontend/finger/spi", credentials, proxyURL, &spi); err == nil {
 				credentials.Buvid3, credentials.Buvid4 = spi.Data.B3, spi.Data.B4
 			}
 		}
-		account := bilibiliAccountProfile(credentials, proxyURL)
+		account := bilibiliAccountProfileContext(ctx, credentials, proxyURL)
 		credentials.UserName, credentials.Avatar = account.UserName, account.Avatar
+		b.saveMu.Lock()
+		defer b.saveMu.Unlock()
 		b.Lock()
+		defer b.Unlock()
+		if ctx.Err() != nil || b.bilibiliClients[id] != client || b.config.Credentials != previous || (guard != nil && !guard(b.config)) {
+			return nil, &platformQRError{status: http.StatusConflict, message: "B 站扫码会话已取消或账号配置已变更"}
+		}
+		if !time.Now().Before(session.ExpiresAt) {
+			delete(b.bilibiliQR, id)
+			delete(b.bilibiliClients, id)
+			return nil, &platformQRError{status: http.StatusGone, message: "B 站二维码已过期"}
+		}
+		next := b.config
+		next.Credentials = credentials
+		data, err := encryptJSON(b.key, next)
+		if err == nil {
+			err = atomicWriteFile(bilibiliFile, data, 0600)
+		}
+		if err != nil {
+			return nil, &platformQRError{status: http.StatusInternalServerError, message: "无法保存 B 站登录状态"}
+		}
 		b.config.Credentials = credentials
 		delete(b.bilibiliQR, id)
 		delete(b.bilibiliClients, id)
-		b.Unlock()
-		if err := b.save(); err != nil {
-			writeAPIError(w, http.StatusInternalServerError, "无法保存 B 站登录状态")
-			return
-		}
-		writeJSON(w, map[string]string{"status": "connected", "userId": credentials.DedeUserID, "userName": credentials.UserName, "avatar": credentials.Avatar})
-		return
+		return map[string]any{"status": "connected", "userId": credentials.DedeUserID, "userName": credentials.UserName, "avatar": credentials.Avatar}, nil
 	default:
-		writeAPIError(w, http.StatusBadGateway, "B 站扫码失败："+payload.Data.Message)
-		return
+		return nil, &platformQRError{status: http.StatusBadGateway, message: "B 站扫码失败：" + payload.Data.Message}
 	}
 }
 
@@ -7114,14 +7154,22 @@ func collectWeiboUsers(value any, users *[]WeiboUser, seen map[string]bool) {
 }
 
 func fetchWeiboUser(userID string, credentials WeiboCredentials, proxyURL string) (WeiboUser, error) {
+	return fetchWeiboUserContext(context.Background(), userID, credentials, proxyURL)
+}
+
+func fetchWeiboUserContext(ctx context.Context, userID string, credentials WeiboCredentials, proxyURL string) (WeiboUser, error) {
 	endpoints := []string{
 		"https://weibo.com/ajax/profile/info?uid=" + url.QueryEscape(userID),
 		"https://m.weibo.cn/api/container/getIndex?type=uid&value=" + url.QueryEscape(userID) + "&containerid=" + url.QueryEscape("100505"+userID),
 	}
 	var lastErr error
 	for _, endpoint := range endpoints {
-		payload, _, err := weiboRawRequest(endpoint, credentials, proxyURL)
+		session := credentials
+		payload, _, err := weiboSessionRequestContext(ctx, endpoint, &session, proxyURL)
 		if err != nil {
+			if ctx.Err() != nil {
+				return WeiboUser{}, ctx.Err()
+			}
 			if weiboErrorKind(err) == "restricted" || weiboErrorKind(err) == "limited" || isWeiboSessionFailure(err) {
 				return WeiboUser{}, err
 			}
@@ -7510,6 +7558,10 @@ func validateWeiboSiteCredentials(credentials WeiboCredentials, proxyURL string)
 }
 
 func validateWeiboSiteCredentialsWithIdentity(credentials WeiboCredentials, proxyURL string, identity func(*WeiboCredentials, string) error) (WeiboCredentials, error) {
+	return validateWeiboSiteCredentialsWithProfile(credentials, proxyURL, identity, fetchWeiboAccountProfile)
+}
+
+func validateWeiboSiteCredentialsWithProfile(credentials WeiboCredentials, proxyURL string, identity func(*WeiboCredentials, string) error, profile func(string, WeiboCredentials, string) (WeiboUser, error)) (WeiboCredentials, error) {
 	credentials.Cookie = normalizeWeiboCookie(credentials.Cookie)
 	credentials.MobileCookie = normalizeWeiboCookie(credentials.MobileCookie)
 	credentials.UserID = strings.TrimSpace(credentials.UserID)
@@ -7522,7 +7574,7 @@ func validateWeiboSiteCredentialsWithIdentity(credentials WeiboCredentials, prox
 	if err := identity(&credentials, proxyURL); err != nil {
 		return WeiboCredentials{}, fmt.Errorf("微博登录身份验证失败：%w", err)
 	}
-	user, err := fetchWeiboAccountProfile(credentials.UserID, credentials, proxyURL)
+	user, err := profile(credentials.UserID, credentials, proxyURL)
 	if err != nil {
 		return WeiboCredentials{}, fmt.Errorf("微博账号资料读取失败：%w", err)
 	}
@@ -7640,215 +7692,57 @@ func (b *BilibiliStore) weiboAccountHandler(w http.ResponseWriter, r *http.Reque
 
 func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	b.RLock()
-	proxyURL := b.config.ProxyURL
-	b.RUnlock()
-	if r.Method == http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
 		id := strings.TrimSpace(r.URL.Query().Get("id"))
-		b.RLock()
 		if id == "" {
+			b.RLock()
 			account := b.config.Weibo
 			b.RUnlock()
 			writeJSON(w, weiboAccountView(account))
 			return
 		}
-		session, ok := b.weiboQR[id]
-		client := b.weiboClients[id]
-		b.RUnlock()
-		if client == nil {
-			writeAPIError(w, http.StatusNotFound, "扫码会话已失效，请重新获取二维码")
+		result, failure := b.pollWeiboQR(r.Context(), id, nil)
+		if failure != nil {
+			writeAPIError(w, failure.status, failure.message)
 			return
 		}
-		if !ok {
-			writeAPIError(w, http.StatusNotFound, "扫码会话不存在，请重新获取二维码")
-			return
-		}
-		if time.Now().After(session.ExpiresAt) {
-			b.Lock()
-			delete(b.weiboQR, id)
-			delete(b.weiboClients, id)
-			b.Unlock()
-			writeAPIError(w, http.StatusGone, "二维码已过期")
-			return
-		}
-		checkQuery := url.Values{
-			"entry":    {"weibo"},
-			"qrid":     {session.QRID},
-			"callback": {"STK_" + strconv.FormatInt(time.Now().UnixNano()/100000, 10)},
-		}
-		checkURL := "https://login.sina.com.cn/sso/qrcode/check?" + checkQuery.Encode()
-		request, _ := http.NewRequest(http.MethodGet, checkURL, nil)
-		weiboQRRequestHeaders(request)
-		response, requestErr := client.Do(request)
-		if requestErr != nil {
-			writeAPIError(w, http.StatusBadGateway, "无法查询微博扫码状态")
-			return
-		}
-		defer response.Body.Close()
-		checkBody, readErr := io.ReadAll(io.LimitReader(response.Body, 2<<20))
-		if readErr != nil {
-			writeAPIError(w, http.StatusBadGateway, "无法读取微博扫码状态")
-			return
-		}
-		var payload struct {
-			RetCode int    `json:"retcode"`
-			Msg     string `json:"msg"`
-			Data    struct {
-				Alt string `json:"alt"`
-			} `json:"data"`
-		}
-		if json.Unmarshal(unwrapJSONP(checkBody), &payload) != nil {
-			writeAPIError(w, http.StatusBadGateway, "微博扫码状态响应无法解析，请重新获取二维码")
-			return
-		}
-		if payload.RetCode != 20000000 {
-			writeJSON(w, map[string]any{"status": "waiting", "message": payload.Msg})
-			return
-		}
-		b.Lock()
-		current, exists := b.weiboQR[id]
-		if !exists || current.Exchanging {
-			b.Unlock()
-			writeJSON(w, map[string]any{"status": "confirming", "message": "正在确认微博登录"})
-			return
-		}
-		current.Exchanging = true
-		b.weiboQR[id] = current
-		b.Unlock()
-		defer func() {
-			b.Lock()
-			if active, exists := b.weiboQR[id]; exists {
-				active.Exchanging = false
-				b.weiboQR[id] = active
-			}
-			b.Unlock()
-		}()
-		loginQuery := url.Values{
-			"entry":       {"weibo"},
-			"returntype":  {"TEXT"},
-			"crossdomain": {"1"},
-			"cdult":       {"3"},
-			"domain":      {"weibo.com"},
-			"alt":         {payload.Data.Alt},
-			"savestate":   {"30"},
-			"callback":    {"STK_" + strconv.FormatInt(time.Now().UnixMilli(), 10)},
-		}
-		loginURL := "https://login.sina.com.cn/sso/login.php?" + loginQuery.Encode()
-		loginRequest, _ := http.NewRequest(http.MethodGet, loginURL, nil)
-		weiboQRRequestHeaders(loginRequest)
-		loginResponse, loginErr := client.Do(loginRequest)
-		if loginErr != nil {
-			writeAPIError(w, http.StatusBadGateway, "微博登录票据交换未完成，请检查网络后重新扫码")
-			return
-		}
-		defer loginResponse.Body.Close()
-		loginBody, readErr := io.ReadAll(io.LimitReader(loginResponse.Body, 2<<20))
-		if readErr != nil {
-			writeAPIError(w, http.StatusBadGateway, "无法读取微博登录响应")
-			return
-		}
-		var loginPayload struct {
-			RetCode     json.RawMessage `json:"retcode"`
-			UID         json.RawMessage `json:"uid"`
-			Nick        string          `json:"nick"`
-			Ticket      string          `json:"ticket"`
-			CrossDomain []string        `json:"crossDomainUrlList"`
-		}
-		if err := json.Unmarshal(unwrapJSONP(loginBody), &loginPayload); err != nil {
-			writeAPIError(w, http.StatusBadGateway, fmt.Sprintf("微博登录响应无法解析（HTTP %d），请重新扫码", loginResponse.StatusCode))
-			return
-		}
-		loginUID, loginRetCode := jsonScalarString(loginPayload.UID), jsonScalarString(loginPayload.RetCode)
-		if loginResponse.StatusCode != http.StatusOK || (loginRetCode != "" && loginRetCode != "0") || !validWeiboUID(loginUID) {
-			writeAPIError(w, http.StatusBadGateway, fmt.Sprintf("微博未确认扫码登录账号（HTTP %d），请重新扫码或在官方页面完成安全验证", loginResponse.StatusCode))
-			return
-		}
-		validateErr := completeWeiboSSO(r.Context(), client, loginPayload.CrossDomain)
-		if validateErr == nil && loginPayload.Ticket != "" {
-			appQuery := url.Values{"ticket": {loginPayload.Ticket}, "ssosavestate": {strconv.FormatInt(time.Now().Add(30*24*time.Hour).Unix(), 10)}}
-			validateErr = completeWeiboSSO(r.Context(), client, []string{"https://passport.weibo.com/sso/wblogin?" + appQuery.Encode()})
-		}
-		b.RLock()
-		previousAccount := b.config.Weibo
-		b.RUnlock()
-		credentials := WeiboCredentials{Cookie: weiboSiteCookie(client, "https://weibo.com/"), MobileCookie: weiboSiteCookie(client, "https://m.weibo.cn/"), CookieScoped: true, UserID: loginUID, UserName: loginPayload.Nick}
-		var validated WeiboCredentials
-		if validateErr == nil {
-			validated, validateErr = validateWeiboSiteCredentialsWithIdentity(credentials, proxyURL, validateWeiboQRSessionIdentity)
-		}
-		if validateErr != nil {
-			// The SSO exchange confirmed the account even if API validation is unavailable.
-			// Keep new unverified cookies out of the active fetch credentials.
-			credentials.Cookie = ""
-			credentials.MobileCookie = ""
-			credentials.CookieScoped = false
-			if previousAccount.UserID == loginUID {
-				credentials = previousAccount
-				if loginPayload.Nick != "" {
-					credentials.UserName = loginPayload.Nick
-				}
-			}
-			credentials.ConnectionWarning = "扫码已连接，但新会话尚不可用：" + validateErr.Error()
-		} else {
-			if validated.UserName == "" {
-				validated.UserName = credentials.UserName
-			}
-			credentials = validated
-			retainWeiboPassword(previousAccount, &credentials)
-		}
-		credentials.QRConnected = true
-		b.Lock()
-		if b.config.Weibo != previousAccount {
-			b.Unlock()
-			writeAPIError(w, http.StatusConflict, "微博账号配置已更新，请重新扫码确认")
-			return
-		}
-		b.config.Weibo = credentials
-		b.Unlock()
-		if err := b.save(); err != nil {
-			b.Lock()
-			if b.config.Weibo == credentials {
-				b.config.Weibo = previousAccount
-			}
-			b.Unlock()
-			writeAPIError(w, http.StatusInternalServerError, "无法保存微博登录状态")
-			return
-		}
-		b.Lock()
-		delete(b.weiboQR, id)
-		delete(b.weiboClients, id)
-		b.Unlock()
-		result := weiboAccountView(credentials)
-		result["status"], result["credentialVerified"] = "connected", validateErr == nil
 		writeJSON(w, result)
-		return
-	}
-	if r.Method != http.MethodPost {
+	case http.MethodPost:
+		session, failure := b.startWeiboQR(r.Context())
+		if failure != nil {
+			writeAPIError(w, failure.status, failure.message)
+			return
+		}
+		writeJSON(w, session)
+	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
 	}
+}
+
+func (b *BilibiliStore) startWeiboQR(ctx context.Context) (WeiboQRSession, *platformQRError) {
+	b.RLock()
+	proxyURL := b.config.ProxyURL
+	b.RUnlock()
 	client, err := weiboClient(proxyURL)
 	if err != nil {
-		writeAPIError(w, http.StatusBadGateway, err.Error())
-		return
+		return WeiboQRSession{}, &platformQRError{status: http.StatusBadGateway, message: err.Error()}
 	}
 	imageQuery := url.Values{
 		"entry":    {"weibo"},
 		"size":     {"180"},
 		"callback": {strconv.FormatInt(time.Now().UnixMilli(), 10)},
 	}
-	request, _ := http.NewRequest(http.MethodGet, "https://login.sina.com.cn/sso/qrcode/image?"+imageQuery.Encode(), nil)
+	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://login.sina.com.cn/sso/qrcode/image?"+imageQuery.Encode(), nil)
 	weiboQRRequestHeaders(request)
 	response, err := client.Do(request)
 	if err != nil {
-		writeAPIError(w, http.StatusBadGateway, "无法连接微博扫码服务")
-		return
+		return WeiboQRSession{}, &platformQRError{status: http.StatusBadGateway, message: "无法连接微博扫码服务"}
 	}
 	defer response.Body.Close()
 	body, readErr := io.ReadAll(io.LimitReader(response.Body, 2<<20))
 	if readErr != nil {
-		writeAPIError(w, http.StatusBadGateway, "无法读取微博扫码响应")
-		return
+		return WeiboQRSession{}, &platformQRError{status: http.StatusBadGateway, message: "无法读取微博扫码响应"}
 	}
 	var payload struct {
 		RetCode int `json:"retcode"`
@@ -7858,18 +7752,227 @@ func (b *BilibiliStore) weiboQRHandler(w http.ResponseWriter, r *http.Request) {
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(unwrapJSONP(body), &payload); err != nil || response.StatusCode != http.StatusOK || payload.RetCode != 20000000 || payload.Data.QRID == "" || payload.Data.Image == "" {
-		writeAPIError(w, http.StatusBadGateway, fmt.Sprintf("微博扫码接口响应异常（HTTP %d），请稍后重新获取二维码", response.StatusCode))
-		return
+		return WeiboQRSession{}, &platformQRError{status: http.StatusBadGateway, message: fmt.Sprintf("微博扫码接口响应异常（HTTP %d），请稍后重新获取二维码", response.StatusCode)}
 	}
 	now := time.Now()
 	idBytes := make([]byte, 24)
 	_, _ = rand.Read(idBytes)
 	session := WeiboQRSession{ID: base64.RawURLEncoding.EncodeToString(idBytes), QRID: payload.Data.QRID, Image: payload.Data.Image, CreatedAt: now, ExpiresAt: now.Add(3 * time.Minute)}
 	b.Lock()
+	defer b.Unlock()
+	if ctx.Err() != nil {
+		return WeiboQRSession{}, &platformQRError{status: http.StatusConflict, message: "微博扫码会话已结束"}
+	}
+	if b.weiboQR == nil {
+		b.weiboQR = make(map[string]WeiboQRSession)
+	}
+	if b.weiboClients == nil {
+		b.weiboClients = make(map[string]*http.Client)
+	}
 	b.weiboQR[session.ID] = session
 	b.weiboClients[session.ID] = client
+	return session, nil
+}
+
+func (b *BilibiliStore) pollWeiboQR(ctx context.Context, id string, guard platformQRGuard) (map[string]any, *platformQRError) {
+	closed := &platformQRError{status: http.StatusConflict, message: "微博扫码会话已结束"}
+	expired := &platformQRError{status: http.StatusGone, message: "二维码已过期"}
+	b.RLock()
+	session, ok := b.weiboQR[id]
+	client := b.weiboClients[id]
+	proxyURL, previousAccount := b.config.ProxyURL, b.config.Weibo
+	active := ctx.Err() == nil && (guard == nil || guard(b.config))
+	b.RUnlock()
+	if !active {
+		return nil, closed
+	}
+	if client == nil {
+		return nil, &platformQRError{status: http.StatusNotFound, message: "扫码会话已失效，请重新获取二维码"}
+	}
+	if !ok {
+		return nil, &platformQRError{status: http.StatusNotFound, message: "扫码会话不存在，请重新获取二维码"}
+	}
+	if !time.Now().Before(session.ExpiresAt) {
+		b.discardPlatformQR(SourceWeibo, id)
+		return nil, expired
+	}
+	checkQuery := url.Values{
+		"entry":    {"weibo"},
+		"qrid":     {session.QRID},
+		"callback": {"STK_" + strconv.FormatInt(time.Now().UnixNano()/100000, 10)},
+	}
+	checkURL := "https://login.sina.com.cn/sso/qrcode/check?" + checkQuery.Encode()
+	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, checkURL, nil)
+	weiboQRRequestHeaders(request)
+	response, requestErr := client.Do(request)
+	if requestErr != nil {
+		return nil, &platformQRError{status: http.StatusBadGateway, message: "无法查询微博扫码状态"}
+	}
+	defer response.Body.Close()
+	checkBody, readErr := io.ReadAll(io.LimitReader(response.Body, 2<<20))
+	if readErr != nil {
+		return nil, &platformQRError{status: http.StatusBadGateway, message: "无法读取微博扫码状态"}
+	}
+	var payload struct {
+		RetCode int    `json:"retcode"`
+		Msg     string `json:"msg"`
+		Data    struct {
+			Alt string `json:"alt"`
+		} `json:"data"`
+	}
+	if response.StatusCode != http.StatusOK || json.Unmarshal(unwrapJSONP(checkBody), &payload) != nil {
+		return nil, &platformQRError{status: http.StatusBadGateway, message: "微博扫码状态响应无法解析，请重新获取二维码"}
+	}
+	if payload.RetCode != 20000000 {
+		if guard != nil {
+			switch payload.RetCode {
+			case 50114002:
+				return map[string]any{"status": "scanned"}, nil
+			case 50114003:
+				b.discardPlatformQR(SourceWeibo, id)
+				return nil, expired
+			case 50114015:
+				return nil, &platformQRError{status: http.StatusBadGateway, message: "微博拒绝扫码登录，请重新获取二维码"}
+			}
+		}
+		return map[string]any{"status": "waiting", "message": payload.Msg}, nil
+	}
+	b.Lock()
+	current, exists := b.weiboQR[id]
+	if !exists || b.weiboClients[id] != client || ctx.Err() != nil || (guard != nil && !guard(b.config)) {
+		b.Unlock()
+		return nil, closed
+	}
+	if current.Exchanging {
+		b.Unlock()
+		return map[string]any{"status": "confirming", "message": "正在确认微博登录"}, nil
+	}
+	current.Exchanging = true
+	b.weiboQR[id] = current
 	b.Unlock()
-	writeJSON(w, session)
+	defer func() {
+		b.Lock()
+		if active, exists := b.weiboQR[id]; exists && b.weiboClients[id] == client {
+			active.Exchanging = false
+			b.weiboQR[id] = active
+		}
+		b.Unlock()
+	}()
+	loginQuery := url.Values{
+		"entry":       {"weibo"},
+		"returntype":  {"TEXT"},
+		"crossdomain": {"1"},
+		"cdult":       {"3"},
+		"domain":      {"weibo.com"},
+		"alt":         {payload.Data.Alt},
+		"savestate":   {"30"},
+		"callback":    {"STK_" + strconv.FormatInt(time.Now().UnixMilli(), 10)},
+	}
+	loginURL := "https://login.sina.com.cn/sso/login.php?" + loginQuery.Encode()
+	loginRequest, _ := http.NewRequestWithContext(ctx, http.MethodGet, loginURL, nil)
+	weiboQRRequestHeaders(loginRequest)
+	loginResponse, loginErr := client.Do(loginRequest)
+	if loginErr != nil {
+		return nil, &platformQRError{status: http.StatusBadGateway, message: "微博登录票据交换未完成，请检查网络后重新扫码"}
+	}
+	defer loginResponse.Body.Close()
+	loginBody, readErr := io.ReadAll(io.LimitReader(loginResponse.Body, 2<<20))
+	if readErr != nil {
+		return nil, &platformQRError{status: http.StatusBadGateway, message: "无法读取微博登录响应"}
+	}
+	var loginPayload struct {
+		RetCode     json.RawMessage `json:"retcode"`
+		UID         json.RawMessage `json:"uid"`
+		Nick        string          `json:"nick"`
+		Ticket      string          `json:"ticket"`
+		CrossDomain []string        `json:"crossDomainUrlList"`
+	}
+	if err := json.Unmarshal(unwrapJSONP(loginBody), &loginPayload); err != nil {
+		return nil, &platformQRError{status: http.StatusBadGateway, message: fmt.Sprintf("微博登录响应无法解析（HTTP %d），请重新扫码", loginResponse.StatusCode)}
+	}
+	loginUID, loginRetCode := jsonScalarString(loginPayload.UID), jsonScalarString(loginPayload.RetCode)
+	if loginResponse.StatusCode != http.StatusOK || (loginRetCode != "" && loginRetCode != "0") || !validWeiboUID(loginUID) {
+		return nil, &platformQRError{status: http.StatusBadGateway, message: fmt.Sprintf("微博未确认扫码登录账号（HTTP %d），请重新扫码或在官方页面完成安全验证", loginResponse.StatusCode)}
+	}
+	validateErr := completeWeiboSSO(ctx, client, loginPayload.CrossDomain)
+	if validateErr == nil && loginPayload.Ticket != "" {
+		appQuery := url.Values{"ticket": {loginPayload.Ticket}, "ssosavestate": {strconv.FormatInt(time.Now().Add(30*24*time.Hour).Unix(), 10)}}
+		validateErr = completeWeiboSSO(ctx, client, []string{"https://passport.weibo.com/sso/wblogin?" + appQuery.Encode()})
+	}
+	if ctx.Err() != nil {
+		return nil, closed
+	}
+	credentials := WeiboCredentials{Cookie: weiboSiteCookie(client, "https://weibo.com/"), MobileCookie: weiboSiteCookie(client, "https://m.weibo.cn/"), CookieScoped: true, UserID: loginUID, UserName: loginPayload.Nick}
+	var validated WeiboCredentials
+	if validateErr == nil {
+		if guard == nil {
+			validated, validateErr = validateWeiboSiteCredentialsWithIdentity(credentials, proxyURL, validateWeiboQRSessionIdentity)
+		} else {
+			// Telegram cancels obsolete QR work when its runtime or conversation changes.
+			validated, validateErr = validateWeiboSiteCredentialsWithProfile(credentials, proxyURL,
+				func(credentials *WeiboCredentials, proxyURL string) error {
+					return validateWeiboIdentityWithQRProofContext(ctx, credentials, proxyURL, true)
+				},
+				func(userID string, credentials WeiboCredentials, proxyURL string) (WeiboUser, error) {
+					return fetchWeiboUserContext(ctx, userID, credentials, proxyURL)
+				})
+		}
+	}
+	if ctx.Err() != nil {
+		return nil, closed
+	}
+	if validateErr != nil {
+		if guard != nil {
+			return nil, &platformQRError{status: http.StatusUnprocessableEntity, message: "微博扫码已确认，但未能验证新登录会话"}
+		}
+		// Preserve the web flow's pending connection without activating unverified cookies.
+		credentials.Cookie = ""
+		credentials.MobileCookie = ""
+		credentials.CookieScoped = false
+		if previousAccount.UserID == loginUID {
+			credentials = previousAccount
+			if loginPayload.Nick != "" {
+				credentials.UserName = loginPayload.Nick
+			}
+		}
+		credentials.ConnectionWarning = "扫码已连接，但新会话尚不可用：" + validateErr.Error()
+	} else {
+		if validated.UserName == "" {
+			validated.UserName = credentials.UserName
+		}
+		credentials = validated
+		retainWeiboPassword(previousAccount, &credentials)
+	}
+	credentials.QRConnected = true
+	b.saveMu.Lock()
+	defer b.saveMu.Unlock()
+	b.Lock()
+	defer b.Unlock()
+	if active, exists := b.weiboQR[id]; !exists || !active.Exchanging || b.weiboClients[id] != client || ctx.Err() != nil || (guard != nil && !guard(b.config)) {
+		return nil, closed
+	}
+	if !time.Now().Before(session.ExpiresAt) {
+		delete(b.weiboQR, id)
+		delete(b.weiboClients, id)
+		return nil, expired
+	}
+	if b.config.Weibo != previousAccount {
+		return nil, &platformQRError{status: http.StatusConflict, message: "微博账号配置已更新，请重新扫码确认"}
+	}
+	b.config.Weibo = credentials
+	data, err := encryptJSON(b.key, b.config)
+	if err == nil {
+		err = atomicWriteFile(bilibiliFile, data, 0600)
+	}
+	if err != nil {
+		b.config.Weibo = previousAccount
+		return nil, &platformQRError{status: http.StatusInternalServerError, message: "无法保存微博登录状态"}
+	}
+	delete(b.weiboQR, id)
+	delete(b.weiboClients, id)
+	result := weiboAccountView(credentials)
+	result["status"], result["credentialVerified"] = "connected", validateErr == nil
+	return result, nil
 }
 
 func writeAPIError(w http.ResponseWriter, status int, message string) {

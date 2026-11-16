@@ -252,12 +252,16 @@ GET /api/v1/sync/status?ids=<任务ID1>,<任务ID2>
 认证接口 `GET /api/v1/telegram-bot` 返回：
 
 ```json
-{"enabled":false,"tokenConfigured":true,"chatId":"123456789","notifications":true,"timeZone":"Asia/Shanghai","running":false,"username":"example_bot","error":""}
+{"enabled":false,"tokenConfigured":true,"chatId":"123456789","authorizedUserId":"987654321","notifications":true,"timeZone":"Asia/Shanghai","running":false,"username":"example_bot","error":""}
 ```
 
-不返回 Token。`PUT /api/v1/telegram-bot` 保存 `{enabled,token?,clearToken?,chatId,notifications,timeZone}`，
+不返回 Token。`PUT /api/v1/telegram-bot` 保存 `{enabled,token?,clearToken?,chatId,authorizedUserId?,notifications?,timeZone?}`，
 Token 省略或空字符串保留旧值；`clearToken:true` 清空（须同时停用机器人）。
-Chat ID 仅支持正整数私人会话编号，启用时必填；timeZone 为 IANA 时区。配置存入既有加密平台文件。
+Chat ID 仅支持正整数私人会话编号，启用时必填，仅用于接收通知/测试。
+`authorizedUserId` 是唯一可操作的 Telegram 用户正整数编号，普通消息和按钮回调均核对发送者与本人私聊。
+省略或留空授权 ID 均拒绝所有操作，不回退到 Chat ID；旧配置无授权 ID 也默认拒绝。
+通知字段省略默认开启（显式 false 兼容旧 API），网页固定开启且不显示开关；
+timeZone 为 IANA 时区，省略沿用已保存值，既无输入也无旧值时使用 UTC；网页自动沿用或取浏览器时区，不再显示设置。配置存入既有加密平台文件。
 返回新的脱敏视图，配置或代理变化时串行取消旧轮询后启动新机器人。
 
 `POST /api/v1/telegram-bot` 使用相同草稿字段并传 `action:"test"`，执行 getMe 和发送测试消息，
@@ -265,6 +269,13 @@ Chat ID 仅支持正整数私人会话编号，启用时必填；timeZone 为 IA
 无效配置400、并发配置更新409、Telegram或网络测试失败502；GET/PUT/POST均需登录并禁止缓存。
 网页兼容路径为 `/api/telegram-bot`。不开放 Token/Chat ID 以外可定制的 Bot API 地址。
 命令、翻页、序号快照、订阅和通知规则见 README 的“Telegram 机器人”一节。
+
+机器人 `/qr` 支持哔哩哔哩、微博，复用现有平台扫码服务，不增加公开接口。授权或代理配置变化、取消或过期的扫码会话不能再保存新凭证；
+微博仅确认扫码而会话未验证时，机器人反馈失败且保留既有凭证。网页扫码响应字段及既有状态展示保留。
+
+更新通知为单条消息：有可用图片时上传最新动态的一张JPEG压缩预览（最长边720px），正文摘要和新增统计均放在`sendPhoto.caption`；
+图片说明保守限制1024个UTF-16单位，超出截断正文但保留末尾统计，不分开发图和正文。无图片单条文字上限4096单位。
+本地图片失败或Telegram明确拒绝可单条文字降级；发送结果未知/取消不额外补发，避免重复通知。不改变原图归档与原有命令预览逻辑。
 
 ## 图片加载
 

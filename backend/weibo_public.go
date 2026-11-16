@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -92,8 +93,12 @@ func validateWeiboQRSessionIdentity(credentials *WeiboCredentials, proxyURL stri
 }
 
 func validateWeiboIdentityWithQRProof(credentials *WeiboCredentials, proxyURL string, confirmedQR bool) error {
+	return validateWeiboIdentityWithQRProofContext(context.Background(), credentials, proxyURL, confirmedQR)
+}
+
+func validateWeiboIdentityWithQRProofContext(ctx context.Context, credentials *WeiboCredentials, proxyURL string, confirmedQR bool) error {
 	source := "微博桌面会话接口"
-	payload, status, err := weiboSessionRequest("https://weibo.com/ajax/config/get", credentials, proxyURL)
+	payload, status, err := weiboSessionRequestContext(ctx, "https://weibo.com/ajax/config/get", credentials, proxyURL)
 	// A missing route is a compatibility issue, not proof of an expired login.
 	// Do not retry authentication, captcha, throttling or other upstream failures.
 	if err != nil && (status == http.StatusNotFound || status == http.StatusGone) {
@@ -102,7 +107,7 @@ func validateWeiboIdentityWithQRProof(credentials *WeiboCredentials, proxyURL st
 		if confirmedQR && credentials.CookieScoped && validWeiboUID(credentials.UserID) && weiboCookieValue(credentials.Cookie, "SUB") != "" {
 			endpoint := "https://weibo.com/ajax/statuses/likelist?" + url.Values{"uid": {credentials.UserID}, "page": {"1"}, "relate": {"fans"}}.Encode()
 			var probe map[string]any
-			probe, status, err = weiboSessionRequest(endpoint, credentials, proxyURL)
+			probe, status, err = weiboSessionRequestContext(ctx, endpoint, credentials, proxyURL)
 			if err == nil {
 				if jsonValueString(probe["ok"]) != "1" {
 					return &weiboRequestError{"upstream", "微博桌面账号接口未明确确认成功，暂不能激活扫码会话"}
@@ -132,7 +137,7 @@ func validateWeiboIdentityWithQRProof(credentials *WeiboCredentials, proxyURL st
 			}
 		}
 		source = "微博移动端会话接口"
-		payload, _, err = weiboSessionRequest("https://m.weibo.cn/api/config", credentials, proxyURL)
+		payload, _, err = weiboSessionRequestContext(ctx, "https://m.weibo.cn/api/config", credentials, proxyURL)
 		if err != nil {
 			return fmt.Errorf("微博移动端会话校验接口异常：%w", err)
 		}

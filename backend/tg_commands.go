@@ -47,6 +47,7 @@ type tgCommandState struct {
 	view         string
 	confirmIndex int
 	waitCancel   context.CancelFunc
+	qrWorkers    sync.WaitGroup
 }
 
 func tgPlatformLabel(source Source) string {
@@ -74,6 +75,8 @@ func tgCommand(text string) (string, string, []Source) {
 	switch first {
 	case "/start", "start":
 		return "start", argument, nil
+	case "/qr", "扫码授权", "授权扫码":
+		return "qr", argument, nil
 	case "/sh", "搜索":
 		return "search", argument, tgSearchPlatforms
 	case "哔哩哔哩搜索", "bilibili搜索":
@@ -132,7 +135,7 @@ func (b *tgBot) showFlow(ctx context.Context, chatID int64, text string, keyboar
 }
 
 func (b *tgBot) handleUpdate(ctx context.Context, update tgUpdate) {
-	if ctx.Err() != nil || !b.currentGeneration() {
+	if ctx.Err() != nil || !b.authorized(update) {
 		return
 	}
 	var message *tgMessage
@@ -141,12 +144,9 @@ func (b *tgBot) handleUpdate(ctx context.Context, update tgUpdate) {
 	} else {
 		message = update.Message
 	}
-	if message == nil || message.Chat.Type != "private" || strconv.FormatInt(message.Chat.ID, 10) != b.config.ChatID {
-		return
-	}
 	b.commands.mu.Lock()
 	defer b.commands.mu.Unlock()
-	if ctx.Err() != nil || !b.currentGeneration() {
+	if ctx.Err() != nil || !b.authorized(update) {
 		return
 	}
 	chatID := message.Chat.ID
@@ -169,13 +169,13 @@ func (b *tgBot) handleUpdate(ctx context.Context, update tgUpdate) {
 			_ = b.answerCallback(ctx, callback.ID, "无效操作")
 			return
 		}
-		_ = b.answerCallback(ctx, callback.ID, "")
 		if b.commands.waitCancel != nil {
 			b.commands.waitCancel()
 			b.commands.waitCancel = nil
 		}
 		// A button belongs to exactly one view, not the entire conversation.
 		b.commands.nonce, b.commands.createdAt = tgNonce(), time.Now()
+		_ = b.answerCallback(ctx, callback.ID, "")
 		b.handleCallback(ctx, chatID, parts[1], index)
 		return
 	}
@@ -191,7 +191,9 @@ func (b *tgBot) handleUpdate(ctx context.Context, update tgUpdate) {
 	b.commands.view = "result"
 	switch action {
 	case "start":
-		_ = b.showFlow(ctx, chatID, "Lumic · 拾光\n聚合、订阅与归档喜欢的图文。\n\n/sh 关键词 · 搜索作者\n搜索 关键词 · 搜索三个平台\n哔哩哔哩搜索 / 微博搜索 / pixiv搜索 + 关键词\n/subscriptions · 查看订阅（每页七条）\n/update 完整作者名或序号 · 更新订阅\n/unsubscribe 完整作者名或序号 · 取消订阅\n\n取消订阅只移除计划，已下载图文会保留。", nil)
+		_ = b.showFlow(ctx, chatID, "Lumic · 拾光\n聚合、订阅与归档喜欢的图文。\n\n/sh 关键词 · 搜索作者\n搜索 关键词 · 搜索三个平台\n哔哩哔哩搜索 / 微博搜索 / pixiv搜索 + 关键词\n/subscriptions · 查看订阅（每页七条）\n/update 完整作者名或序号 · 更新订阅\n/unsubscribe 完整作者名或序号 · 取消订阅\n/qr · 扫码授权平台凭证\n\n取消订阅只移除计划，已下载图文会保留。", nil)
+	case "qr":
+		b.showQRPlatforms(ctx, chatID, "")
 	case "search":
 		if argument == "" || len([]rune(argument)) > 40 {
 			_ = b.showFlow(ctx, chatID, "请输入搜索关键词，例如：搜索 六月夏天（最多40字）", nil)
@@ -391,6 +393,11 @@ func (b *tgBot) watchTask(ctx context.Context, chatID int64, task *syncTask, non
 
 func (b *tgBot) handleCallback(ctx context.Context, chatID int64, action string, index int) {
 	switch action {
+	case "qr-platform":
+		b.beginTGQR(ctx, chatID, tgQRPlatforms[index])
+	case "qr-cancel":
+		b.clearFlowMedia(ctx, chatID)
+		b.showQRPlatforms(ctx, chatID, "已取消扫码授权。")
 	case "search":
 		b.showSearch(ctx, chatID, index)
 	case "subscriptions":
@@ -514,6 +521,10 @@ func tgClip(text string, max int) string {
 
 func tgCallbackAllowed(view, action string) bool {
 	switch view {
+	case "qr-platforms":
+		return action == "qr-platform"
+	case "qr-active":
+		return action == "qr-cancel"
 	case "search":
 		return action == "search" || action == "author"
 	case "list":
@@ -533,6 +544,10 @@ func tgCallbackAllowed(view, action string) bool {
 func (b *tgBot) callbackIndexAllowed(action string, index int) bool {
 	s := b.commands.search
 	switch action {
+	case "qr-platform":
+		return index >= 0 && index < len(tgQRPlatforms)
+	case "qr-cancel":
+		return index == 0
 	case "search":
 		return s != nil && index >= 0 && index < len(s.Platforms)
 	case "author":
