@@ -18,6 +18,14 @@ import (
 
 var tgQRPlatforms = [...]Source{SourceBilibili, SourceWeibo}
 
+type tgQRCredentialStatus int
+
+const (
+	tgQRCredentialUnknown tgQRCredentialStatus = iota
+	tgQRCredentialInvalid
+	tgQRCredentialValid
+)
+
 type tgPlatformQR struct {
 	id, payload string
 	expiresAt   time.Time
@@ -35,7 +43,7 @@ func (b *tgBot) showQRPlatforms(ctx context.Context, chatID int64, result string
 
 func (b *tgBot) beginTGQR(ctx context.Context, chatID int64, source Source) {
 	b.commands.view = "qr-active"
-	if err := b.showFlow(ctx, chatID, tgPlatformLabel(source)+"：正在获取授权二维码…", tgKeyboard{{b.button("取消扫码", "qr-cancel", 0)}}); err != nil {
+	if err := b.showFlow(ctx, chatID, tgPlatformLabel(source)+"：正在检查已保存的凭证…", tgKeyboard{{b.button("取消扫码", "qr-cancel", 0)}}); err != nil {
 		return
 	}
 	qrContext, cancel := context.WithCancel(ctx)
@@ -85,6 +93,57 @@ func (b *tgBot) runTGQR(parent, ctx context.Context, cancel context.CancelFunc, 
 	if ctx.Err() != nil || !b.currentGeneration() {
 		return
 	}
+	b.store.RLock()
+	config := b.store.config
+	b.store.RUnlock()
+	// Keep a QR attempt tied to the credentials it checked, including at commit.
+	guard := func(current BilibiliConfig) bool {
+		if current.Telegram != b.config || current.ProxyURL != b.proxyURL {
+			return false
+		}
+		switch source {
+		case SourceBilibili:
+			return current.Credentials == config.Credentials
+		case SourceWeibo:
+			return sameWeiboSession(current.Weibo, config.Weibo) && current.Weibo.QRConnected == config.Weibo.QRConnected
+		}
+		return false
+	}
+	credentialsUnchanged := func() bool {
+		b.store.RLock()
+		defer b.store.RUnlock()
+		return guard(b.store.config)
+	}
+	recheck := label + "凭证配置已更新，请重新选择平台检查。"
+	probe, stopProbe := context.WithTimeout(ctx, 12*time.Second)
+	status := tgQRCredentialUnknown
+	switch source {
+	case SourceBilibili:
+		status = checkTGQRBilibili(probe, config.Credentials, config.ProxyURL)
+	case SourceWeibo:
+		status = checkTGQRWeibo(probe, config.Weibo, config.ProxyURL)
+	}
+	if probe.Err() != nil {
+		status = tgQRCredentialUnknown
+	}
+	stopProbe()
+	if ctx.Err() != nil || !b.currentGeneration() {
+		return
+	}
+	if !credentialsUnchanged() {
+		finish(recheck)
+		return
+	}
+	switch status {
+	case tgQRCredentialValid:
+		finish(label + "凭证有效，无需重新扫码授权。")
+		return
+	case tgQRCredentialInvalid:
+		// Missing or explicitly invalid credentials require a new authorization.
+	default:
+		finish(label + "：暂时无法确认凭证状态，请检查网络或平台状态后重试。")
+		return
+	}
 	qr, problem := b.createTGQR(ctx, source)
 	if problem != nil {
 		finish(failure)
@@ -97,6 +156,10 @@ func (b *tgBot) runTGQR(parent, ctx context.Context, cancel context.CancelFunc, 
 	imageData, err := b.tgQRImage(active, source, qr.payload)
 	var messageID int64
 	if err == nil {
+		if !credentialsUnchanged() {
+			finish(recheck)
+			return
+		}
 		messageID, err = b.sendTGQRImage(active, chatID, imageData, "请使用"+label+"客户端扫描二维码，并在客户端确认授权。")
 	}
 	if err != nil {
@@ -121,10 +184,6 @@ func (b *tgBot) runTGQR(parent, ctx context.Context, cancel context.CancelFunc, 
 		return
 	}
 
-	// The service checks this with the store locked at credential commit.
-	guard := func(config BilibiliConfig) bool {
-		return config.Telegram == b.config && config.ProxyURL == b.proxyURL
-	}
 	scanned := false
 	for active.Err() == nil && b.currentGeneration() {
 		var result map[string]any
@@ -146,7 +205,9 @@ func (b *tgBot) runTGQR(parent, ctx context.Context, cancel context.CancelFunc, 
 			return
 		}
 		if problem != nil {
-			if source == SourceWeibo && problem.status == http.StatusUnprocessableEntity {
+			if !credentialsUnchanged() {
+				finish(recheck)
+			} else if source == SourceWeibo && problem.status == http.StatusUnprocessableEntity {
 				finish(label + "授权失败：扫码已确认，但新会话未通过验证。")
 			} else {
 				finish(failure)

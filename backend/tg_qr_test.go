@@ -140,14 +140,18 @@ func TestTGQRCommandAuthorizationAndPayloadAllowlist(t *testing.T) {
 }
 
 func TestTGQRBilibiliLifecycle(t *testing.T) {
-	for _, mode := range []string{"verified", "expired", "canceled", "replaced", "revoked", "failure"} {
+	for _, mode := range []string{"verified", "expired", "canceled", "replaced", "revoked", "changed", "failure"} {
 		t.Run(mode, func(t *testing.T) {
 			pollStarted := make(chan struct{}, 1)
 			release := make(chan struct{})
+			var expiredProbes atomic.Int32
 			bot, calls := tgQRTestBot(t, func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/":
 				case "/x/passport-login/web/qrcode/generate":
+					if mode == "verified" && expiredProbes.Load() != 1 {
+						t.Error("QR generated before the saved credential was checked")
+					}
 					fmt.Fprint(w, `{"code":0,"data":{"url":"https://account.bilibili.com/h5/account-h5/auth/scan-web?qrcode_key=fixture","qrcode_key":"fixture-ticket"}}`)
 				case "/x/passport-login/web/qrcode/poll":
 					if r.URL.Query().Get("qrcode_key") != "fixture-ticket" {
@@ -171,12 +175,20 @@ func TestTGQRBilibiliLifecycle(t *testing.T) {
 						fmt.Fprint(w, `{"code":0,"data":{"code":0,"refresh_token":"fixture-refresh"}}`)
 					}
 				case "/x/web-interface/nav":
+					if cookie, err := r.Cookie("SESSDATA"); err == nil && cookie.Value == "expired-fixture" {
+						expiredProbes.Add(1)
+						fmt.Fprint(w, `{"code":-101}`)
+						return
+					}
 					fmt.Fprint(w, `{"code":0,"data":{"isLogin":true,"mid":42,"uname":"fixture"}}`)
 				default:
 					t.Error("unexpected Bilibili fixture request", r.URL.Path)
 					w.WriteHeader(404)
 				}
 			}, "www.bilibili.com:443", "passport.bilibili.com:443", "api.bilibili.com:443")
+			if mode == "verified" {
+				bot.store.config.Credentials = BilibiliCredentials{SESSDATA: "expired-fixture", DedeUserID: "42"}
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer func() { cancel(); waitTGQRWorkers(t, bot) }()
 			bot.handleUpdate(ctx, commandMessage("/qr"))
@@ -195,11 +207,15 @@ func TestTGQRBilibiliLifecycle(t *testing.T) {
 				bot.store.Lock()
 				bot.store.config.Telegram.AuthorizedUserID = ""
 				bot.store.Unlock()
+			case "changed":
+				bot.store.Lock()
+				bot.store.config.Credentials = BilibiliCredentials{SESSDATA: "new-fixture", DedeUserID: "42"}
+				bot.store.Unlock()
 			}
 			close(release)
 			waitTGQRWorkers(t, bot)
 			logs := calls()
-			want := map[string]string{"verified": "授权成功", "expired": "授权失败：二维码已过期", "canceled": "已取消扫码", "replaced": "聚合、订阅与归档", "revoked": "等待扫码确认", "failure": "授权失败"}[mode]
+			want := map[string]string{"verified": "授权成功", "expired": "授权失败：二维码已过期", "canceled": "已取消扫码", "replaced": "聚合、订阅与归档", "revoked": "等待扫码确认", "changed": "凭证配置已更新", "failure": "授权失败"}[mode]
 			if !strings.Contains(lastCommandText(logs), want) {
 				t.Fatal("missing terminal QR feedback", mode, lastCommandText(logs))
 			}
@@ -233,8 +249,111 @@ func TestTGQRBilibiliLifecycle(t *testing.T) {
 				if err != nil || decryptJSON(bot.store.key, data, &disk) != nil || disk.Credentials.DedeUserID != "42" {
 					t.Fatal("verified QR credentials not durable", err)
 				}
+			} else if mode == "changed" {
+				if bot.store.config.Credentials.SESSDATA != "new-fixture" {
+					t.Fatal("QR flow overwrote the updated credential")
+				}
 			} else if bot.store.config.Credentials.SESSDATA != "" {
 				t.Fatal("unsuccessful QR flow changed credentials")
+			}
+		})
+	}
+}
+
+func TestTGQRValidOrUnknownCredentialsDoNotGenerateQR(t *testing.T) {
+	for _, tc := range []struct {
+		name, platform, host, route, body, want string
+		status                                  int
+	}{
+		{"bilibili valid", "哔哩哔哩", "api.bilibili.com", "/x/web-interface/nav", `{"code":0,"data":{"isLogin":true,"mid":42}}`, "凭证有效，无需重新扫码授权", 200},
+		{"bilibili limited", "哔哩哔哩", "api.bilibili.com", "/x/web-interface/nav", "", "暂时无法确认凭证状态", 429},
+		{"weibo valid", "微博", "weibo.com", "/ajax/config/get", `{"ok":1,"data":{"uid":"42","islogin":true}}`, "凭证有效，无需重新扫码授权", 200},
+		{"weibo restricted", "微博", "weibo.com", "/ajax/config/get", "", "暂时无法确认凭证状态", 403},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var probes atomic.Int32
+			bot, calls := tgQRTestBot(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.Host != tc.host || r.URL.Path != tc.route || r.Header.Get("Cookie") == "" {
+					t.Error("unexpected probe request", r.Host, r.URL.Path)
+					w.WriteHeader(404)
+					return
+				}
+				probes.Add(1)
+				w.WriteHeader(tc.status)
+				fmt.Fprint(w, tc.body)
+			}, tc.host+":443", "passport.bilibili.com:443", "www.bilibili.com:443", "login.sina.com.cn:443")
+			bili := BilibiliCredentials{SESSDATA: "saved-fixture", DedeUserID: "42"}
+			weibo := WeiboCredentials{Cookie: "SUB=saved-fixture", CookieScoped: true, UserID: "42"}
+			bot.store.config.Credentials = bili
+			bot.store.config.Weibo = weibo
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer func() { cancel(); waitTGQRWorkers(t, bot) }()
+			bot.handleUpdate(ctx, commandMessage("/qr"))
+			bot.handleUpdate(ctx, commandCallback(bot, commandButton(t, calls(), tc.platform)))
+			waitTGQRWorkers(t, bot)
+
+			if probes.Load() != 1 || !strings.Contains(lastCommandText(calls()), tc.want) ||
+				bot.commands.view != "qr-platforms" || bot.commands.waitCancel != nil {
+				t.Fatal("unexpected preflight result", probes.Load(), lastCommandText(calls()))
+			}
+			for _, call := range calls() {
+				if call.Method == "sendPhoto" {
+					t.Fatal("unexpected QR upload")
+				}
+			}
+			if len(bot.store.bilibiliQR) != 0 || len(bot.store.weiboQR) != 0 ||
+				bot.store.config.Credentials != bili || bot.store.config.Weibo != weibo {
+				t.Fatal("read-only check changed stored credentials or created a QR session")
+			}
+		})
+	}
+}
+
+func TestTGQRProbeCancellationAndCredentialChange(t *testing.T) {
+	for _, mode := range []string{"cancel", "changed"} {
+		t.Run(mode, func(t *testing.T) {
+			started, release := make(chan struct{}), make(chan struct{})
+			bot, calls := tgQRTestBot(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/x/web-interface/nav" {
+					t.Error("unexpected QR request", r.URL.Path)
+					w.WriteHeader(404)
+					return
+				}
+				close(started)
+				select {
+				case <-release:
+					fmt.Fprint(w, `{"code":-101}`)
+				case <-r.Context().Done():
+				}
+			}, "api.bilibili.com:443", "passport.bilibili.com:443", "www.bilibili.com:443")
+			bot.store.config.Credentials = BilibiliCredentials{SESSDATA: "expired-fixture", DedeUserID: "42"}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer func() { cancel(); waitTGQRWorkers(t, bot) }()
+			bot.handleUpdate(ctx, commandMessage("/qr"))
+			bot.handleUpdate(ctx, commandCallback(bot, commandButton(t, calls(), "哔哩哔哩")))
+			select {
+			case <-started:
+			case <-ctx.Done():
+				t.Fatal("credential check did not start")
+			}
+			want := "已取消扫码"
+			if mode == "cancel" {
+				bot.handleUpdate(ctx, commandCallback(bot, commandButton(t, calls(), "取消扫码")))
+			} else {
+				bot.store.Lock()
+				bot.store.config.Credentials.SESSDATA = "new-fixture"
+				bot.store.Unlock()
+				want = "凭证配置已更新"
+			}
+			close(release)
+			waitTGQRWorkers(t, bot)
+			if !strings.Contains(lastCommandText(calls()), want) {
+				t.Fatal("stale probe result was used", lastCommandText(calls()))
+			}
+			for _, call := range calls() {
+				if call.Method == "sendPhoto" {
+					t.Fatal("canceled or stale probe triggered a QR upload")
+				}
 			}
 		})
 	}
@@ -272,10 +391,16 @@ func TestTGQRWeiboImageAndExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var checks atomic.Int32
+	var probes, checks atomic.Int32
 	bot, calls := tgQRTestBot(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/ajax/config/get":
+			probes.Add(1)
+			fmt.Fprint(w, `{"ok":-100}`)
 		case "/sso/qrcode/image":
+			if probes.Load() != 1 {
+				t.Error("Weibo QR generated before the saved credential was checked")
+			}
 			fmt.Fprint(w, `{"retcode":20000000,"data":{"qrid":"fixture","image":"//v2.qr.weibo.cn/inf/gen?fixture"}}`)
 		case "/inf/gen":
 			if r.Host != "v2.qr.weibo.cn" || r.Header.Get("Cookie") != "" {
@@ -293,7 +418,8 @@ func TestTGQRWeiboImageAndExpiry(t *testing.T) {
 			t.Error("unexpected Weibo fixture request", r.URL.Path)
 			w.WriteHeader(404)
 		}
-	}, "login.sina.com.cn:443", "v2.qr.weibo.cn:443")
+	}, "weibo.com:443", "login.sina.com.cn:443", "v2.qr.weibo.cn:443")
+	bot.store.config.Weibo = WeiboCredentials{Cookie: "SUB=expired-fixture", CookieScoped: true, UserID: "42"}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer func() { cancel(); waitTGQRWorkers(t, bot) }()
 	bot.handleUpdate(ctx, commandMessage("扫码授权"))

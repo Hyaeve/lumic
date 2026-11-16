@@ -64,6 +64,7 @@ const telegramBusy = ref('')
 const telegramLoading = ref(false)
 const telegramLoaded = ref(false)
 const telegramReadError = ref(false)
+const telegramCredentialRevision = ref(0)
 let telegramSettingsEpoch = 0
 let telegramSettingsRequest = null
 let telegramStatusTimer = 0
@@ -77,7 +78,16 @@ const startDatePickerView = ref({ year: new Date().getFullYear(), month: new Dat
 const selectedPlatform = ref(null)
 const credentialPlatform = ref(null)
 const credentialDialog = ref(null)
+const credentialSavedFields = ref([])
+const credentialSavedRevision = ref(0)
+const credentialFieldsLoading = ref(false)
+let credentialFieldsRequest = null
 let credentialReturnFocus = null
+watch([() => credentialPlatform.value?.key, authenticated], ([scope, loggedIn]) => {
+  if (scope && loggedIn) void loadCredentialFields(scope)
+  else resetCredentialFields()
+})
+onUnmounted(resetCredentialFields)
 watch(() => Boolean(credentialPlatform.value), async open => {
   if (!open) {
     stopWeiboPolling()
@@ -89,6 +99,70 @@ watch(() => Boolean(credentialPlatform.value), async open => {
   if (open) credentialDialog.value?.querySelector('button')?.focus({ preventScroll: true })
   else if (credentialReturnFocus?.isConnected) credentialReturnFocus.focus({ preventScroll: true })
 })
+function resetCredentialFields() {
+  credentialFieldsRequest?.abort()
+  credentialFieldsRequest = null
+  credentialSavedFields.value = []
+  credentialSavedRevision.value++
+  credentialFieldsLoading.value = false
+}
+async function loadCredentialFields(scope) {
+  if (!authenticated.value || credentialPlatform.value?.key !== scope) return
+  resetCredentialFields()
+  const controller = new AbortController()
+  credentialFieldsRequest = controller
+  credentialFieldsLoading.value = true
+  const timeout = window.setTimeout(() => controller.abort(), 10_000)
+  try {
+    const response = await fetch(`/api/credential-values?scope=${encodeURIComponent(scope)}`, { cache: 'no-store', signal: controller.signal })
+    if (!response.ok) throw new Error()
+    const { configured } = await response.json()
+    if (credentialFieldsRequest === controller && authenticated.value && credentialPlatform.value?.key === scope && Array.isArray(configured)) {
+      credentialSavedFields.value = configured
+    }
+  } catch {
+    if (credentialFieldsRequest === controller && authenticated.value && credentialPlatform.value?.key === scope) {
+      notify('无法读取已保存的凭证状态，请重新打开窗口重试', 'error')
+    }
+  } finally {
+    window.clearTimeout(timeout)
+    if (credentialFieldsRequest === controller) {
+      credentialFieldsRequest = null
+      credentialFieldsLoading.value = false
+    }
+  }
+}
+async function revealSavedCredential(scope, field, signal) {
+  const viewing = () => authenticated.value && (scope === 'telegram' ? showSettings.value : credentialPlatform.value?.key === scope)
+  if (!viewing() || signal.aborted) return ''
+  const controller = new AbortController()
+  const abort = () => controller.abort()
+  signal.addEventListener('abort', abort, { once: true })
+  const timeout = window.setTimeout(abort, 10_000)
+  try {
+    const response = await fetch('/api/credential-values', {
+      method: 'POST', cache: 'no-store', signal: controller.signal,
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope, field })
+    })
+    if (!response.ok) throw new Error()
+    const result = await response.json()
+    return !signal.aborted && viewing() && typeof result.value === 'string' ? result.value : ''
+  } catch {
+    if (!signal.aborted && viewing()) notify('无法显示已保存的凭证，请重试', 'error')
+    return ''
+  } finally {
+    window.clearTimeout(timeout)
+    signal.removeEventListener('abort', abort)
+  }
+}
+function savedCredentialProps(scope, field) {
+  return {
+    saved: credentialSavedFields.value.includes(field),
+    savedRevision: credentialSavedRevision.value,
+    disabled: credentialFieldsLoading.value,
+    loadSavedValue: signal => revealSavedCredential(scope, field, signal)
+  }
+}
 function trapCredentialFocus(event) {
   if (event.key !== 'Tab') return
   const controls = [...event.currentTarget.querySelectorAll('button:not(:disabled), input:not(:disabled), textarea:not(:disabled)')].filter(element => element.getClientRects().length)
@@ -1595,6 +1669,7 @@ async function refreshTelegramStatus() {
   }
 }
 function applyTelegramSettings(settings) {
+  telegramCredentialRevision.value++
   telegramStatus.value = settings
   telegramForm.value = {
     token: '', chatId: settings.chatId || '', authorizedUserId: settings.authorizedUserId || '', enabled: Boolean(settings.enabled),
@@ -1630,6 +1705,7 @@ async function saveTelegramSettings(test = false) {
   }
 }
 function clearTelegramSettingsState() {
+  telegramCredentialRevision.value++
   telegramSettingsEpoch++
   telegramSettingsRequest?.abort()
   telegramSettingsRequest = null
@@ -1741,7 +1817,13 @@ async function pollBilibiliQR() {
     const response = await fetch(`/api/bilibili/qr?id=${encodeURIComponent(biliQR.value.id)}`)
     if (!response.ok) throw new Error(await responseError(response, 'B 站扫码状态查询失败'))
     const result = await response.json(); biliQRStatus.value = result.message || '等待扫码'
-    if (result.status === 'connected') { biliAccount.value = { configured: true, userId: result.userId, userName: result.userName || '', avatar: result.avatar || '' }; biliQR.value = null; biliQRImage.value = ''; biliBusy.value = false; stopBilibiliPolling(); notify('哔哩哔哩扫码连接成功'); return }
+    if (result.status === 'connected') {
+      biliAccount.value = { configured: true, userId: result.userId, userName: result.userName || '', avatar: result.avatar || '' }
+      biliQR.value = null; biliQRImage.value = ''; biliBusy.value = false; stopBilibiliPolling()
+      void loadCredentialFields('bilibili')
+      notify('哔哩哔哩扫码连接成功')
+      return
+    }
     biliPollTimer = setTimeout(pollBilibiliQR, 3000)
   } catch (error) { biliError.value = error.message; biliBusy.value = false; stopBilibiliPolling() }
 }
@@ -1760,6 +1842,7 @@ async function saveBilibiliAccount() {
     if (!response.ok) throw new Error(await responseError(response, '凭证验证失败'))
     biliAccount.value = await response.json()
     biliCredentials.value = { cookie: '', SESSDATA: '', bili_jct: '', buvid3: '', DedeUserID: '', ac_time_value: '', buvid4: '', DedeUserID__ckMd5: '' }
+    void loadCredentialFields('bilibili')
     notify('哔哩哔哩凭证已验证并保存')
   } catch (error) { biliError.value = error.message } finally { biliBusy.value = false }
 }
@@ -1774,6 +1857,7 @@ async function savePixivAccount() {
     const response = await fetch('/api/pixiv/account', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.fromEntries(Object.entries(pixivCredentials.value).map(([key, value]) => [key, value.trim()]))) })
     if (!response.ok) throw new Error(await responseError(response, 'Pixiv 凭证验证失败'))
     pixivAccount.value = await response.json(); pixivCredentials.value = emptyPixivCredentials()
+    void loadCredentialFields('pixiv')
     notify('Pixiv 凭证已验证并保存')
   } catch (error) { pixivError.value = error.message } finally { pixivBusy.value = false }
 }
@@ -1817,6 +1901,7 @@ async function pollWeiboQR() {
       weiboAccount.value = { configured: true, qrConnected: true, sessionReady: Boolean(result.sessionReady), connectionWarning: result.connectionWarning || '', cookieConfigured: Boolean(result.cookieConfigured), passwordConfigured: Boolean(result.passwordConfigured), userId: result.userId, userName: result.userName, avatar: result.avatar || '' }
       weiboCredentials.value = { cookie: '', userId: '' }
       weiboQR.value = null; weiboBusy.value = false; stopWeiboPolling()
+      void loadCredentialFields('weibo')
       notify(result.connectionWarning || (result.credentialVerified ? '微博扫码登录成功，会话已保存' : '微博扫码已连接'), result.connectionWarning ? 'info' : 'success')
       return
     }
@@ -1846,6 +1931,7 @@ async function saveWeiboAccount() {
     if (!response.ok) throw new Error(await responseError(response, '微博 Cookie 验证失败'))
     weiboAccount.value = await response.json()
     weiboCredentials.value = { cookie: '', userId: '' }
+    void loadCredentialFields('weibo')
     notify('微博凭证已验证并保存')
   } catch (error) { weiboError.value = error.message } finally { weiboBusy.value = false }
 }
@@ -1860,6 +1946,7 @@ async function saveTwitterAccount() {
 	if (!response.ok) throw new Error(await responseError(response, 'twitterapi.io 凭证验证失败'))
     twitterAccount.value = await response.json()
     twitterCredentials.value = { apiKey: '', username: '' }
+    void loadCredentialFields('twitter')
     notify('推特凭证已验证并保存')
     await loadFeeds()
   } catch (error) { twitterError.value = error.message } finally { twitterBusy.value = false }
@@ -1946,6 +2033,7 @@ async function loginWeiboAccount() {
     if (!response.ok) throw new Error(await responseError(response, '微博账号登录失败'))
     weiboAccount.value = await response.json()
     weiboPasswordCredentials.value = { username: '', password: '' }
+    void loadCredentialFields('weibo')
     notify('微博账号凭证已保存')
   } catch (error) { weiboError.value = error.message } finally { weiboBusy.value = false }
 }
@@ -6132,7 +6220,7 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
           <form class="telegram-settings-form" @submit.prevent="saveTelegramSettings()" autocomplete="off">
             <fieldset :disabled="telegramLoading || !telegramLoaded || Boolean(telegramBusy)">
             <div class="telegram-fields">
-              <CredentialField v-model="telegramForm.token" label="Bot Token" :placeholder="telegramStatus.tokenConfigured ? '已保存，留空保持不变' : 'Bot Token'" :disabled="telegramLoading || Boolean(telegramBusy)" autocomplete="new-password" />
+              <CredentialField v-model="telegramForm.token" label="Bot Token" placeholder="Bot Token" :saved="telegramStatus.tokenConfigured" :saved-revision="telegramCredentialRevision" :load-saved-value="signal => revealSavedCredential('telegram', 'token', signal)" :disabled="telegramLoading || Boolean(telegramBusy)" />
               <label class="telegram-chat-field" for="telegram-chat-id"><span>Chat ID</span><input id="telegram-chat-id" v-model="telegramForm.chatId" inputmode="numeric" pattern="[1-9][0-9]*" maxlength="20" placeholder="私聊 Chat ID" :required="telegramForm.enabled" :disabled="telegramLoading || Boolean(telegramBusy)"></label>
               <label class="telegram-authorization-field" for="telegram-authorized-user-id"><span>授权 ID</span><input id="telegram-authorized-user-id" v-model="telegramForm.authorizedUserId" inputmode="numeric" pattern="[1-9][0-9]*" maxlength="20" placeholder="留空禁止所有操作" :disabled="telegramLoading || Boolean(telegramBusy)"></label>
             </div>
@@ -6161,11 +6249,11 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
           <button class="secondary-button platform-login-button" type="button" @click="startBilibiliQR" :disabled="biliBusy && !biliQR">{{ biliQR ? '刷新二维码' : biliBusy ? '获取中…' : biliAccount.configured ? '切换账号' : '获取二维码' }}</button></aside>
           <div class="credential-fields">
           <section class="credential-section"><h3>手动导入 Cookie</h3><form class="settings-form credential-field-grid" @submit.prevent="saveBilibiliAccount" autocomplete="off" data-bwignore="true" data-lpignore="true" data-1p-ignore="true">
-            <CredentialField v-model="biliCredentials.cookie" label="完整 Cookie" multiline wide placeholder="仅在扫码不可用时使用" />
-            <CredentialField v-model="biliCredentials.SESSDATA" label="SESSDATA" />
-            <CredentialField v-model="biliCredentials.bili_jct" label="bili_jct" />
-            <CredentialField v-model="biliCredentials.buvid3" label="buvid3" />
-            <CredentialField v-model="biliCredentials.DedeUserID" label="DedeUserID" inputmode="numeric" />
+            <CredentialField v-model="biliCredentials.cookie" v-bind="savedCredentialProps('bilibili', 'cookie')" label="完整 Cookie" multiline wide placeholder="仅在扫码不可用时使用" />
+            <CredentialField v-model="biliCredentials.SESSDATA" v-bind="savedCredentialProps('bilibili', 'SESSDATA')" label="SESSDATA" />
+            <CredentialField v-model="biliCredentials.bili_jct" v-bind="savedCredentialProps('bilibili', 'bili_jct')" label="bili_jct" />
+            <CredentialField v-model="biliCredentials.buvid3" v-bind="savedCredentialProps('bilibili', 'buvid3')" label="buvid3" />
+            <CredentialField v-model="biliCredentials.DedeUserID" v-bind="savedCredentialProps('bilibili', 'DedeUserID')" label="DedeUserID" inputmode="numeric" />
             <button class="login-button credential-wide" :disabled="biliBusy">验证并保存手动凭证</button>
           </form></section>
           <p v-if="biliError" class="login-error bili-error">{{ biliError }}</p>
@@ -6178,14 +6266,14 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
           <div class="credential-fields">
           <p v-if="weiboAccount.connectionWarning" class="credential-connection-warning" role="status">{{ weiboAccount.connectionWarning }}</p>
           <section class="credential-section"><h3>{{ weiboAccount.cookieConfigured ? '保存备用账号密码' : '账号密码登录' }}</h3><form class="settings-form credential-field-grid" @submit.prevent="loginWeiboAccount" autocomplete="off" data-bwignore="true" data-lpignore="true" data-1p-ignore="true">
-            <CredentialField v-model="weiboPasswordCredentials.username" label="微博账号" autocomplete="off" required placeholder="手机号、邮箱或微博账号" />
-            <CredentialField v-model="weiboPasswordCredentials.password" label="微博密码" autocomplete="off" required />
+            <CredentialField v-model="weiboPasswordCredentials.username" v-bind="savedCredentialProps('weibo', 'username')" label="微博账号" required placeholder="手机号、邮箱或微博账号" />
+            <CredentialField v-model="weiboPasswordCredentials.password" v-bind="savedCredentialProps('weibo', 'password')" label="微博密码" required />
             <p class="credential-note credential-wide">{{ weiboAccount.cookieConfigured ? '当前扫码会话会继续使用，账号密码将加密保存，用于会话失效后自动重新登录。' : '账号密码会加密保存，后续可用于自动恢复微博会话。' }}</p>
             <button class="login-button credential-wide" :disabled="weiboBusy">{{ weiboBusy ? '验证中…' : weiboAccount.cookieConfigured ? '验证并保存备用密码' : '账号密码登录并保存' }}</button>
           </form></section>
           <section class="credential-section"><h3>手动导入 Cookie</h3><form class="settings-form" @submit.prevent="saveWeiboAccount" autocomplete="off" data-bwignore="true" data-lpignore="true" data-1p-ignore="true">
-            <CredentialField v-model="weiboCredentials.userId" label="微博 UID" inputmode="numeric" required placeholder="个人主页地址中的数字 UID" />
-            <CredentialField v-model="weiboCredentials.cookie" label="完整 Cookie" multiline required placeholder="可粘贴浏览器请求头中的 Cookie: 完整内容" />
+            <CredentialField v-model="weiboCredentials.userId" v-bind="savedCredentialProps('weibo', 'userId')" label="微博 UID" inputmode="numeric" required placeholder="个人主页地址中的数字 UID" />
+            <CredentialField v-model="weiboCredentials.cookie" v-bind="savedCredentialProps('weibo', 'cookie')" label="完整 Cookie" multiline required placeholder="可粘贴浏览器请求头中的 Cookie: 完整内容" />
             <button class="login-button" :disabled="weiboBusy">{{ weiboBusy ? '验证中…' : '验证并保存 Cookie' }}</button>
           </form></section>
           <p v-if="weiboError" class="login-error">{{ weiboError }}</p>
@@ -6195,12 +6283,12 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
         <div v-else-if="credentialPlatform.key === 'pixiv'" class="credential-config-body credential-single-layout"><div class="credential-fields">
           <h3 class="credential-fields-title">浏览器凭证</h3>
           <form class="settings-form platform-auth-form pixiv-browser-form" @submit.prevent="savePixivAccount" autocomplete="off" data-bwignore="true" data-lpignore="true" data-1p-ignore="true">
-            <CredentialField v-model="pixivCredentials.userAgent" label="浏览器 UA" wide required autocomplete="off" placeholder="Mozilla/5.0 ..." />
-            <CredentialField v-model="pixivCredentials.userId" label="用户 ID" required inputmode="numeric" autocomplete="off" />
-            <CredentialField v-model="pixivCredentials.baggage" label="浏览器 Baggage" multiline :rows="2" autocomplete="off" />
-            <CredentialField v-model="pixivCredentials.cookie" label="浏览器 Cookie" multiline wide required autocomplete="off" />
-            <CredentialField v-model="pixivCredentials.sentryTrace" label="浏览器 Sentry-Trace" autocomplete="off" />
-            <CredentialField v-model="pixivCredentials.csrfToken" label="浏览器 X-CSRF-TOKEN" autocomplete="off" />
+            <CredentialField v-model="pixivCredentials.userAgent" v-bind="savedCredentialProps('pixiv', 'userAgent')" label="浏览器 UA" wide required placeholder="Mozilla/5.0 ..." />
+            <CredentialField v-model="pixivCredentials.userId" v-bind="savedCredentialProps('pixiv', 'userId')" label="用户 ID" required inputmode="numeric" />
+            <CredentialField v-model="pixivCredentials.baggage" v-bind="savedCredentialProps('pixiv', 'baggage')" label="浏览器 Baggage" multiline :rows="2" />
+            <CredentialField v-model="pixivCredentials.cookie" v-bind="savedCredentialProps('pixiv', 'cookie')" label="浏览器 Cookie" multiline wide required />
+            <CredentialField v-model="pixivCredentials.sentryTrace" v-bind="savedCredentialProps('pixiv', 'sentryTrace')" label="浏览器 Sentry-Trace" />
+            <CredentialField v-model="pixivCredentials.csrfToken" v-bind="savedCredentialProps('pixiv', 'csrfToken')" label="浏览器 X-CSRF-TOKEN" />
             <button class="login-button" :disabled="pixivBusy">{{ pixivBusy ? '验证中…' : '验证并保存 Pixiv' }}</button>
           </form>
           <p v-if="pixivError" class="login-error">{{ pixivError }}</p>
@@ -6210,9 +6298,8 @@ onUnmounted(() => { postPager.clear(); stopWeiboPolling(); stopBilibiliPolling()
         <div v-else-if="credentialPlatform.key === 'twitter'" class="credential-config-body credential-single-layout"><div class="credential-fields">
           <h3 class="credential-fields-title">API 凭证</h3>
           <form class="settings-form platform-auth-form" @submit.prevent="saveTwitterAccount" autocomplete="off" data-bwignore="true" data-lpignore="true" data-1p-ignore="true">
-            <CredentialField v-model="twitterCredentials.apiKey" label="twitterapi.io API Key" required autocomplete="off" placeholder="在 twitterapi.io 控制台创建的 API Key" />
-            <CredentialField v-model="twitterCredentials.username" label="推特用户名" required autocomplete="off" placeholder="例如 elonmusk，不含 @" />
-            <p class="credential-note">API Key 仅加密保存于服务端，不会再次显示；用户名用于读取该账号的点赞来源。</p>
+            <CredentialField v-model="twitterCredentials.apiKey" v-bind="savedCredentialProps('twitter', 'apiKey')" label="twitterapi.io API Key" required placeholder="在 twitterapi.io 控制台创建的 API Key" />
+            <CredentialField v-model="twitterCredentials.username" v-bind="savedCredentialProps('twitter', 'username')" label="推特用户名" required placeholder="例如 elonmusk，不含 @" />
             <button class="login-button" :disabled="twitterBusy">{{ twitterBusy ? '验证中…' : twitterAccount.configured ? '验证并切换推特账号' : '验证并连接推特' }}</button>
           </form>
           <p v-if="twitterError" class="login-error">{{ twitterError }}</p>

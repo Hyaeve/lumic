@@ -550,8 +550,8 @@ type WeiboCredentials struct {
 }
 
 // TwitterCredentials holds the twitterapi.io API key and the target account.
-// The key is kept only in the encrypted project configuration and is never
-// returned to clients.
+// The key is stored in encrypted project configuration and omitted from status
+// responses. Only an explicit authenticated reveal can return it.
 type TwitterCredentials struct {
 	APIKey   string `json:"apiKey,omitempty"`
 	UserID   string `json:"userId,omitempty"`
@@ -8046,6 +8046,7 @@ func main() {
 	mux.HandleFunc("/api/posts/reset/tasks", bilibili.resetTasksHandler)
 	mux.HandleFunc("/api/author-subscription", bilibili.authorSubscriptionHandler)
 	mux.HandleFunc("/api/telegram-bot", bilibili.telegramBotHandler)
+	mux.HandleFunc("/api/credential-values", bilibili.credentialValuesHandler)
 	mux.HandleFunc("/api/feeds", store.feedsHandler)
 	mux.HandleFunc("/api/sync", bilibili.syncHandler)
 	mux.HandleFunc("/api/sync/tasks", bilibili.syncTasksHandler)
