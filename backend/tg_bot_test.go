@@ -413,6 +413,7 @@ func TestTGBotManagerRechecksGenerationAfterShutdown(t *testing.T) {
 	})
 	store := newWeiboAuthTestStore(t, WeiboCredentials{})
 	store.config.Telegram = TGBotConfig{Token: tgTestToken, ChatID: "42"}
+	store.config.TelegramCredentialCheckWeek = time.Now().In(telegramCredentialLocation).Format("2006-01-02")
 	store.config.ProxyURL = proxy
 	oldCanceled, release := make(chan struct{}), make(chan struct{})
 	var stopped atomic.Bool

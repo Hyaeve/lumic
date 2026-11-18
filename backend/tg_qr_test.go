@@ -81,7 +81,7 @@ func waitTGQRWorkers(t *testing.T, bot *tgBot) {
 	t.Helper()
 	done := make(chan struct{})
 	go func() {
-		bot.commands.qrWorkers.Wait()
+		bot.commands.workers.Wait()
 		close(done)
 	}()
 	select {

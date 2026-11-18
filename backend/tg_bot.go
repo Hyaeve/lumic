@@ -286,6 +286,7 @@ func (bot *tgBot) poll(ctx context.Context) {
 	_ = bot.call(ctx, "setMyCommands", map[string]any{"commands": []map[string]string{
 		{"command": "start", "description": "Lumic 简介与命令"}, {"command": "sh", "description": "搜索作者"},
 		{"command": "qr", "description": "扫码授权平台凭证"},
+		{"command": "checkauth", "description": "检查平台凭证（可指定平台）"},
 		{"command": "subscriptions", "description": "查看订阅"}, {"command": "update", "description": "更新指定订阅"},
 		{"command": "unsubscribe", "description": "取消指定订阅"},
 	}}, nil)
@@ -358,7 +359,11 @@ func tgWait(ctx context.Context, wait time.Duration) bool {
 func (bot *tgBot) run(ctx context.Context) {
 	defer close(bot.done)
 	var workers sync.WaitGroup
-	workers.Add(1)
+	workers.Add(2)
+	go func() {
+		defer workers.Done()
+		bot.runWeeklyCredentialChecks(ctx)
+	}()
 	go func() {
 		defer workers.Done()
 		for {
@@ -377,7 +382,7 @@ func (bot *tgBot) run(ctx context.Context) {
 	bot.poll(ctx)
 	bot.cancel()
 	workers.Wait()
-	bot.commands.qrWorkers.Wait()
+	bot.commands.workers.Wait()
 }
 
 func (b *BilibiliStore) tgView() tgBotView {

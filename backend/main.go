@@ -589,6 +589,8 @@ type BilibiliConfig struct {
 	ProxyURL             string              `json:"proxyUrl,omitempty"`
 	PreviewDesktopLevel  *int                `json:"previewDesktopLevel,omitempty"`
 	PreviewMobileLevel   *int                `json:"previewMobileLevel,omitempty"`
+
+	TelegramCredentialCheckWeek string `json:"telegramCredentialCheckWeek,omitempty"`
 }
 
 type ProjectSettingsView struct {
@@ -641,6 +643,10 @@ type BilibiliStore struct {
 	tgRefresh         chan struct{}
 	tgManagerCancel   context.CancelFunc
 	tgManagerDone     chan struct{}
+
+	tgCredentialAuditMu  sync.Mutex
+	tgCredentialSentWeek string
+	tgCredentialRetryAt  time.Time
 }
 
 type BilibiliUser struct {

@@ -47,7 +47,7 @@ type tgCommandState struct {
 	view         string
 	confirmIndex int
 	waitCancel   context.CancelFunc
-	qrWorkers    sync.WaitGroup
+	workers      sync.WaitGroup
 }
 
 func tgPlatformLabel(source Source) string {
@@ -77,6 +77,8 @@ func tgCommand(text string) (string, string, []Source) {
 		return "start", argument, nil
 	case "/qr", "扫码授权", "授权扫码":
 		return "qr", argument, nil
+	case "/checkauth", "检查授权":
+		return "checkauth", argument, nil
 	case "/sh", "搜索":
 		return "search", argument, tgSearchPlatforms
 	case "哔哩哔哩搜索", "bilibili搜索":
@@ -191,9 +193,11 @@ func (b *tgBot) handleUpdate(ctx context.Context, update tgUpdate) {
 	b.commands.view = "result"
 	switch action {
 	case "start":
-		_ = b.showFlow(ctx, chatID, "Lumic · 拾光\n聚合、订阅与归档喜欢的图文。\n\n/sh 关键词 · 搜索作者\n搜索 关键词 · 搜索三个平台\n哔哩哔哩搜索 / 微博搜索 / pixiv搜索 + 关键词\n/subscriptions · 查看订阅（每页七条）\n/update 完整作者名或序号 · 更新订阅\n/unsubscribe 完整作者名或序号 · 取消订阅\n/qr · 扫码授权平台凭证\n\n取消订阅只移除计划，已下载图文会保留。", nil)
+		_ = b.showFlow(ctx, chatID, "Lumic · 拾光\n聚合、订阅与归档喜欢的图文。\n\n/sh 关键词 · 搜索作者\n搜索 关键词 · 搜索三个平台\n哔哩哔哩搜索 / 微博搜索 / pixiv搜索 + 关键词\n/subscriptions · 查看订阅（每页七条）\n/update 完整作者名或序号 · 更新订阅\n/unsubscribe 完整作者名或序号 · 取消订阅\n/checkauth [平台] · 检查授权，不填平台时确认后检查全部\n/qr · 扫码授权平台凭证\n\n取消订阅只移除计划，已下载图文会保留。", nil)
 	case "qr":
 		b.showQRPlatforms(ctx, chatID, "")
+	case "checkauth":
+		b.startCredentialCheck(ctx, chatID, argument)
 	case "search":
 		if argument == "" || len([]rune(argument)) > 40 {
 			_ = b.showFlow(ctx, chatID, "请输入搜索关键词，例如：搜索 六月夏天（最多40字）", nil)
@@ -398,6 +402,11 @@ func (b *tgBot) handleCallback(ctx context.Context, chatID int64, action string,
 	case "qr-cancel":
 		b.clearFlowMedia(ctx, chatID)
 		b.showQRPlatforms(ctx, chatID, "已取消扫码授权。")
+	case "auth-confirm":
+		b.beginCredentialCheck(ctx, chatID, tgCredentialPlatforms[:])
+	case "auth-cancel":
+		b.commands.view = "result"
+		_ = b.showFlow(ctx, chatID, "已取消凭证检查。", nil)
 	case "search":
 		b.showSearch(ctx, chatID, index)
 	case "subscriptions":
@@ -525,6 +534,8 @@ func tgCallbackAllowed(view, action string) bool {
 		return action == "qr-platform"
 	case "qr-active":
 		return action == "qr-cancel"
+	case "auth-confirm":
+		return action == "auth-confirm" || action == "auth-cancel"
 	case "search":
 		return action == "search" || action == "author"
 	case "list":
@@ -546,7 +557,7 @@ func (b *tgBot) callbackIndexAllowed(action string, index int) bool {
 	switch action {
 	case "qr-platform":
 		return index >= 0 && index < len(tgQRPlatforms)
-	case "qr-cancel":
+	case "qr-cancel", "auth-confirm", "auth-cancel":
 		return index == 0
 	case "search":
 		return s != nil && index >= 0 && index < len(s.Platforms)

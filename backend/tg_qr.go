@@ -49,9 +49,9 @@ func (b *tgBot) beginTGQR(ctx context.Context, chatID int64, source Source) {
 	qrContext, cancel := context.WithCancel(ctx)
 	b.commands.waitCancel = cancel
 	nonce := b.commands.nonce
-	b.commands.qrWorkers.Add(1)
+	b.commands.workers.Add(1)
 	go func() {
-		defer b.commands.qrWorkers.Done()
+		defer b.commands.workers.Done()
 		b.runTGQR(ctx, qrContext, cancel, chatID, source, nonce)
 	}()
 }
